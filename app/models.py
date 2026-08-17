@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -8,7 +9,6 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -19,7 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -58,7 +58,7 @@ class Branch(Base):
         BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(50))
     address: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
@@ -70,7 +70,9 @@ class Branch(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_branch_org_code"),
         UniqueConstraint("organization_id", "name", name="uq_branch_org_name"),
+        Index("ix_branches_org", "organization_id"),
     )
 
     users: Mapped[list["User"]] = relationship("User", secondary="user_roles", viewonly=True)
@@ -86,8 +88,8 @@ class User(Base):
     organization_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
     )
-    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(50))
@@ -106,12 +108,14 @@ class User(Base):
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
+        UniqueConstraint("organization_id", "username", name="uq_user_org_username"),
+        UniqueConstraint("organization_id", "email", name="uq_user_org_email"),
         Index(
             "ix_users_org_active",
             "organization_id",
-            unique=False,
             postgresql_where="deleted_at IS NULL",
         ),
+        CheckConstraint("status IN ('active', 'inactive', 'locked')", name="ck_user_status"),
     )
 
     user_roles: Mapped[list["UserRole"]] = relationship(
@@ -272,7 +276,8 @@ class Product(Base):
     description: Mapped[str | None] = mapped_column(Text)
     sku: Mapped[str] = mapped_column(String(100), nullable=False)
     barcode: Mapped[str | None] = mapped_column(String(255))
-    selling_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    selling_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     unit: Mapped[str] = mapped_column(String(20), nullable=False, server_default="each")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     track_inventory: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
@@ -295,6 +300,7 @@ class Product(Base):
             postgresql_where="barcode IS NOT NULL",
         ),
         CheckConstraint("selling_price > 0", name="ck_product_selling_price_positive"),
+        CheckConstraint("cost_price >= 0", name="ck_product_cost_price_non_negative"),
         Index(
             "ix_products_org_active",
             "organization_id",
@@ -340,7 +346,7 @@ class SupplierProduct(Base):
     product_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     supplier_sku: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -366,6 +372,7 @@ class Inventory(Base):
     )
     on_hand: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     reserved: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
@@ -374,6 +381,7 @@ class Inventory(Base):
         UniqueConstraint("branch_id", "product_id", name="uq_inventory_branch_product"),
         CheckConstraint("on_hand >= 0", name="ck_inventory_on_hand_non_negative"),
         CheckConstraint("reserved >= 0", name="ck_inventory_reserved_non_negative"),
+        CheckConstraint("reserved <= on_hand", name="ck_inventory_reserved_lte_on_hand"),
         Index(
             "ix_inventory_low_stock",
             "branch_id",
@@ -398,7 +406,7 @@ class InventoryLot(Base):
     )
     lot_number: Mapped[str] = mapped_column(String(100), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     expiry_date: Mapped[datetime.date | None] = mapped_column(Date)
     purchase_receiving_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("purchase_receivings.id", ondelete="SET NULL")
@@ -440,6 +448,8 @@ class StockMovement(Base):
     )
     movement_type: Mapped[str] = mapped_column(String(50), nullable=False)
     quantity_change: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reference_type: Mapped[str | None] = mapped_column(String(50))
     reference_id: Mapped[int | None] = mapped_column(BigInteger)
     lot_id: Mapped[int | None] = mapped_column(
@@ -455,6 +465,12 @@ class StockMovement(Base):
 
     __table_args__ = (
         CheckConstraint("quantity_change != 0", name="ck_stock_movement_quantity_nonzero"),
+        CheckConstraint("quantity_before >= 0", name="ck_stock_movement_before_non_negative"),
+        CheckConstraint("quantity_after >= 0", name="ck_stock_movement_after_non_negative"),
+        CheckConstraint(
+            "quantity_after = quantity_before + quantity_change",
+            name="ck_stock_movement_math_correct",
+        ),
         Index("ix_stock_movement_branch_product", "branch_id", "product_id"),
         Index("ix_stock_movement_reference", "reference_type", "reference_id"),
         Index("ix_stock_movement_created_at", "created_at"),
@@ -479,7 +495,7 @@ class PurchaseOrder(Base):
     )
     po_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="draft")
-    total_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     notes: Mapped[str | None] = mapped_column(Text)
     expected_delivery_date: Mapped[datetime.date | None] = mapped_column(Date)
     created_by: Mapped[int] = mapped_column(
@@ -493,6 +509,13 @@ class PurchaseOrder(Base):
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'approved', 'partially_received', 'received', 'cancelled')",
+            name="ck_purchase_order_status",
+        ),
     )
 
 
@@ -511,10 +534,16 @@ class PurchaseOrderItem(Base):
     )
     quantity_ordered: Mapped[int] = mapped_column(Integer, nullable=False)
     quantity_received: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    unit_cost: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
+        CheckConstraint("quantity_ordered > 0", name="ck_po_item_qty_ordered_positive"),
+        CheckConstraint("quantity_received >= 0", name="ck_po_item_qty_received_non_negative"),
+        CheckConstraint(
+            "quantity_received <= quantity_ordered",
+            name="ck_po_item_qty_received_lte_ordered",
+        ),
         CheckConstraint("unit_cost >= 0", name="ck_po_item_unit_cost_non_negative"),
     )
 
@@ -561,10 +590,14 @@ class PurchaseReceivingItem(Base):
     )
     quantity_received: Mapped[int] = mapped_column(Integer, nullable=False)
     lot_number: Mapped[str] = mapped_column(String(100), nullable=False)
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     expiry_date: Mapped[datetime.date | None] = mapped_column(Date)
     inventory_lot_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("inventory_lots.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (
+        CheckConstraint("quantity_received > 0", name="ck_pr_item_qty_received_positive"),
     )
 
 
@@ -616,6 +649,14 @@ class StockTransfer(Base):
         "StockTransferItem", back_populates="transfer", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        CheckConstraint("source_branch_id != dest_branch_id", name="ck_transfer_different_branches"),
+        CheckConstraint(
+            "status IN ('draft', 'approved', 'in_transit', 'partially_received', 'received', 'cancelled')",
+            name="ck_stock_transfer_status",
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # 20. StockTransferItem
@@ -641,17 +682,17 @@ class StockTransferItem(Base):
     transfer: Mapped["StockTransfer"] = relationship("StockTransfer", back_populates="items")
 
     __table_args__ = (
+        CheckConstraint("quantity_requested > 0", name="ck_transfer_item_requested_positive"),
+        CheckConstraint("quantity_shipped >= 0", name="ck_transfer_item_shipped_non_negative"),
+        CheckConstraint("quantity_received >= 0", name="ck_transfer_item_received_non_negative"),
+        CheckConstraint("quantity_damaged >= 0", name="ck_transfer_item_damaged_non_negative"),
         CheckConstraint(
-            "quantity_shipped >= 0",
-            name="ck_transfer_item_shipped_non_negative",
+            "quantity_shipped <= quantity_requested",
+            name="ck_transfer_item_shipped_lte_requested",
         ),
         CheckConstraint(
-            "quantity_received >= 0",
-            name="ck_transfer_item_received_non_negative",
-        ),
-        CheckConstraint(
-            "quantity_damaged >= 0",
-            name="ck_transfer_item_damaged_non_negative",
+            "quantity_received + quantity_damaged <= quantity_shipped",
+            name="ck_transfer_item_received_damaged_lte_shipped",
         ),
     )
 
@@ -708,6 +749,8 @@ class LoyaltyTransaction(Base):
     )
     transaction_type: Mapped[str] = mapped_column(String(30), nullable=False)
     points: Mapped[int] = mapped_column(Integer, nullable=False)
+    points_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    points_after: Mapped[int] = mapped_column(Integer, nullable=False)
     reference_type: Mapped[str | None] = mapped_column(String(50))
     reference_id: Mapped[int | None] = mapped_column(BigInteger)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -720,6 +763,17 @@ class LoyaltyTransaction(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "transaction_type IN ('earn', 'redeem', 'expire', 'adjustment', 'refund_reversal')",
+            name="ck_loyalty_txn_type",
+        ),
+        CheckConstraint("points != 0", name="ck_loyalty_txn_points_nonzero"),
+        CheckConstraint("points_before >= 0", name="ck_loyalty_txn_before_non_negative"),
+        CheckConstraint("points_after >= 0", name="ck_loyalty_txn_after_non_negative"),
+        CheckConstraint(
+            "points_after = points_before + points",
+            name="ck_loyalty_txn_math_correct",
+        ),
         Index("ix_loyalty_txn_customer_created", "customer_id", "created_at"),
         Index(
             "ix_loyalty_txn_customer_expires",
@@ -757,12 +811,12 @@ class Order(Base):
     register_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("registers.id", ondelete="SET NULL")
     )
-    subtotal: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    discount_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    tax_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    grand_total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    amount_paid: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    change_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    grand_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    amount_paid: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    change_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     loyalty_points_earned: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     loyalty_points_redeemed: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     notes: Mapped[str | None] = mapped_column(Text)
@@ -781,7 +835,12 @@ class Order(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'cancelled')",
+            name="ck_order_status",
+        ),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
+        Index("ix_orders_status", "status"),
         Index(
             "uq_orders_idempotency_key",
             "idempotency_key",
@@ -807,11 +866,11 @@ class OrderItem(Base):
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)
     product_sku: Mapped[str] = mapped_column(String(100), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    cost_price: Mapped[float | None] = mapped_column(Numeric(12, 2))
-    discount_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    tax_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    line_total: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    cost_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    line_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     promotion_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("promotions.id", ondelete="SET NULL")
     )
@@ -823,6 +882,8 @@ class OrderItem(Base):
 
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_order_item_quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="ck_order_item_unit_price_non_negative"),
+        CheckConstraint("line_total >= 0", name="ck_order_item_line_total_non_negative"),
     )
 
 
@@ -834,10 +895,10 @@ class Payment(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
     )
     payment_method: Mapped[str] = mapped_column(String(30), nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     external_reference: Mapped[str | None] = mapped_column(String(255))
     provider: Mapped[str | None] = mapped_column(String(50))
@@ -854,6 +915,14 @@ class Payment(Base):
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_payment_amount_positive"),
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'failed', 'refunded')",
+            name="ck_payment_status",
+        ),
+        CheckConstraint(
+            "payment_method IN ('cash', 'credit_card', 'debit_card', 'qr_code', 'bank_transfer', 'e_wallet')",
+            name="ck_payment_method",
+        ),
     )
 
 
@@ -865,13 +934,10 @@ class Refund(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
-    )
-    return_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("returns.id", ondelete="SET NULL")
+        BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
     )
     refund_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    refund_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    refund_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     refund_method: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     processed_by: Mapped[int] = mapped_column(
@@ -888,6 +954,10 @@ class Refund(Base):
 
     __table_args__ = (
         CheckConstraint("refund_amount > 0", name="ck_refund_amount_positive"),
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'failed')",
+            name="ck_refund_status",
+        ),
     )
 
 
@@ -898,8 +968,11 @@ class Return(Base):
     __tablename__ = "returns"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
     order_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
     )
     branch_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False
@@ -924,6 +997,13 @@ class Return(Base):
         "ReturnItem", back_populates="return_record", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'cancelled')",
+            name="ck_return_status",
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # 28. ReturnItem
@@ -944,9 +1024,13 @@ class ReturnItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     return_reason: Mapped[str | None] = mapped_column(Text)
     restock: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
 
     return_record: Mapped["Return"] = relationship("Return", back_populates="items")
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_return_item_quantity_positive"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -962,11 +1046,10 @@ class Promotion(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     promotion_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    discount_value: Mapped[float | None] = mapped_column(Numeric(12, 2))
-    minimum_purchase: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    discount_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    minimum_purchase: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     max_uses: Mapped[int | None] = mapped_column(Integer)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    branch_ids: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
     start_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", index=True)
@@ -979,6 +1062,12 @@ class Promotion(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "promotion_type IN ('percentage_discount', 'fixed_discount', 'buy_x_get_y', 'free_item', 'min_purchase_discount')",
+            name="ck_promotion_type",
+        ),
+        CheckConstraint("end_date > start_date", name="ck_promotion_date_range"),
+        CheckConstraint("max_uses IS NULL OR max_uses > 0", name="ck_promotion_max_uses"),
         Index(
             "ix_promotions_active",
             "organization_id",
@@ -990,7 +1079,58 @@ class Promotion(Base):
 
 
 # ---------------------------------------------------------------------------
-# 30. Coupon
+# 30. PromotionBranch (replaces promotions.branch_ids ARRAY)
+# ---------------------------------------------------------------------------
+class PromotionBranch(Base):
+    __tablename__ = "promotion_branches"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    promotion_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("promotions.id", ondelete="CASCADE"), nullable=False
+    )
+    branch_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("branches.id", ondelete="CASCADE"), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("promotion_id", "branch_id", name="uq_promotion_branch"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 31. PromotionRule (buy X get Y, free item, etc.)
+# ---------------------------------------------------------------------------
+class PromotionRule(Base):
+    __tablename__ = "promotion_rules"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    promotion_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("promotions.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    target_id: Mapped[int | None] = mapped_column(BigInteger)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    discount_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "rule_type IN ('buy', 'get', 'condition')",
+            name="ck_promotion_rule_type",
+        ),
+        CheckConstraint(
+            "target_type IN ('product', 'category', 'any')",
+            name="ck_promotion_rule_target_type",
+        ),
+        CheckConstraint("quantity > 0", name="ck_promotion_rule_quantity_positive"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 32. Coupon
 # ---------------------------------------------------------------------------
 class Coupon(Base):
     __tablename__ = "coupons"
@@ -1018,18 +1158,19 @@ class Coupon(Base):
 
     __table_args__ = (
         UniqueConstraint("organization_id", "code", name="uq_coupon_org_code"),
+        CheckConstraint("end_date > start_date", name="ck_coupon_date_range"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 31. CouponUsage
+# 33. CouponUsage
 # ---------------------------------------------------------------------------
 class CouponUsage(Base):
     __tablename__ = "coupon_usages"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     coupon_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("coupons.id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("coupons.id", ondelete="RESTRICT"), nullable=False
     )
     customer_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
@@ -1041,13 +1182,9 @@ class CouponUsage(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (
-        UniqueConstraint("coupon_id", "customer_id", name="uq_coupon_usage"),
-    )
-
 
 # ---------------------------------------------------------------------------
-# 32. Register
+# 34. Register
 # ---------------------------------------------------------------------------
 class Register(Base):
     __tablename__ = "registers"
@@ -1071,7 +1208,7 @@ class Register(Base):
 
 
 # ---------------------------------------------------------------------------
-# 33. Shift
+# 35. Shift
 # ---------------------------------------------------------------------------
 class Shift(Base):
     __tablename__ = "shifts"
@@ -1087,15 +1224,15 @@ class Shift(Base):
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="open")
-    opening_cash: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    closing_cash: Mapped[float | None] = mapped_column(Numeric(12, 2))
-    expected_cash: Mapped[float | None] = mapped_column(Numeric(12, 2))
-    cash_difference: Mapped[float | None] = mapped_column(Numeric(12, 2))
-    total_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    total_cash_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    total_card_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    total_other_sales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    total_refunds: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    opening_cash: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    closing_cash: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    expected_cash: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    cash_difference: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    total_sales: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    total_cash_sales: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    total_card_sales: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    total_other_sales: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    total_refunds: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     closed_by: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT")
     )
@@ -1111,12 +1248,13 @@ class Shift(Base):
     )
 
     __table_args__ = (
+        CheckConstraint("status IN ('open', 'closed')", name="ck_shift_status"),
         Index("ix_shifts_branch_status", "branch_id", "status"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 34. ShiftCashMovement
+# 36. ShiftCashMovement
 # ---------------------------------------------------------------------------
 class ShiftCashMovement(Base):
     __tablename__ = "shift_cash_movements"
@@ -1126,7 +1264,7 @@ class ShiftCashMovement(Base):
         BigInteger, ForeignKey("shifts.id", ondelete="CASCADE"), nullable=False
     )
     movement_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -1137,11 +1275,15 @@ class ShiftCashMovement(Base):
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_shift_cash_movement_amount_positive"),
+        CheckConstraint(
+            "movement_type IN ('cash_in', 'cash_out')",
+            name="ck_shift_cash_movement_type",
+        ),
     )
 
 
 # ---------------------------------------------------------------------------
-# 35. SystemSetting
+# 37. SystemSetting
 # ---------------------------------------------------------------------------
 class SystemSetting(Base):
     __tablename__ = "system_settings"
@@ -1173,7 +1315,7 @@ class SystemSetting(Base):
 
 
 # ---------------------------------------------------------------------------
-# 36. AuditLog
+# 38. AuditLog
 # ---------------------------------------------------------------------------
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -1206,7 +1348,7 @@ class AuditLog(Base):
 
 
 # ---------------------------------------------------------------------------
-# 37. IdempotencyKey
+# 39. IdempotencyKey
 # ---------------------------------------------------------------------------
 class IdempotencyKey(Base):
     __tablename__ = "idempotency_keys"
@@ -1234,7 +1376,7 @@ class IdempotencyKey(Base):
 
 
 # ---------------------------------------------------------------------------
-# 38. RefreshToken
+# 40. RefreshToken
 # ---------------------------------------------------------------------------
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
@@ -1265,7 +1407,7 @@ class RefreshToken(Base):
 
 
 # ---------------------------------------------------------------------------
-# 39. LoginAttempt
+# 41. LoginAttempt
 # ---------------------------------------------------------------------------
 class LoginAttempt(Base):
     __tablename__ = "login_attempts"
@@ -1288,7 +1430,7 @@ class LoginAttempt(Base):
 
 
 # ---------------------------------------------------------------------------
-# 40. DocumentSequence
+# 42. DocumentSequence
 # ---------------------------------------------------------------------------
 class DocumentSequence(Base):
     __tablename__ = "document_sequences"
