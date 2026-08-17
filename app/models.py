@@ -1401,7 +1401,7 @@ class RefreshToken(Base):
             "ix_refresh_tokens_valid",
             "user_id",
             "expires_at",
-            postgresql_where="is_revoked = false AND expires_at > NOW()",
+            postgresql_where="is_revoked = false",
         ),
     )
 
