@@ -1,0 +1,411 @@
+import datetime
+from typing import Optional
+
+from sqlalchemy import func, select, text
+from sqlalchemy.orm import Session, joinedload
+
+from app.domains.purchases.schemas import (
+    PurchaseOrderCreate,
+    PurchaseOrderListResponse,
+    PurchaseOrderResponse,
+    PurchaseOrderUpdate,
+    PurchaseReceivingCreate,
+    PurchaseReceivingResponse,
+)
+from app.models import (
+    Inventory,
+    InventoryLot,
+    Product,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    PurchaseReceiving,
+    PurchaseReceivingItem,
+    StockMovement,
+    Supplier,
+    User,
+)
+from app.shared.enums import POStatus, ReceivingStatus, StockMovementType
+from app.shared.exceptions import (
+    BadRequestException,
+    ConflictException,
+    NotFoundException,
+)
+
+
+class PurchaseService:
+    # ------------------------------------------------------------------
+    # List / Get
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _generate_po_number(db: Session, org_id: int) -> str:
+        count = db.scalar(
+            select(func.count()).where(
+                PurchaseOrder.organization_id == org_id
+            )
+        ) or 0
+        return f"PO-{org_id:04d}-{count + 1:06d}"
+
+    @staticmethod
+    def _generate_receiving_number(db: Session) -> str:
+        count = db.scalar(select(func.count()).select_from(PurchaseReceiving)) or 0
+        return f"REC-{count + 1:06d}"
+
+    @staticmethod
+    def _build_po_response(po: PurchaseOrder, db: Session) -> PurchaseOrderResponse:
+        supplier = db.get(Supplier, po.supplier_id)
+        supplier_name = supplier.name if supplier else "Unknown"
+        items = db.scalars(
+            select(PurchaseOrderItem).where(
+                PurchaseOrderItem.purchase_order_id == po.id
+            )
+        ).all()
+
+        return PurchaseOrderResponse(
+            id=po.id,
+            po_number=po.po_number,
+            supplier_id=po.supplier_id,
+            supplier_name=supplier_name,
+            branch_id=po.branch_id,
+            status=po.status,
+            total_amount=po.total_amount,
+            items=items,
+            created_at=po.created_at,
+        )
+
+    @staticmethod
+    def list_purchase_orders(
+        db: Session,
+        org_id: int,
+        page: int = 1,
+        per_page: int = 20,
+        status: Optional[str] = None,
+        supplier_id: Optional[int] = None,
+        date_from: Optional[datetime.date] = None,
+        date_to: Optional[datetime.date] = None,
+    ) -> PurchaseOrderListResponse:
+        stmt = select(PurchaseOrder).where(
+            PurchaseOrder.organization_id == org_id
+        )
+
+        if status:
+            stmt = stmt.where(PurchaseOrder.status == status)
+
+        if supplier_id:
+            stmt = stmt.where(PurchaseOrder.supplier_id == supplier_id)
+
+        if date_from:
+            stmt = stmt.where(
+                func.date(PurchaseOrder.created_at) >= date_from
+            )
+
+        if date_to:
+            stmt = stmt.where(
+                func.date(PurchaseOrder.created_at) <= date_to
+            )
+
+        total_stmt = select(func.count()).select_from(stmt.subquery())
+        total = db.scalar(total_stmt) or 0
+
+        stmt = stmt.order_by(PurchaseOrder.created_at.desc()).offset(
+            (page - 1) * per_page
+        ).limit(per_page)
+
+        pos = db.scalars(stmt).all()
+        response_items = [PurchaseService._build_po_response(po, db) for po in pos]
+
+        return PurchaseOrderListResponse(
+            purchase_orders=response_items,
+            total=total,
+            page=page,
+            per_page=per_page,
+        )
+
+    @staticmethod
+    def get_purchase_order(
+        db: Session, org_id: int, po_id: int
+    ) -> PurchaseOrder:
+        po = db.get(PurchaseOrder, po_id)
+        if not po or po.organization_id != org_id:
+            raise NotFoundException(detail="Purchase order not found")
+        return po
+
+    # ------------------------------------------------------------------
+    # Update
+    # ------------------------------------------------------------------
+    @staticmethod
+    def update_purchase_order(
+        db: Session, org_id: int, po_id: int, data: PurchaseOrderUpdate
+    ) -> PurchaseOrder:
+        po = db.get(PurchaseOrder, po_id)
+        if not po or po.organization_id != org_id:
+            raise NotFoundException(detail="Purchase order not found")
+
+        if po.status not in (POStatus.DRAFT.value, POStatus.SUBMITTED.value):
+            raise BadRequestException(
+                detail=f"Cannot update PO in '{po.status}' status"
+            )
+
+        if data.expected_delivery_date is not None:
+            po.expected_delivery_date = data.expected_delivery_date
+
+        if data.notes is not None:
+            po.notes = data.notes
+
+        if data.items is not None:
+            # Delete existing items
+            existing_items = db.scalars(
+                select(PurchaseOrderItem).where(
+                    PurchaseOrderItem.purchase_order_id == po.id
+                )
+            ).all()
+            for item in existing_items:
+                db.delete(item)
+            db.flush()
+
+            # Create new items
+            total = 0.0
+            for item_data in data.items:
+                product = db.get(Product, item_data.product_id)
+                if not product or product.organization_id != org_id or product.deleted_at is not None:
+                    raise NotFoundException(
+                        detail=f"Product {item_data.product_id} not found"
+                    )
+
+                po_item = PurchaseOrderItem(
+                    purchase_order_id=po.id,
+                    product_id=item_data.product_id,
+                    quantity_ordered=item_data.quantity_ordered,
+                    unit_cost=item_data.unit_cost,
+                )
+                db.add(po_item)
+                total += float(item_data.unit_cost) * item_data.quantity_ordered
+
+            po.total_amount = total
+
+        db.flush()
+        db.refresh(po)
+        return po
+
+    # ------------------------------------------------------------------
+    # Create
+    # ------------------------------------------------------------------
+    @staticmethod
+    def create_purchase_order(
+        db: Session, org_id: int, user_id: int, data: PurchaseOrderCreate
+    ) -> PurchaseOrder:
+        supplier = db.get(Supplier, data.supplier_id)
+        if not supplier or supplier.organization_id != org_id:
+            raise NotFoundException(detail="Supplier not found")
+
+        for item in data.items:
+            product = db.get(Product, item.product_id)
+            if not product or product.organization_id != org_id or product.deleted_at is not None:
+                raise NotFoundException(
+                    detail=f"Product {item.product_id} not found"
+                )
+
+        po_number = PurchaseService._generate_po_number(db, org_id)
+
+        total = sum(
+            float(item.unit_cost) * item.quantity_ordered for item in data.items
+        )
+
+        po = PurchaseOrder(
+            organization_id=org_id,
+            branch_id=data.branch_id,
+            supplier_id=data.supplier_id,
+            po_number=po_number,
+            status=POStatus.DRAFT.value,
+            total_amount=total,
+            notes=data.notes,
+            expected_delivery_date=data.expected_delivery_date,
+            created_by=user_id,
+        )
+        db.add(po)
+        db.flush()
+
+        for item in data.items:
+            po_item = PurchaseOrderItem(
+                purchase_order_id=po.id,
+                product_id=item.product_id,
+                quantity_ordered=item.quantity_ordered,
+                unit_cost=item.unit_cost,
+            )
+            db.add(po_item)
+
+        db.flush()
+        db.refresh(po)
+        return po
+
+    # ------------------------------------------------------------------
+    # Approve
+    # ------------------------------------------------------------------
+    @staticmethod
+    def approve_purchase_order(
+        db: Session, org_id: int, po_id: int, user_id: int
+    ) -> PurchaseOrder:
+        po = db.get(PurchaseOrder, po_id)
+        if not po or po.organization_id != org_id:
+            raise NotFoundException(detail="Purchase order not found")
+
+        if po.status != POStatus.DRAFT.value:
+            raise BadRequestException(
+                detail=f"Cannot approve PO in '{po.status}' status. Must be 'draft'."
+            )
+
+        po.status = POStatus.APPROVED.value
+        po.approved_by = user_id
+        db.flush()
+        db.refresh(po)
+        return po
+
+    # ------------------------------------------------------------------
+    # Receive
+    # ------------------------------------------------------------------
+    @staticmethod
+    def receive_purchase_order(
+        db: Session,
+        org_id: int,
+        po_id: int,
+        branch_id: int,
+        data: PurchaseReceivingCreate,
+        user_id: int,
+    ) -> PurchaseReceiving:
+        po = db.get(PurchaseOrder, po_id)
+        if not po or po.organization_id != org_id:
+            raise NotFoundException(detail="Purchase order not found")
+
+        if po.status not in (
+            POStatus.APPROVED.value,
+            POStatus.PARTIALLY_RECEIVED.value,
+        ):
+            raise BadRequestException(
+                detail=f"Cannot receive PO in '{po.status}' status"
+            )
+
+        receiving_number = PurchaseService._generate_receiving_number(db)
+        receiving = PurchaseReceiving(
+            purchase_order_id=po.id,
+            branch_id=branch_id,
+            receiving_number=receiving_number,
+            status=ReceivingStatus.COMPLETED.value,
+            received_by=user_id,
+        )
+        db.add(receiving)
+        db.flush()
+
+        all_fully_received = True
+
+        for item_data in data.received_items:
+            po_item = db.get(PurchaseOrderItem, item_data.purchase_order_item_id)
+            if not po_item or po_item.purchase_order_id != po.id:
+                raise NotFoundException(
+                    detail=f"PO item {item_data.purchase_order_item_id} not found"
+                )
+
+            receiving_item = PurchaseReceivingItem(
+                purchase_receiving_id=receiving.id,
+                product_id=po_item.product_id,
+                quantity_received=item_data.quantity_received,
+                lot_number=item_data.lot_number,
+                cost_price=item_data.cost_price,
+                expiry_date=item_data.expiry_date,
+            )
+            db.add(receiving_item)
+            db.flush()
+
+            # Create or update inventory lot
+            lot = db.scalar(
+                select(InventoryLot).where(
+                    InventoryLot.branch_id == branch_id,
+                    InventoryLot.product_id == po_item.product_id,
+                    InventoryLot.lot_number == item_data.lot_number,
+                )
+            )
+            if lot:
+                lot.quantity += item_data.quantity_received
+                lot.cost_price = item_data.cost_price
+                if item_data.expiry_date:
+                    lot.expiry_date = item_data.expiry_date
+            else:
+                lot = InventoryLot(
+                    branch_id=branch_id,
+                    product_id=po_item.product_id,
+                    lot_number=item_data.lot_number,
+                    quantity=item_data.quantity_received,
+                    cost_price=item_data.cost_price,
+                    expiry_date=item_data.expiry_date,
+                    purchase_receiving_id=receiving.id,
+                )
+                db.add(lot)
+
+            db.flush()
+
+            # Update receiving item with lot reference
+            receiving_item.inventory_lot_id = lot.id
+
+            # Atomic inventory balance update
+            db.execute(
+                text(
+                    """
+                    INSERT INTO inventory (branch_id, product_id, on_hand, reserved, updated_at)
+                    VALUES (:bid, :pid, :qty, 0, NOW())
+                    ON CONFLICT (branch_id, product_id)
+                    DO UPDATE SET
+                        on_hand = inventory.on_hand + :qty,
+                        updated_at = NOW()
+                    """
+                ),
+                {"bid": branch_id, "pid": po_item.product_id, "qty": item_data.quantity_received},
+            )
+
+            # Create stock movement
+            movement = StockMovement(
+                branch_id=branch_id,
+                product_id=po_item.product_id,
+                movement_type=StockMovementType.PURCHASE.value,
+                quantity_change=item_data.quantity_received,
+                reference_type="purchase_receiving",
+                reference_id=receiving.id,
+                lot_id=lot.id,
+                notes=f"Received via {receiving_number}",
+                user_id=user_id,
+            )
+            db.add(movement)
+
+            # Update PO item quantity_received
+            po_item.quantity_received += item_data.quantity_received
+
+            if po_item.quantity_received < po_item.quantity_ordered:
+                all_fully_received = False
+
+        # Update PO status
+        if all_fully_received:
+            po.status = POStatus.RECEIVED.value
+        else:
+            po.status = POStatus.PARTIALLY_RECEIVED.value
+
+        db.flush()
+        db.refresh(receiving)
+        return receiving
+
+    # ------------------------------------------------------------------
+    # Cancel
+    # ------------------------------------------------------------------
+    @staticmethod
+    def cancel_purchase_order(
+        db: Session, org_id: int, po_id: int, user_id: int
+    ) -> PurchaseOrder:
+        po = db.get(PurchaseOrder, po_id)
+        if not po or po.organization_id != org_id:
+            raise NotFoundException(detail="Purchase order not found")
+
+        if po.status != POStatus.DRAFT.value:
+            raise BadRequestException(
+                detail=f"Cannot cancel PO in '{po.status}' status. Only 'draft' POs can be cancelled."
+            )
+
+        po.status = POStatus.CANCELLED.value
+        db.flush()
+        db.refresh(po)
+        return po

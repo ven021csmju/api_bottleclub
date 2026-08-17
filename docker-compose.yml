@@ -1,0 +1,82 @@
+version: "3.9"
+
+services:
+  # --- Application ---------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bottle-club-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - bottle-club-net
+    restart: unless-stopped
+
+  # --- PostgreSQL -----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: bottle-club-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bottle_club_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bottle-club-net
+    restart: unless-stopped
+
+  # --- Redis ---------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: bottle-club-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bottle-club-net
+    restart: unless-stopped
+
+  # --- pgAdmin (optional dev tool) -----------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: bottle-club-pgadmin
+    ports:
+      - "5050:5050"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@bottleclub.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bottle-club-net
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+networks:
+  bottle-club-net:
+    driver: bridge

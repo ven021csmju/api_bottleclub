@@ -1,17 +1,97 @@
-from fastapi import FastAPI
-from app.routers import users, products
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-app = FastAPI(
-    title="FastAPI + PostgreSQL",
-    description="Simple REST API with FastAPI, SQLAlchemy, and PostgreSQL",
-    version="1.0.0",
-)
-
-# Register routers
-app.include_router(users.router)
-app.include_router(products.router)
+from app.config.settings import settings
+from app.database import SessionLocal
+from app.middleware.auth import get_current_user
+from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.shared.exceptions import AppException
 
 
-@app.get("/")
-def root():
-    return {"message": "FastAPI is running"}
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="The Bottle Club",
+        description="POS System API for The Bottle Club",
+        version="1.0.0",
+    )
+
+    # --- Middleware (order matters: first added = outermost) ---
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(CorrelationMiddleware)
+
+    # --- Exception handlers ---
+    @app.exception_handler(AppException)
+    async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": exc.code or "ERROR",
+                    "message": exc.detail,
+                }
+            },
+        )
+
+    # --- Health check ---
+    @app.get("/health", tags=["Health"])
+    def health_check() -> dict[str, str]:
+        return {"status": "healthy"}
+
+    # --- Domain routers ---
+    from app.domains.auth.router import router as auth_router
+    from app.domains.users.router import router as users_router
+    from app.domains.branches.router import router as branches_router
+    from app.domains.roles.router import router as roles_router
+    from app.domains.catalog.router import router as catalog_router
+    from app.domains.inventory.router import router as inventory_router
+    from app.domains.orders.router import router as orders_router
+    from app.domains.payments.router import router as payments_router
+    from app.domains.purchases.router import router as purchases_router
+    from app.domains.suppliers.router import router as suppliers_router
+    from app.domains.transfers.router import router as transfers_router
+    from app.domains.returns.router import router as returns_router
+    from app.domains.refunds.router import router as refunds_router
+    from app.domains.promotions.router import router as promotions_router
+    from app.domains.coupons.router import router as coupons_router
+    from app.domains.customers.router import router as customers_router
+    from app.domains.loyalty.router import router as loyalty_router
+    from app.domains.shifts.router import router as shifts_router
+    from app.domains.settings.router import router as settings_router
+    from app.domains.reports.router import router as reports_router
+    from app.domains.audit.router import router as audit_router
+
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
+    app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
+    app.include_router(branches_router, prefix="/api/v1/branches", tags=["Branches"])
+    app.include_router(roles_router, prefix="/api/v1/roles", tags=["Roles"])
+    app.include_router(catalog_router, prefix="/api/v1/catalog", tags=["Catalog"])
+    app.include_router(inventory_router, prefix="/api/v1/inventory", tags=["Inventory"])
+    app.include_router(orders_router, prefix="/api/v1/orders", tags=["Orders"])
+    app.include_router(payments_router, prefix="/api/v1/payments", tags=["Payments"])
+    app.include_router(purchases_router, prefix="/api/v1/purchases", tags=["Purchases"])
+    app.include_router(suppliers_router, prefix="/api/v1/suppliers", tags=["Suppliers"])
+    app.include_router(transfers_router, prefix="/api/v1/transfers", tags=["Transfers"])
+    app.include_router(returns_router, prefix="/api/v1/returns", tags=["Returns"])
+    app.include_router(refunds_router, prefix="/api/v1/refunds", tags=["Refunds"])
+    app.include_router(promotions_router, prefix="/api/v1/promotions", tags=["Promotions"])
+    app.include_router(coupons_router, prefix="/api/v1/coupons", tags=["Coupons"])
+    app.include_router(customers_router, prefix="/api/v1/customers", tags=["Customers"])
+    app.include_router(loyalty_router, prefix="/api/v1/loyalty", tags=["Loyalty"])
+    app.include_router(shifts_router, prefix="/api/v1/shifts", tags=["Shifts"])
+    app.include_router(settings_router, prefix="/api/v1/settings", tags=["Settings"])
+    app.include_router(reports_router, prefix="/api/v1/reports", tags=["Reports"])
+    app.include_router(audit_router, prefix="/api/v1/audit", tags=["Audit"])
+
+    return app
+
+
+app = create_app()

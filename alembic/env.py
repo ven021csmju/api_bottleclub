@@ -1,5 +1,7 @@
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
 from alembic import context
@@ -7,12 +9,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.database import Base  # noqa: F401
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.models import Base  # noqa: F401
 import app.models  # noqa: F401
 
 config = context.config
 
-config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
