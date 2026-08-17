@@ -48,8 +48,6 @@ coverage.xml
 # ===========================================================================
 # Alembic (auto-generated migrations – keep the folder, ignore versions)
 # ===========================================================================
-alembic/versions/*.py
-!alembic/versions/.gitkeep
 
 # ===========================================================================
 # Docker
