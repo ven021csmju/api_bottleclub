@@ -132,3 +132,17 @@ class AuditAction(str, enum.Enum):
     EXPORT = "export"
     APPROVE = "approve"
     REJECT = "reject"
+
+
+class VerificationStatus(str, enum.Enum):
+    PENDING = "pending"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+    REVIEW = "review"
+    AMOUNT_MISMATCH = "amount_mismatch"
+    DUPLICATE_REFERENCE = "duplicate_reference"
+    DUPLICATE_IMAGE = "duplicate_image"
+    ORDER_NOT_FOUND = "order_not_found"
+    ORDER_ALREADY_PAID = "order_already_paid"
+    OCR_FAILED = "ocr_failed"
+    RECEIVER_MISMATCH = "receiver_mismatch"

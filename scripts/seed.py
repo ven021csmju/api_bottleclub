@@ -261,12 +261,46 @@ def seed(conn: psycopg.Connection) -> None:
             (admin_user_id, role_ids["Superadmin"], branch_id),
         )
         print(f"  [+] UserRole     admin -> Superadmin @ Main Branch")
+
+        # --- Ven User ---
+        ven_password_hash = pwd_context.hash("0217")
+        cur.execute(
+            """INSERT INTO users
+               (organization_id, username, email, password_hash, display_name, status, is_superadmin)
+               VALUES (%s, %s, %s, %s, %s, 'active', false) RETURNING id""",
+            (org_id, "ven", "ven@bottleclub.com", ven_password_hash, "Ven User"),
+        )
+        ven_user_id = cur.fetchone()[0]
+        print(f"  [+] User         id={ven_user_id}  'ven' / '0217'")
+
+        cur.execute(
+            "INSERT INTO user_roles (user_id, role_id, branch_id) VALUES (%s, %s, %s)",
+            (ven_user_id, role_ids["Cashier"], branch_id),
+        )
+        print(f"  [+] UserRole     ven -> Cashier @ Main Branch")
     else:
         cur.execute("SELECT id FROM users WHERE username = %s", ("admin",))
         row = cur.fetchone()
         if row:
             admin_user_id = row[0]
         print(f"  [=] Users        already exist")
+
+        # --- Ven User (add if missing) ---
+        cur.execute("SELECT id FROM users WHERE username = %s", ("ven",))
+        if cur.fetchone() is None:
+            ven_password_hash = pwd_context.hash("0217")
+            cur.execute(
+                """INSERT INTO users
+                   (organization_id, username, email, password_hash, display_name, status, is_superadmin)
+                   VALUES (%s, %s, %s, %s, %s, 'active', false) RETURNING id""",
+                (org_id, "ven", "ven@bottleclub.com", ven_password_hash, "Ven User"),
+            )
+            ven_user_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO user_roles (user_id, role_id, branch_id) VALUES (%s, %s, %s)",
+                (ven_user_id, role_ids["Cashier"], branch_id),
+            )
+            print(f"  [+] User         id={ven_user_id}  'ven' / '0217' -> Cashier")
 
     # --- Categories ---
     cat_ids: dict[str, int] = {}
@@ -363,6 +397,7 @@ def seed(conn: psycopg.Connection) -> None:
     print(f" Organization : The Bottle Club  (slug: bottle-club)")
     print(f" Branch       : Main Branch      (code: MNB)")
     print(f" Admin login  : admin / admin123")
+    print(f" Test login   : ven / 0217")
     print(f" Roles        : Superadmin, Manager, Cashier, Staff")
     print(f" Categories   : Beer, Wine, Spirits, Non-Alcoholic, Snacks")
     print(f" Suppliers    : {len(SUPPLIERS)}")
@@ -376,6 +411,8 @@ def main() -> None:
     if not database_url:
         print("ERROR: DATABASE_URL not set in environment or .env file")
         sys.exit(1)
+
+    database_url = database_url.replace("postgresql+psycopg://", "postgresql://")
 
     print(f"Connecting to database...")
     with psycopg.connect(database_url) as conn:

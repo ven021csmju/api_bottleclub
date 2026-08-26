@@ -68,6 +68,7 @@ def create_app() -> FastAPI:
     from app.domains.settings.router import router as settings_router
     from app.domains.reports.router import router as reports_router
     from app.domains.audit.router import router as audit_router
+    from app.domains.slip_verify.router import router as slip_verify_router
 
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
     app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router, prefix="/api/v1/settings", tags=["Settings"])
     app.include_router(reports_router, prefix="/api/v1/reports", tags=["Reports"])
     app.include_router(audit_router, prefix="/api/v1/audit", tags=["Audit"])
+    app.include_router(slip_verify_router, prefix="/api/v1/slip-verify", tags=["Slip Verification"])
 
     return app
 

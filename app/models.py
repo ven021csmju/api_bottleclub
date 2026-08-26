@@ -199,7 +199,7 @@ class RolePermission(Base):
     )
 
     role: Mapped["Role"] = relationship("Role", back_populates="role_permissions")
-    permission: Mapped["Permission"] = relationship("Permission", back_populates="roles")
+    permission: Mapped["Permission"] = relationship("Permission")
 
 
 # ---------------------------------------------------------------------------
@@ -1441,4 +1441,113 @@ class DocumentSequence(Base):
 
     __table_args__ = (
         PrimaryKeyConstraint("doc_type", "sequence_date", name="pk_document_sequence"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 43. PaymentVerification (Slip Verification)
+# ---------------------------------------------------------------------------
+class PaymentVerification(Base):
+    __tablename__ = "payment_verifications"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
+    )
+    payment_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("payments.id", ondelete="SET NULL")
+    )
+
+    # OCR extracted data
+    ocr_raw_texts: Mapped[dict | None] = mapped_column(JSONB)
+    ocr_bank: Mapped[str | None] = mapped_column(String(50))
+    ocr_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    ocr_reference: Mapped[str | None] = mapped_column(String(255))
+    ocr_date: Mapped[datetime.date | None] = mapped_column(Date)
+    ocr_time: Mapped[datetime.time | None] = mapped_column(DateTime)
+    ocr_sender_name: Mapped[str | None] = mapped_column(String(255))
+    ocr_receiver_name: Mapped[str | None] = mapped_column(String(255))
+    ocr_sender_account: Mapped[str | None] = mapped_column(String(50))
+    ocr_receiver_account: Mapped[str | None] = mapped_column(String(50))
+    ocr_fee: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    ocr_status_text: Mapped[str | None] = mapped_column(String(100))
+    ocr_field_confidences: Mapped[dict | None] = mapped_column(JSONB)
+
+    # Image metadata
+    image_storage_key: Mapped[str | None] = mapped_column(String(500))
+    image_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    image_perceptual_hash: Mapped[str | None] = mapped_column(String(64))
+    image_mime_type: Mapped[str | None] = mapped_column(String(50))
+    image_file_size: Mapped[int | None] = mapped_column(Integer)
+
+    # Verification result
+    status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
+    risk_score: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="'{}'::jsonb")
+    risk_signals: Mapped[dict | None] = mapped_column(JSONB)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+
+    # Audit
+    verified_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    verified_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    order: Mapped["Order"] = relationship("Order", foreign_keys=[order_id])
+    payment: Mapped["Payment | None"] = relationship("Payment", foreign_keys=[payment_id])
+    created_by_user: Mapped["User"] = relationship("User", foreign_keys=[created_by])
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'verified', 'rejected', 'review', 'amount_mismatch', "
+            "'duplicate_reference', 'duplicate_image', 'order_not_found', 'order_already_paid', "
+            "'ocr_failed', 'receiver_mismatch')",
+            name="ck_verification_status",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 44. VerificationAttempt (Audit Trail)
+# ---------------------------------------------------------------------------
+class VerificationAttempt(Base):
+    __tablename__ = "verification_attempts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    verification_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("payment_verifications.id", ondelete="SET NULL")
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("orders.id", ondelete="SET NULL")
+    )
+
+    # Request info
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+
+    # Input snapshot
+    image_sha256: Mapped[str | None] = mapped_column(String(64))
+    ocr_reference: Mapped[str | None] = mapped_column(String(255))
+    ocr_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+
+    # Result
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    risk_score: Mapped[dict | None] = mapped_column(JSONB)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
