@@ -1,7 +1,7 @@
-from fastapi.testclient import TestClient
+﻿from fastapi.testclient import TestClient
 
 from app.shared.security import create_access_token, create_refresh_token, hash_token
-from app.models import RefreshToken
+from database.models import RefreshToken
 
 
 class TestLoginFlow:

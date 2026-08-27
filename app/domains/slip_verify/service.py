@@ -1,12 +1,11 @@
-import logging
+﻿import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models import Order, User
-from app.repositories.slip_verify_repository import SlipVerifyRepository
-from app.services.duplicate_check import DuplicateCheckService
+from database.models import Order, PaymentVerification, User
+from database.repositories.slip_verify import SlipVerifyRepository
 from app.services.fraud_detection import FraudDetectionService
 from app.services.image_service import ImageService
 from app.services.ocr_service import OCRService
@@ -40,7 +39,7 @@ class SlipVerifyService:
 
         if order.status == "completed":
             _log_attempt(db, user, order_id, None, None, None, 200, "order_already_paid", None, "Order already paid", ip_address, user_agent)
-            return _error_response("order_already_paid", "รายการคำสั่งซื้อได้รับการชำระเงินแล้ว", 200)
+            return _error_response("order_already_paid", "à¸£à¸²à¸¢à¸à¸²à¸£à¸„à¸³à¸ªà¸±à¹ˆà¸‡à¸‹à¸·à¹‰à¸­à¹„à¸”à¹‰à¸£à¸±à¸šà¸à¸²à¸£à¸Šà¸³à¸£à¸°à¹€à¸‡à¸´à¸™à¹à¸¥à¹‰à¸§", 200)
 
         if order.status == "cancelled":
             _log_attempt(db, user, order_id, None, None, None, 400, "order_not_found", None, "Order is cancelled", ip_address, user_agent)
@@ -66,7 +65,7 @@ class SlipVerifyService:
             return {
                 "success": False,
                 "status": "duplicate_image",
-                "message": "รูปภาพนี้ถูกส่งเข้ามาแล้ว",
+                "message": "à¸£à¸¹à¸›à¸ à¸²à¸žà¸™à¸µà¹‰à¸–à¸¹à¸à¸ªà¹ˆà¸‡à¹€à¸‚à¹‰à¸²à¸¡à¸²à¹à¸¥à¹‰à¸§",
                 "data": {
                     "existing_verification_id": existing_image.id,
                     "existing_order_id": existing_image.order_id,
@@ -91,7 +90,7 @@ class SlipVerifyService:
             )
             db.flush()
             _log_attempt(db, user, order_id, verification.id, image_sha256, None, 200, "ocr_failed", Decimal("1.00"), ocr_result.error, ip_address, user_agent)
-            return _error_response("ocr_failed", "ไม่สามารถอ่านข้อความจากสลิปได้", 422)
+            return _error_response("ocr_failed", "à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¸­à¹ˆà¸²à¸™à¸‚à¹‰à¸­à¸„à¸§à¸²à¸¡à¸ˆà¸²à¸à¸ªà¸¥à¸´à¸›à¹„à¸”à¹‰", 422)
 
         # 6. Parse slip data
         parsed = parse_slip(ocr_result.texts, ocr_result.confidences)
@@ -141,12 +140,14 @@ class SlipVerifyService:
         # 9. Check reference duplicate
         ref_duplicate = False
         if parsed.reference:
-            existing_ref = DuplicateCheckService.check_reference(db, parsed.reference.value)
+            existing_ref = SlipVerifyRepository.find_existing_verification_by_reference(
+                db, parsed.reference.value
+            )
             if existing_ref:
                 ref_duplicate = True
 
         # 10. Fraud assessment
-        failed_attempts = DuplicateCheckService.get_failed_attempts_count(db, order_id)
+        failed_attempts = SlipVerifyRepository.get_failed_attempts_count(db, order_id)
         assessment = FraudDetectionService.assess(
             ocr_avg_confidence=parsed.avg_confidence,
             amount_confidence=parsed.amount.confidence if parsed.amount else 0.0,
@@ -223,7 +224,7 @@ class SlipVerifyService:
             return {
                 "success": True,
                 "status": "verified",
-                "message": "ตรวจสอบสลิปสำเร็จ",
+                "message": "à¸•à¸£à¸§à¸ˆà¸ªà¸­à¸šà¸ªà¸¥à¸´à¸›à¸ªà¸³à¹€à¸£à¹‡à¸ˆ",
                 "data": {
                     "verification_id": verification.id,
                     "order_id": order_id,
@@ -243,7 +244,7 @@ class SlipVerifyService:
             return {
                 "success": False,
                 "status": "amount_mismatch",
-                "message": "จำนวนเงินไม่ตรงกับรายการ",
+                "message": "à¸ˆà¸³à¸™à¸§à¸™à¹€à¸‡à¸´à¸™à¹„à¸¡à¹ˆà¸•à¸£à¸‡à¸à¸±à¸šà¸£à¸²à¸¢à¸à¸²à¸£",
                 "data": {
                     "expected_amount": float(order.grand_total),
                     "detected_amount": float(parsed.amount.value) if parsed.amount else None,
@@ -255,7 +256,7 @@ class SlipVerifyService:
             return {
                 "success": False,
                 "status": "duplicate_reference",
-                "message": "สลิปนี้ถูกใช้งานแล้ว",
+                "message": "à¸ªà¸¥à¸´à¸›à¸™à¸µà¹‰à¸–à¸¹à¸à¹ƒà¸Šà¹‰à¸‡à¸²à¸™à¹à¸¥à¹‰à¸§",
                 "data": {
                     "existing_verification_id": existing_ref.id if existing_ref else None,
                 },
@@ -265,7 +266,7 @@ class SlipVerifyService:
             return {
                 "success": True,
                 "status": "review",
-                "message": "สลิปอยู่ระหว่างการตรวจสอบ",
+                "message": "à¸ªà¸¥à¸´à¸›à¸­à¸¢à¸¹à¹ˆà¸£à¸°à¸«à¸§à¹ˆà¸²à¸‡à¸à¸²à¸£à¸•à¸£à¸§à¸ˆà¸ªà¸­à¸š",
                 "data": {
                     "verification_id": verification.id,
                     "order_id": order_id,
@@ -284,6 +285,16 @@ class SlipVerifyService:
                     "risk_score": assessment.total_score,
                 },
             }
+
+    @staticmethod
+    def get_verification(db: Session, verification_id: int) -> PaymentVerification | None:
+        return SlipVerifyRepository.get_verification(db, verification_id)
+
+    @staticmethod
+    def list_verifications_by_order(
+        db: Session, order_id: int, limit: int = 20
+    ) -> list[PaymentVerification]:
+        return SlipVerifyRepository.list_verifications_by_order(db, order_id, limit)
 
 
 def _log_attempt(
@@ -336,13 +347,13 @@ def _get_failure_reason(status: str) -> str | None:
 
 def _get_failure_message(status: str) -> str:
     messages = {
-        "amount_mismatch": "จำนวนเงินไม่ตรงกับรายการ",
-        "duplicate_reference": "สลิปนี้ถูกใช้งานแล้ว",
-        "duplicate_image": "รูปภาพนี้ถูกส่งเข้ามาแล้ว",
-        "order_not_found": "ไม่พบรายการคำสั่งซื้อ",
-        "order_already_paid": "รายการคำสั่งซื้อได้รับการชำระเงินแล้ว",
-        "ocr_failed": "ไม่สามารถอ่านข้อความจากสลิปได้",
-        "receiver_mismatch": "ข้อมูลผู้รับไม่ตรงกับระบบ",
-        "rejected": "สลิปไม่ผ่านการตรวจสอบ",
+        "amount_mismatch": "à¸ˆà¸³à¸™à¸§à¸™à¹€à¸‡à¸´à¸™à¹„à¸¡à¹ˆà¸•à¸£à¸‡à¸à¸±à¸šà¸£à¸²à¸¢à¸à¸²à¸£",
+        "duplicate_reference": "à¸ªà¸¥à¸´à¸›à¸™à¸µà¹‰à¸–à¸¹à¸à¹ƒà¸Šà¹‰à¸‡à¸²à¸™à¹à¸¥à¹‰à¸§",
+        "duplicate_image": "à¸£à¸¹à¸›à¸ à¸²à¸žà¸™à¸µà¹‰à¸–à¸¹à¸à¸ªà¹ˆà¸‡à¹€à¸‚à¹‰à¸²à¸¡à¸²à¹à¸¥à¹‰à¸§",
+        "order_not_found": "à¹„à¸¡à¹ˆà¸žà¸šà¸£à¸²à¸¢à¸à¸²à¸£à¸„à¸³à¸ªà¸±à¹ˆà¸‡à¸‹à¸·à¹‰à¸­",
+        "order_already_paid": "à¸£à¸²à¸¢à¸à¸²à¸£à¸„à¸³à¸ªà¸±à¹ˆà¸‡à¸‹à¸·à¹‰à¸­à¹„à¸”à¹‰à¸£à¸±à¸šà¸à¸²à¸£à¸Šà¸³à¸£à¸°à¹€à¸‡à¸´à¸™à¹à¸¥à¹‰à¸§",
+        "ocr_failed": "à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¸­à¹ˆà¸²à¸™à¸‚à¹‰à¸­à¸„à¸§à¸²à¸¡à¸ˆà¸²à¸à¸ªà¸¥à¸´à¸›à¹„à¸”à¹‰",
+        "receiver_mismatch": "à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸œà¸¹à¹‰à¸£à¸±à¸šà¹„à¸¡à¹ˆà¸•à¸£à¸‡à¸à¸±à¸šà¸£à¸°à¸šà¸š",
+        "rejected": "à¸ªà¸¥à¸´à¸›à¹„à¸¡à¹ˆà¸œà¹ˆà¸²à¸™à¸à¸²à¸£à¸•à¸£à¸§à¸ˆà¸ªà¸­à¸š",
     }
-    return messages.get(status, "เกิดข้อผิดพลาด")
+    return messages.get(status, "à¹€à¸à¸´à¸”à¸‚à¹‰à¸­à¸œà¸´à¸”à¸žà¸¥à¸²à¸”")

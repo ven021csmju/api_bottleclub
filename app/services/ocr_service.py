@@ -1,21 +1,13 @@
-import io
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from paddleocr import PaddleOCR
+import httpx
+
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_PIXELS = 20_000_000
-_ocr_instance: PaddleOCR | None = None
-
-
-def _get_ocr() -> PaddleOCR:
-    global _ocr_instance
-    if _ocr_instance is None:
-        _ocr_instance = PaddleOCR(lang="th", enable_mkldnn=False, show_log=False)
-    return _ocr_instance
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @dataclass
@@ -31,51 +23,95 @@ class OCRResult:
     fields: list[OCRField] = field(default_factory=list)
     success: bool = True
     error: str | None = None
+    http_status: int | None = None
 
 
 class OCRService:
-    MAX_IMAGE_PIXELS = 20_000_000
+    MAX_FILE_SIZE = 10 * 1024 * 1024
 
     @staticmethod
     def extract_text(image_bytes: bytes) -> OCRResult:
-        try:
-            from PIL import Image
-            import numpy as np
+        if not image_bytes:
+            return OCRResult(success=False, error="No image data provided")
 
-            img = Image.open(io.BytesIO(image_bytes))
-            width, height = img.size
-            if width * height > OCRService.MAX_IMAGE_PIXELS:
-                return OCRResult(
-                    success=False,
-                    error=f"Image too large: {width}x{height} pixels (max {OCRService.MAX_IMAGE_PIXELS})",
-                )
+        if len(image_bytes) > OCRService.MAX_FILE_SIZE:
+            return OCRResult(
+                success=False,
+                error=f"Image too large: {len(image_bytes)} bytes (max {OCRService.MAX_FILE_SIZE})",
+            )
 
-            img = img.convert("RGB")
-            img_array = np.array(img)
-        except Exception as e:
-            return OCRResult(success=False, error=f"Invalid image: {e}")
+        url = settings.OCR_SERVICE_URL.rstrip("/") + "/ocr"
+        timeout = settings.OCR_SERVICE_TIMEOUT
+        logger.info("Sending image to OCR service at %s", url)
 
         try:
-            ocr = _get_ocr()
-            result = ocr.predict(img_array)
-        except Exception as e:
-            return OCRResult(success=False, error=f"OCR engine error: {e}")
+            with httpx.Client(timeout=timeout) as client:
+                files = {"file": ("slip.jpg", image_bytes, "image/jpeg")}
+                response = client.post(url, files=files)
+        except httpx.TimeoutException:
+            logger.error("OCR service timeout")
+            return OCRResult(success=False, error="OCR service timeout")
+        except httpx.HTTPError as exc:
+            logger.error("OCR service unavailable: %s", exc)
+            return OCRResult(success=False, error="OCR service unavailable")
 
-        ocr_result = OCRResult()
+        return OCRService._handle_response(response)
 
-        for res in result:
-            texts = res.get("rec_texts", [])
-            scores = res.get("rec_scores", [])
+    @staticmethod
+    def _handle_response(response: httpx.Response) -> OCRResult:
+        logger.info("OCR service response received: status=%s", response.status_code)
 
-            ocr_result.texts = texts
-            ocr_result.confidences = scores
-            ocr_result.fields = [
-                OCRField(raw=text, confidence=score)
-                for text, score in zip(texts, scores)
-            ]
+        try:
+            data = response.json()
+        except ValueError:
+            logger.error("OCR service returned invalid JSON")
+            return OCRResult(
+                success=False,
+                error="Invalid OCR response",
+                http_status=response.status_code,
+            )
 
-        if not ocr_result.texts:
-            ocr_result.success = False
-            ocr_result.error = "No text detected in image"
+        if response.status_code >= 400 or not data.get("success"):
+            message = (
+                data.get("error")
+                or data.get("message")
+                or f"OCR error (HTTP {response.status_code})"
+            )
+            return OCRResult(
+                success=False,
+                error=message,
+                http_status=response.status_code,
+            )
 
-        return ocr_result
+        details = data.get("details") or []
+        texts = [d.get("text") for d in details if d.get("text")]
+        confidences = [d.get("confidence", 0.0) for d in details if d.get("text")]
+
+        if not texts:
+            return OCRResult(
+                success=False,
+                error="No text detected in image",
+                http_status=response.status_code,
+            )
+
+        return OCRResult(
+            texts=texts,
+            confidences=confidences,
+            fields=[
+                OCRField(raw=text, confidence=conf)
+                for text, conf in zip(texts, confidences)
+            ],
+            success=True,
+            http_status=response.status_code,
+        )
+
+    @staticmethod
+    def health() -> bool:
+        url = settings.OCR_SERVICE_URL.rstrip("/") + "/health"
+        try:
+            with httpx.Client(timeout=settings.OCR_SERVICE_TIMEOUT) as client:
+                response = client.get(url)
+                return response.status_code == 200 and response.json().get("status") == "ok"
+        except Exception as exc:
+            logger.warning("OCR service health check failed: %s", exc)
+            return False

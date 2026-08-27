@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from typing import Generator
@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config.settings import settings
-from app.database import get_db
+from database.database import get_db
 from app.main import create_app
-from app.models import Base
+from database.models import Base
 from app.shared.security import create_access_token, hash_password
 
 # ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 # ---------------------------------------------------------------------------
-# Session fixture – creates tables, yields a session, drops everything after.
+# Session fixture â€“ creates tables, yields a session, drops everything after.
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def session() -> Generator[Session, None, None]:
@@ -47,7 +47,7 @@ def session() -> Generator[Session, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# Client fixture – FastAPI TestClient wired to the test session.
+# Client fixture â€“ FastAPI TestClient wired to the test session.
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def client(session: Session) -> Generator[TestClient, None, None]:
@@ -70,7 +70,7 @@ def client(session: Session) -> Generator[TestClient, None, None]:
 
 @pytest.fixture()
 def seed_org(session: Session) -> int:
-    from app.models import Organization
+    from database.models import Organization
 
     org = Organization(name="Test Org", slug="test-org")
     session.add(org)
@@ -80,7 +80,7 @@ def seed_org(session: Session) -> int:
 
 @pytest.fixture()
 def seed_branch(session: Session, seed_org: int) -> int:
-    from app.models import Branch
+    from database.models import Branch
 
     branch = Branch(
         organization_id=seed_org,
@@ -94,7 +94,7 @@ def seed_branch(session: Session, seed_org: int) -> int:
 
 @pytest.fixture()
 def seed_role_and_permission(session: Session, seed_org: int) -> dict:
-    from app.models import Permission, Role, RolePermission
+    from database.models import Permission, Role, RolePermission
 
     role = Role(organization_id=seed_org, name="Admin", is_system=True)
     session.add(role)
@@ -125,7 +125,7 @@ def seed_user(
     seed_branch: int,
     seed_role_and_permission: dict,
 ) -> dict:
-    from app.models import User, UserRole
+    from database.models import User, UserRole
 
     user = User(
         organization_id=seed_org,

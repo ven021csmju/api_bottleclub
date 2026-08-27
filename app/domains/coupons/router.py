@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.coupons.schemas import (
     CouponCreate,
     CouponListResponse,
@@ -11,7 +11,7 @@ from app.domains.coupons.schemas import (
 )
 from app.domains.coupons.service import CouponService
 from app.middleware.auth import require_permission
-from app.models import User
+from database.models import User
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()

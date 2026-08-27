@@ -1,17 +1,10 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from app.models import (
-    LoginAttempt,
-    Permission,
-    RefreshToken,
-    RolePermission,
-    User,
-    UserRole,
-)
+from database.models import User
+from database.repositories.auth import AuthRepository
 from app.shared.exceptions import (
     BadRequestException,
     UnauthorizedException,
@@ -33,30 +26,11 @@ LOCKOUT_MINUTES = 30
 class AuthService:
     @staticmethod
     def _load_user_permissions(db: Session, user: User) -> list[str]:
-        rows = (
-            db.execute(
-                select(Permission.code)
-                .join(RolePermission, RolePermission.permission_id == Permission.id)
-                .join(UserRole, UserRole.role_id == RolePermission.role_id)
-                .where(UserRole.user_id == user.id)
-            )
-            .unique()
-            .all()
-        )
-        return [r[0] for r in rows]
+        return AuthRepository.load_permission_codes(db, user.id)
 
     @staticmethod
     def _load_user_branches(db: Session, user: User) -> list[int]:
-        rows = (
-            db.execute(
-                select(UserRole.branch_id)
-                .where(UserRole.user_id == user.id)
-                .where(UserRole.branch_id.isnot(None))
-            )
-            .unique()
-            .all()
-        )
-        return [r[0] for r in rows]
+        return AuthRepository.load_branch_ids(db, user.id)
 
     @classmethod
     def login(
@@ -67,9 +41,7 @@ class AuthService:
         ip_address: str,
         user_agent: str,
     ) -> TokenResponse:
-        user = db.execute(
-            select(User).where(User.username == username)
-        ).scalar_one_or_none()
+        user = AuthRepository.find_by_username(db, username)
 
         now = datetime.now(timezone.utc)
 
@@ -117,15 +89,13 @@ class AuthService:
         )
         refresh_expires = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
-        db.add(
-            RefreshToken(
-                user_id=user.id,
-                token_hash=hash_token(refresh_raw),
-                device_info=user_agent,
-                ip_address=ip_address,
-                is_revoked=False,
-                expires_at=refresh_expires,
-            )
+        AuthRepository.add_refresh_token(
+            db,
+            user_id=user.id,
+            token_hash=hash_token(refresh_raw),
+            device_info=user_agent,
+            ip_address=ip_address,
+            expires_at=refresh_expires,
         )
         db.commit()
 
@@ -152,11 +122,7 @@ class AuthService:
         token_hash = hash_token(raw_refresh_token)
         now = datetime.now(timezone.utc)
 
-        record = db.execute(
-            select(RefreshToken).where(
-                RefreshToken.token_hash == token_hash,
-            )
-        ).scalar_one_or_none()
+        record = AuthRepository.find_refresh_token(db, token_hash)
 
         if record is None or record.is_revoked:
             raise UnauthorizedException(detail="Refresh token not found or revoked")
@@ -164,9 +130,7 @@ class AuthService:
         if record.expires_at < now:
             raise UnauthorizedException(detail="Refresh token has expired")
 
-        user = db.execute(
-            select(User).where(User.id == record.user_id)
-        ).scalar_one_or_none()
+        user = AuthRepository.find_by_id(db, record.user_id)
 
         if user is None or user.status != "active":
             raise UnauthorizedException(detail="User not found or inactive")
@@ -190,15 +154,13 @@ class AuthService:
         )
         refresh_expires = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
-        db.add(
-            RefreshToken(
-                user_id=user.id,
-                token_hash=hash_token(refresh_raw),
-                device_info=record.device_info,
-                ip_address=ip_address,
-                is_revoked=False,
-                expires_at=refresh_expires,
-            )
+        AuthRepository.add_refresh_token(
+            db,
+            user_id=user.id,
+            token_hash=hash_token(refresh_raw),
+            device_info=record.device_info,
+            ip_address=ip_address,
+            expires_at=refresh_expires,
         )
         db.commit()
 
@@ -214,13 +176,7 @@ class AuthService:
         user_id: int,
         token_hash: str,
     ) -> None:
-        record = db.execute(
-            select(RefreshToken).where(
-                RefreshToken.user_id == user_id,
-                RefreshToken.token_hash == token_hash,
-                RefreshToken.is_revoked == False,  # noqa: E712
-            )
-        ).scalar_one_or_none()
+        record = AuthRepository.find_active_refresh_token(db, user_id, token_hash)
 
         if record:
             record.is_revoked = True
@@ -228,9 +184,7 @@ class AuthService:
 
     @classmethod
     def get_profile(cls, db: Session, user_id: int) -> UserProfileResponse:
-        user = db.execute(
-            select(User).where(User.id == user_id)
-        ).scalar_one_or_none()
+        user = AuthRepository.find_by_id(db, user_id)
 
         if user is None:
             raise BadRequestException(detail="User not found")
@@ -257,13 +211,12 @@ def _record_attempt(
     success: bool,
     user_id: int | None,
 ) -> None:
-    db.add(
-        LoginAttempt(
-            user_id=user_id,
-            username=username,
-            ip_address=ip_address,
-            success=success,
-        )
+    AuthRepository.add_login_attempt(
+        db,
+        user_id=user_id,
+        username=username,
+        ip_address=ip_address,
+        success=success,
     )
     db.commit()
 

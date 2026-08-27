@@ -1,15 +1,9 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
-from app.models import (
-    Branch,
-    Inventory,
-    StockMovement,
-    StockTransfer,
-    StockTransferItem,
-)
+from database.models import Inventory, StockMovement, StockTransfer, StockTransferItem
+from database.repositories.transfers import TransferRepository
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,
@@ -32,21 +26,11 @@ class TransferService:
         if dest_branch_id == source_branch_id:
             raise BadRequestException(detail="Source and destination branches must differ")
 
-        source_branch = db.execute(
-            select(Branch).where(
-                Branch.id == source_branch_id,
-                Branch.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+        source_branch = TransferRepository.get_branch(db, org_id, source_branch_id)
         if not source_branch:
             raise NotFoundException(detail="Source branch not found")
 
-        dest_branch = db.execute(
-            select(Branch).where(
-                Branch.id == dest_branch_id,
-                Branch.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+        dest_branch = TransferRepository.get_branch(db, org_id, dest_branch_id)
         if not dest_branch:
             raise NotFoundException(detail="Destination branch not found")
 
@@ -61,17 +45,17 @@ class TransferService:
             notes=data.get("notes"),
             requested_by=user_id,
         )
-        db.add(transfer)
-        db.flush()
+        TransferRepository.add_transfer(db, transfer)
 
         for item_data in data["items"]:
-            db.add(
+            TransferRepository.add_transfer_item(
+                db,
                 StockTransferItem(
                     stock_transfer_id=transfer.id,
                     product_id=item_data["product_id"],
                     quantity_requested=item_data["quantity_requested"],
                     lot_id=item_data.get("lot_id"),
-                )
+                ),
             )
 
         db.flush()
@@ -88,28 +72,9 @@ class TransferService:
         per_page: int = 20,
         status: str | None = None,
     ) -> dict:
-        query = (
-            select(StockTransfer)
-            .options(joinedload(StockTransfer.items))
-            .where(StockTransfer.organization_id == org_id)
+        items, total = TransferRepository.list_transfers(
+            db, org_id, source_branch_id, dest_branch_id, page, per_page, status
         )
-
-        if source_branch_id is not None:
-            query = query.where(StockTransfer.source_branch_id == source_branch_id)
-        if dest_branch_id is not None:
-            query = query.where(StockTransfer.dest_branch_id == dest_branch_id)
-        if status:
-            query = query.where(StockTransfer.status == status)
-
-        query = query.order_by(StockTransfer.created_at.desc())
-
-        total = db.scalar(
-            select(func.count()).select_from(query.subquery())
-        ) or 0
-
-        items = db.scalars(
-            query.offset((page - 1) * per_page).limit(per_page)
-        ).unique().all()
 
         return {
             "transfers": items,
@@ -120,14 +85,7 @@ class TransferService:
 
     @staticmethod
     def get_transfer(db: Session, org_id: int, transfer_id: int) -> StockTransfer:
-        transfer = db.execute(
-            select(StockTransfer)
-            .options(joinedload(StockTransfer.items))
-            .where(
-                StockTransfer.id == transfer_id,
-                StockTransfer.organization_id == org_id,
-            )
-        ).unique().scalar_one_or_none()
+        transfer = TransferRepository.get_org_transfer(db, org_id, transfer_id)
 
         if not transfer:
             raise NotFoundException(detail="Transfer not found")
@@ -187,22 +145,17 @@ class TransferService:
             product_id = transfer_item.product_id
             lot_id = ship_item_data.get("lot_id")
 
-            result = db.execute(
-                update(Inventory)
-                .where(
-                    Inventory.branch_id == transfer.source_branch_id,
-                    Inventory.product_id == product_id,
-                    Inventory.on_hand >= qty_shipped,
-                )
-                .values(on_hand=Inventory.on_hand - qty_shipped)
+            rowcount = TransferRepository.deduct_stock(
+                db, transfer.source_branch_id, product_id, qty_shipped
             )
-            if result.rowcount == 0:
+            if rowcount == 0:
                 db.rollback()
                 raise InsufficientStockException(
                     detail=f"Insufficient stock for product id={product_id} at source branch"
                 )
 
-            db.add(
+            TransferRepository.add_stock_movement(
+                db,
                 StockMovement(
                     branch_id=transfer.source_branch_id,
                     product_id=product_id,
@@ -212,7 +165,7 @@ class TransferService:
                     reference_id=transfer.id,
                     lot_id=lot_id,
                     user_id=user_id,
-                )
+                ),
             )
 
             transfer_item.quantity_shipped += qty_shipped
@@ -261,26 +214,25 @@ class TransferService:
             product_id = transfer_item.product_id
 
             if qty_received > 0:
-                dest_inv = db.execute(
-                    select(Inventory).where(
-                        Inventory.branch_id == transfer.dest_branch_id,
-                        Inventory.product_id == product_id,
-                    )
-                ).scalar_one_or_none()
+                dest_inv = TransferRepository.get_dest_inventory(
+                    db, transfer.dest_branch_id, product_id
+                )
 
                 if dest_inv:
                     dest_inv.on_hand += qty_received
                 else:
-                    db.add(
+                    TransferRepository.add_inventory(
+                        db,
                         Inventory(
                             branch_id=transfer.dest_branch_id,
                             product_id=product_id,
                             on_hand=qty_received,
                             reserved=0,
-                        )
+                        ),
                     )
 
-                db.add(
+                TransferRepository.add_stock_movement(
+                    db,
                     StockMovement(
                         branch_id=transfer.dest_branch_id,
                         product_id=product_id,
@@ -289,11 +241,12 @@ class TransferService:
                         reference_type="stock_transfer",
                         reference_id=transfer.id,
                         user_id=user_id,
-                    )
+                    ),
                 )
 
             if qty_damaged > 0:
-                db.add(
+                TransferRepository.add_stock_movement(
+                    db,
                     StockMovement(
                         branch_id=transfer.dest_branch_id,
                         product_id=product_id,
@@ -302,7 +255,7 @@ class TransferService:
                         reference_type="stock_transfer",
                         reference_id=transfer.id,
                         user_id=user_id,
-                    )
+                    ),
                 )
 
             transfer_item.quantity_received += qty_received

@@ -1,9 +1,9 @@
-from typing import Optional
+﻿from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.promotions.schemas import (
     PromotionCreate,
     PromotionListResponse,
@@ -12,7 +12,7 @@ from app.domains.promotions.schemas import (
 )
 from app.domains.promotions.service import PromotionService
 from app.middleware.auth import require_permission
-from app.models import User
+from database.models import User
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()

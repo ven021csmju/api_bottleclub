@@ -1,6 +1,7 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 
-from app.models import Branch
+from database.models import Branch
+from database.repositories.branches import BranchRepository
 from app.shared.exceptions import ConflictException, NotFoundException
 from app.shared.pagination import paginate
 
@@ -10,11 +11,7 @@ from .schemas import BranchCreate, BranchListResponse, BranchResponse, BranchUpd
 class BranchService:
     @staticmethod
     def list_branches(db: Session, org_id: int) -> BranchListResponse:
-        query = (
-            db.query(Branch)
-            .filter(Branch.organization_id == org_id)
-            .order_by(Branch.created_at.desc())
-        )
+        query = BranchRepository.list_query(db, org_id)
 
         items, total, _, _ = paginate(db, query, 1, 1000)
         return BranchListResponse(
@@ -24,22 +21,14 @@ class BranchService:
 
     @staticmethod
     def get_branch(db: Session, org_id: int, branch_id: int) -> Branch:
-        branch = (
-            db.query(Branch)
-            .filter(Branch.id == branch_id, Branch.organization_id == org_id)
-            .first()
-        )
+        branch = BranchRepository.get_org_branch(db, org_id, branch_id)
         if not branch:
             raise NotFoundException(detail="Branch not found")
         return branch
 
     @staticmethod
     def create_branch(db: Session, org_id: int, data: BranchCreate) -> Branch:
-        existing = (
-            db.query(Branch)
-            .filter(Branch.organization_id == org_id, Branch.code == data.code)
-            .first()
-        )
+        existing = BranchRepository.find_by_code(db, org_id, data.code)
         if existing:
             raise ConflictException(detail="Branch with this code already exists")
 
@@ -50,7 +39,7 @@ class BranchService:
             phone=data.phone,
             address=data.address,
         )
-        db.add(branch)
+        BranchRepository.add_branch(db, branch)
         db.commit()
         db.refresh(branch)
         return branch

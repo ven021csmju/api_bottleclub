@@ -1,20 +1,12 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, text, update
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
-from app.models import (
-    Branch,
-    Inventory,
-    Order,
-    OrderItem,
-    Product,
-    StockMovement,
-)
+from database.models import Order, OrderItem, StockMovement
+from database.repositories.orders import OrderRepository
 from app.shared.exceptions import (
     BadRequestException,
-    ConflictException,
     InsufficientStockException,
     InvalidOrderStateException,
     NotFoundException,
@@ -33,30 +25,18 @@ class OrderService:
     ) -> Order:
         idempotency_key = data.get("idempotency_key")
         if idempotency_key:
-            existing = db.execute(
-                select(Order).where(
-                    Order.idempotency_key == idempotency_key,
-                    Order.organization_id == org_id,
-                )
-            ).scalar_one_or_none()
+            existing = OrderRepository.find_by_idempotency_key(
+                db, org_id, idempotency_key
+            )
             if existing:
                 return existing
 
-        branch = db.execute(
-            select(Branch).where(Branch.id == branch_id, Branch.organization_id == org_id)
-        ).scalar_one_or_none()
+        branch = OrderRepository.get_branch(db, org_id, branch_id)
         if not branch:
             raise NotFoundException(detail="Branch not found")
 
         product_ids = [item["product_id"] for item in data["items"]]
-        products = db.execute(
-            select(Product).where(
-                Product.id.in_(product_ids),
-                Product.organization_id == org_id,
-                Product.is_active == True,  # noqa: E712
-                Product.deleted_at.is_(None),
-            )
-        ).scalars().all()
+        products = OrderRepository.get_products_by_ids(db, org_id, product_ids)
         products_map = {p.id: p for p in products}
 
         missing = set(product_ids) - set(products_map.keys())
@@ -78,8 +58,7 @@ class OrderService:
             notes=data.get("notes"),
             idempotency_key=idempotency_key,
         )
-        db.add(order)
-        db.flush()
+        OrderRepository.add_order(db, order)
 
         subtotal = Decimal("0")
         order_items = []
@@ -104,26 +83,21 @@ class OrderService:
                 line_total=line_total,
             )
             order_items.append(order_item)
-            db.add(order_item)
+            OrderRepository.add_order_item(db, order_item)
             subtotal += line_total
 
             if product.track_inventory:
-                result = db.execute(
-                    update(Inventory)
-                    .where(
-                        Inventory.branch_id == branch_id,
-                        Inventory.product_id == product.id,
-                        Inventory.on_hand >= quantity,
-                    )
-                    .values(on_hand=Inventory.on_hand - quantity)
+                rowcount = OrderRepository.deduct_stock(
+                    db, branch_id, product.id, quantity
                 )
-                if result.rowcount == 0:
+                if rowcount == 0:
                     db.rollback()
                     raise InsufficientStockException(
                         detail=f"Insufficient stock for product '{product.name}' (id={product.id})"
                     )
 
-                db.add(
+                OrderRepository.add_stock_movement(
+                    db,
                     StockMovement(
                         branch_id=branch_id,
                         product_id=product.id,
@@ -132,7 +106,7 @@ class OrderService:
                         reference_type="order",
                         reference_id=order.id,
                         user_id=user_id,
-                    )
+                    ),
                 )
 
         discount = Decimal(str(data.get("discount_amount", 0)))
@@ -161,34 +135,10 @@ class OrderService:
         customer_id: int | None = None,
         user_id: int | None = None,
     ) -> dict:
-        query = (
-            select(Order)
-            .options(joinedload(Order.items))
-            .where(Order.organization_id == org_id)
+        items, total = OrderRepository.list_orders(
+            db, org_id, branch_id, page, per_page, status,
+            date_from, date_to, customer_id, user_id,
         )
-
-        if branch_id is not None:
-            query = query.where(Order.branch_id == branch_id)
-        if status:
-            query = query.where(Order.status == status)
-        if date_from:
-            query = query.where(Order.created_at >= date_from)
-        if date_to:
-            query = query.where(Order.created_at <= date_to)
-        if customer_id:
-            query = query.where(Order.customer_id == customer_id)
-        if user_id:
-            query = query.where(Order.user_id == user_id)
-
-        query = query.order_by(Order.created_at.desc())
-
-        total = db.scalar(
-            select(func.count()).select_from(query.subquery())
-        ) or 0
-
-        items = db.scalars(
-            query.offset((page - 1) * per_page).limit(per_page)
-        ).unique().all()
 
         return {
             "orders": items,
@@ -199,23 +149,14 @@ class OrderService:
 
     @staticmethod
     def get_order(db: Session, org_id: int, order_id: int) -> Order:
-        order = db.execute(
-            select(Order)
-            .options(joinedload(Order.items))
-            .where(Order.id == order_id, Order.organization_id == org_id)
-        ).unique().scalar_one_or_none()
-
+        order = OrderRepository.get_org_order(db, org_id, order_id)
         if not order:
             raise NotFoundException(detail="Order not found")
         return order
 
     @staticmethod
     def cancel_order(db: Session, org_id: int, order_id: int, user_id: int) -> Order:
-        order = db.execute(
-            select(Order)
-            .options(joinedload(Order.items))
-            .where(Order.id == order_id, Order.organization_id == org_id)
-        ).unique().scalar_one_or_none()
+        order = OrderRepository.get_org_order(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")
@@ -225,21 +166,13 @@ class OrderService:
             )
 
         for item in order.items:
-            product = db.execute(
-                select(Product).where(Product.id == item.product_id)
-            ).scalar_one_or_none()
+            product = OrderRepository.get_product(db, item.product_id)
 
             if product and product.track_inventory:
-                db.execute(
-                    update(Inventory)
-                    .where(
-                        Inventory.branch_id == order.branch_id,
-                        Inventory.product_id == item.product_id,
-                    )
-                    .values(on_hand=Inventory.on_hand + item.quantity)
-                )
+                OrderRepository.restore_stock(db, order.branch_id, item.product_id, item.quantity)
 
-                db.add(
+                OrderRepository.add_stock_movement(
+                    db,
                     StockMovement(
                         branch_id=order.branch_id,
                         product_id=item.product_id,
@@ -247,9 +180,9 @@ class OrderService:
                         quantity_change=item.quantity,
                         reference_type="order",
                         reference_id=order.id,
-                        notes="Order cancelled – stock restored",
+                        notes="Order cancelled â€“ stock restored",
                         user_id=user_id,
-                    )
+                    ),
                 )
 
         order.status = "cancelled"
@@ -260,11 +193,7 @@ class OrderService:
 
     @staticmethod
     def complete_order(db: Session, org_id: int, order_id: int) -> Order:
-        order = db.execute(
-            select(Order)
-            .options(joinedload(Order.items))
-            .where(Order.id == order_id, Order.organization_id == org_id)
-        ).unique().scalar_one_or_none()
+        order = OrderRepository.get_org_order(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")

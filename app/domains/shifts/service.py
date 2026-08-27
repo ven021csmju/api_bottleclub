@@ -1,18 +1,11 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import and_, func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
-from app.models import (
-    Order,
-    Payment,
-    Shift,
-    ShiftCashMovement,
-    User,
-)
+from database.models import Shift, ShiftCashMovement
+from database.repositories.shifts import ShiftRepository
 from app.shared.exceptions import BadRequestException, NotFoundException
-from app.shared.pagination import paginate
 
 
 class ShiftService:
@@ -24,13 +17,7 @@ class ShiftService:
         user_id: int,
         opening_cash: Decimal,
     ) -> Shift:
-        existing_open = db.execute(
-            select(Shift).where(
-                Shift.branch_id == branch_id,
-                Shift.register_id == register_id,
-                Shift.status == "open",
-            )
-        ).scalar_one_or_none()
+        existing_open = ShiftRepository.find_open_shift(db, branch_id, register_id)
         if existing_open:
             raise BadRequestException(
                 detail="There is already an open shift at this register"
@@ -43,7 +30,7 @@ class ShiftService:
             status="open",
             opening_cash=opening_cash,
         )
-        db.add(shift)
+        ShiftRepository.add_shift(db, shift)
         db.commit()
         db.refresh(shift)
         return shift
@@ -55,42 +42,15 @@ class ShiftService:
         user_id: int,
         closing_cash: Decimal,
     ) -> Shift:
-        shift = db.execute(
-            select(Shift).where(Shift.id == shift_id)
-        ).scalar_one_or_none()
+        shift = ShiftRepository.get_shift(db, shift_id)
         if shift is None:
             raise NotFoundException(detail="Shift not found")
 
         if shift.status != "open":
             raise BadRequestException(detail="Shift is not open")
 
-        cash_movements = db.execute(
-            select(
-                func.coalesce(
-                    func.sum(
-                        func.case(
-                            (ShiftCashMovement.movement_type.in_(["cash_in", "opening"]), ShiftCashMovement.amount),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                )
-            ).where(ShiftCashMovement.shift_id == shift_id)
-        ).scalar()
-
-        cash_movements_out = db.execute(
-            select(
-                func.coalesce(
-                    func.sum(
-                        func.case(
-                            (ShiftCashMovement.movement_type.in_(["cash_out", "drop", "pickup"]), ShiftCashMovement.amount),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                )
-            ).where(ShiftCashMovement.shift_id == shift_id)
-        ).scalar()
+        cash_movements = ShiftRepository.sum_cash_in_movements(db, shift_id)
+        cash_movements_out = ShiftRepository.sum_cash_out_movements(db, shift_id)
 
         expected_cash = (
             Decimal(str(shift.opening_cash))
@@ -120,9 +80,7 @@ class ShiftService:
         movement_type: str,
         reason: str,
     ) -> ShiftCashMovement:
-        shift = db.execute(
-            select(Shift).where(Shift.id == shift_id)
-        ).scalar_one_or_none()
+        shift = ShiftRepository.get_shift(db, shift_id)
         if shift is None:
             raise NotFoundException(detail="Shift not found")
         if shift.status != "open":
@@ -135,7 +93,7 @@ class ShiftService:
             reason=reason,
             user_id=user_id,
         )
-        db.add(movement)
+        ShiftRepository.add_cash_movement(db, movement)
         db.commit()
         db.refresh(movement)
         return movement
@@ -150,37 +108,17 @@ class ShiftService:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[Shift], int]:
-        stmt = select(Shift)
-
-        if branch_id is not None:
-            stmt = stmt.where(Shift.branch_id == branch_id)
-        if status is not None:
-            stmt = stmt.where(Shift.status == status)
-        if date_from:
-            stmt = stmt.where(Shift.opened_at >= date_from)
-        if date_to:
-            stmt = stmt.where(Shift.opened_at <= date_to)
-
-        stmt = stmt.order_by(Shift.id.desc())
-        items, total, _, _ = paginate(db, stmt, page, per_page)
-        return list(items), total
+        return ShiftRepository.list_shifts(
+            db, branch_id, status, date_from, date_to, page, per_page
+        )
 
     @staticmethod
     def get_x_report(db: Session, shift_id: int) -> dict:
-        shift = db.execute(
-            select(Shift).where(Shift.id == shift_id)
-        ).scalar_one_or_none()
+        shift = ShiftRepository.get_shift(db, shift_id)
         if shift is None:
             raise NotFoundException(detail="Shift not found")
 
-        cash_movements = db.execute(
-            select(
-                ShiftCashMovement.movement_type,
-                func.coalesce(func.sum(ShiftCashMovement.amount), 0),
-            )
-            .where(ShiftCashMovement.shift_id == shift_id)
-            .group_by(ShiftCashMovement.movement_type)
-        ).all()
+        cash_movements = ShiftRepository.group_cash_movements(db, shift_id)
 
         movements_in = Decimal("0")
         movements_out = Decimal("0")
@@ -190,12 +128,7 @@ class ShiftService:
             else:
                 movements_out += Decimal(str(total))
 
-        order_count = db.scalar(
-            select(func.count()).select_from(Order).where(
-                Order.shift_id == shift_id,
-                Order.status != "cancelled",
-            )
-        ) or 0
+        order_count = ShiftRepository.count_shift_orders(db, shift_id)
 
         return {
             "shift_id": shift.id,

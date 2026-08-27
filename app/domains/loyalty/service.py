@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from app.models import Customer, LoyaltyTransaction
+from database.models import Customer, LoyaltyTransaction
+from database.repositories.loyalty import LoyaltyRepository
 from app.shared.exceptions import BadRequestException, NotFoundException
 from app.shared.pagination import paginate
 
@@ -20,13 +20,7 @@ class LoyaltyService:
         reference_id: int | None = None,
         notes: str | None = None,
     ) -> LoyaltyTransaction:
-        customer = db.execute(
-            select(Customer).where(
-                Customer.id == customer_id,
-                Customer.organization_id == organization_id,
-                Customer.deleted_at.is_(None),
-            )
-        ).scalar_one_or_none()
+        customer = LoyaltyRepository.find_org_customer(db, organization_id, customer_id)
         if customer is None:
             raise NotFoundException(detail="Customer not found")
 
@@ -42,7 +36,7 @@ class LoyaltyService:
             user_id=user_id,
             expires_at=expires_at,
         )
-        db.add(transaction)
+        LoyaltyRepository.add_transaction(db, transaction)
 
         customer.loyalty_points_balance += points
         db.commit()
@@ -60,13 +54,7 @@ class LoyaltyService:
         reference_id: int | None = None,
         notes: str | None = None,
     ) -> LoyaltyTransaction:
-        customer = db.execute(
-            select(Customer).where(
-                Customer.id == customer_id,
-                Customer.organization_id == organization_id,
-                Customer.deleted_at.is_(None),
-            )
-        ).scalar_one_or_none()
+        customer = LoyaltyRepository.find_org_customer(db, organization_id, customer_id)
         if customer is None:
             raise NotFoundException(detail="Customer not found")
 
@@ -84,7 +72,7 @@ class LoyaltyService:
             notes=notes,
             user_id=user_id,
         )
-        db.add(transaction)
+        LoyaltyRepository.add_transaction(db, transaction)
 
         customer.loyalty_points_balance -= points
         db.commit()
@@ -93,27 +81,15 @@ class LoyaltyService:
 
     @staticmethod
     def get_balance(db: Session, organization_id: int, customer_id: int) -> dict:
-        customer = db.execute(
-            select(Customer).where(
-                Customer.id == customer_id,
-                Customer.organization_id == organization_id,
-                Customer.deleted_at.is_(None),
-            )
-        ).scalar_one_or_none()
+        customer = LoyaltyRepository.find_org_customer(db, organization_id, customer_id)
         if customer is None:
             raise NotFoundException(detail="Customer not found")
 
         now = datetime.now(timezone.utc)
         thirty_days = now + timedelta(days=30)
 
-        pending_expiring = db.scalar(
-            select(func.coalesce(func.sum(LoyaltyTransaction.points), 0)).where(
-                LoyaltyTransaction.customer_id == customer_id,
-                LoyaltyTransaction.transaction_type == "earn",
-                LoyaltyTransaction.expires_at.isnot(None),
-                LoyaltyTransaction.expires_at <= thirty_days,
-                LoyaltyTransaction.expires_at > now,
-            )
+        pending_expiring = LoyaltyRepository.get_pending_expiring_points(
+            db, customer_id, now, thirty_days
         )
 
         return {
@@ -133,20 +109,8 @@ class LoyaltyService:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[LoyaltyTransaction], int]:
-        stmt = (
-            select(LoyaltyTransaction)
-            .where(LoyaltyTransaction.customer_id == customer_id)
+        stmt = LoyaltyRepository.list_transaction_query(
+            db, customer_id, transaction_type, date_from, date_to
         )
-
-        if transaction_type:
-            stmt = stmt.where(
-                LoyaltyTransaction.transaction_type == transaction_type
-            )
-        if date_from:
-            stmt = stmt.where(LoyaltyTransaction.created_at >= date_from)
-        if date_to:
-            stmt = stmt.where(LoyaltyTransaction.created_at <= date_to)
-
-        stmt = stmt.order_by(LoyaltyTransaction.id.desc())
         items, total, _, _ = paginate(db, stmt, page, per_page)
         return list(items), total

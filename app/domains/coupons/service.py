@@ -1,11 +1,10 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Coupon, CouponUsage, Promotion
+from database.models import Coupon
+from database.repositories.coupons import CouponRepository
 from app.shared.exceptions import (
-    BadRequestException,
     ConflictException,
     NotFoundException,
 )
@@ -16,19 +15,14 @@ class CouponService:
     @staticmethod
     def create(db: Session, organization_id: int, **kwargs) -> Coupon:
         code = kwargs.get("code", "")
-        existing = db.execute(
-            select(Coupon).where(
-                Coupon.organization_id == organization_id,
-                Coupon.code == code,
-            )
-        ).scalar_one_or_none()
+        existing = CouponRepository.find_by_code(db, organization_id, code)
         if existing:
             raise ConflictException(
                 detail=f"Coupon with code '{code}' already exists"
             )
 
         coupon = Coupon(organization_id=organization_id, **kwargs)
-        db.add(coupon)
+        CouponRepository.add_coupon(db, coupon)
         db.commit()
         db.refresh(coupon)
         return coupon
@@ -40,22 +34,13 @@ class CouponService:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[Coupon], int]:
-        stmt = (
-            select(Coupon)
-            .where(Coupon.organization_id == organization_id)
-            .order_by(Coupon.id.desc())
-        )
+        stmt = CouponRepository.list_query(db, organization_id)
         items, total, _, _ = paginate(db, stmt, page, per_page)
         return list(items), total
 
     @staticmethod
     def get(db: Session, organization_id: int, coupon_id: int) -> Coupon:
-        coupon = db.execute(
-            select(Coupon).where(
-                Coupon.id == coupon_id,
-                Coupon.organization_id == organization_id,
-            )
-        ).scalar_one_or_none()
+        coupon = CouponRepository.get_org_coupon(db, organization_id, coupon_id)
         if coupon is None:
             raise NotFoundException(detail="Coupon not found")
         return coupon
@@ -73,12 +58,7 @@ class CouponService:
         code: str,
         customer_id: int,
     ) -> dict:
-        coupon = db.execute(
-            select(Coupon).where(
-                Coupon.organization_id == organization_id,
-                Coupon.code == code,
-            )
-        ).scalar_one_or_none()
+        coupon = CouponRepository.find_by_code(db, organization_id, code)
 
         if coupon is None:
             return {"valid": False, "message": "Coupon not found"}
@@ -96,11 +76,8 @@ class CouponService:
         if coupon.max_uses is not None and coupon.used_count >= coupon.max_uses:
             return {"valid": False, "message": "Coupon usage limit reached"}
 
-        customer_usage = db.scalar(
-            select(func.count()).select_from(CouponUsage).where(
-                CouponUsage.coupon_id == coupon.id,
-                CouponUsage.customer_id == customer_id,
-            )
+        customer_usage = CouponRepository.count_customer_usage(
+            db, coupon.id, customer_id
         )
         if customer_usage >= coupon.max_uses_per_customer:
             return {
@@ -108,9 +85,7 @@ class CouponService:
                 "message": "Customer has reached per-customer usage limit",
             }
 
-        promotion = db.execute(
-            select(Promotion).where(Promotion.id == coupon.promotion_id)
-        ).scalar_one_or_none()
+        promotion = CouponRepository.get_promotion(db, coupon.promotion_id)
 
         return {
             "valid": True,

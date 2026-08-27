@@ -4,6 +4,7 @@ import json
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -109,38 +110,85 @@ class TestImageHashing:
 
 
 class TestOCRService:
-    @patch("app.services.ocr_service._get_ocr")
-    def test_extract_text_success(self, mock_get_ocr):
+    def _mock_response(self, json_data, status_code=200):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = json_data
+        return response
+
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_extract_text_success(self, mock_client_cls):
         from app.services.ocr_service import OCRService
 
-        mock_ocr = MagicMock()
-        mock_ocr.predict.return_value = [
+        response = self._mock_response(
             {
-                "rec_texts": ["Krungthai", "200.00", "ABC123"],
-                "rec_scores": [0.99, 0.98, 0.97],
+                "success": True,
+                "text": "Krungthai\n200.00\nABC123",
+                "confidence": 0.98,
+                "details": [
+                    {"text": "Krungthai", "confidence": 0.99},
+                    {"text": "200.00", "confidence": 0.98},
+                    {"text": "ABC123", "confidence": 0.97},
+                ],
             }
-        ]
-        mock_get_ocr.return_value = mock_ocr
+        )
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.post.return_value = response
 
-        img_bytes = _create_blank_image()
-        result = OCRService.extract_text(img_bytes)
+        result = OCRService.extract_text(_create_blank_image())
 
         assert result.success is True
         assert len(result.texts) == 3
         assert result.texts[0] == "Krungthai"
         assert result.confidences[0] == 0.99
 
-    def test_extract_text_invalid_image(self):
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_extract_text_http_error(self, mock_client_cls):
         from app.services.ocr_service import OCRService
-        result = OCRService.extract_text(b"not an image")
+
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.post.return_value = self._mock_response(
+            {"success": False, "error": "OCR processing failed"}, status_code=500
+        )
+
+        result = OCRService.extract_text(_create_blank_image())
+        assert result.success is False
+        assert result.error == "OCR processing failed"
+
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_extract_text_service_unavailable(self, mock_client_cls):
+        from app.services.ocr_service import OCRService
+
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.post.side_effect = httpx.ConnectError("connection refused")
+
+        result = OCRService.extract_text(_create_blank_image())
+        assert result.success is False
+        assert "unavailable" in result.error.lower()
+
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_extract_text_timeout(self, mock_client_cls):
+        from app.services.ocr_service import OCRService
+
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.post.side_effect = httpx.TimeoutException("timed out")
+
+        result = OCRService.extract_text(_create_blank_image())
+        assert result.success is False
+        assert "timeout" in result.error.lower()
+
+    def test_extract_text_invalid_image(self):
+        from app.services.ocr_service import OCRService, MAX_FILE_SIZE
+        oversized_bytes = b"\xff\xd8" + b"\x00" * (MAX_FILE_SIZE + 1)
+        result = OCRService.extract_text(oversized_bytes)
         assert result.success is False
         assert result.error is not None
 
-    def test_extract_text_oversized_image(self):
+    def test_extract_text_empty_bytes(self):
         from app.services.ocr_service import OCRService
-        oversized_bytes = b"\xff\xd8" + b"\x00" * (20 * 1024 * 1024 + 1)
-        result = OCRService.extract_text(oversized_bytes)
+        result = OCRService.extract_text(b"")
         assert result.success is False
+        assert result.error is not None
 
 
 class TestSlipParser:

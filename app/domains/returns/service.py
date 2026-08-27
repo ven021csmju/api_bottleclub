@@ -1,17 +1,7 @@
-from datetime import datetime, timezone
+﻿from sqlalchemy.orm import Session
 
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session, joinedload
-
-from app.models import (
-    Inventory,
-    Order,
-    OrderItem,
-    Refund,
-    Return,
-    ReturnItem,
-    StockMovement,
-)
+from database.models import Inventory, Refund, Return, ReturnItem, StockMovement
+from database.repositories.returns import ReturnRepository
 from app.shared.exceptions import (
     BadRequestException,
     InvalidOrderStateException,
@@ -29,12 +19,7 @@ class ReturnService:
         user_id: int,
         data: dict,
     ) -> Return:
-        order = db.execute(
-            select(Order).where(
-                Order.id == data["order_id"],
-                Order.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+        order = ReturnRepository.get_org_order(db, org_id, data["order_id"])
 
         if not order:
             raise NotFoundException(detail="Order not found")
@@ -49,15 +34,12 @@ class ReturnService:
             processed_by=user_id,
             reason=data.get("reason"),
         )
-        db.add(ret)
-        db.flush()
+        ReturnRepository.add_return(db, ret)
 
         total_refund = 0
 
         order_items_map = {}
-        order_items = db.scalars(
-            select(OrderItem).where(OrderItem.order_id == order.id)
-        ).all()
+        order_items = ReturnRepository.list_order_items(db, order.id)
         for oi in order_items:
             order_items_map[oi.id] = oi
 
@@ -89,29 +71,28 @@ class ReturnService:
                 restock=item_data.get("restock", False),
                 unit_price=unit_price,
             )
-            db.add(return_item)
+            ReturnRepository.add_return_item(db, return_item)
 
             if item_data.get("restock", False):
-                inv = db.execute(
-                    select(Inventory).where(
-                        Inventory.branch_id == branch_id,
-                        Inventory.product_id == item_data["product_id"],
-                    )
-                ).scalar_one_or_none()
+                inv = ReturnRepository.get_inventory(
+                    db, branch_id, item_data["product_id"]
+                )
 
                 if inv:
                     inv.on_hand += qty
                 else:
-                    db.add(
+                    ReturnRepository.add_inventory(
+                        db,
                         Inventory(
                             branch_id=branch_id,
                             product_id=item_data["product_id"],
                             on_hand=qty,
                             reserved=0,
-                        )
+                        ),
                     )
 
-                db.add(
+                ReturnRepository.add_stock_movement(
+                    db,
                     StockMovement(
                         branch_id=branch_id,
                         product_id=item_data["product_id"],
@@ -120,7 +101,7 @@ class ReturnService:
                         reference_type="return",
                         reference_id=ret.id,
                         user_id=user_id,
-                    )
+                    ),
                 )
 
         if total_refund > 0:
@@ -135,8 +116,7 @@ class ReturnService:
                 processed_by=user_id,
                 reason=data.get("reason"),
             )
-            db.add(refund)
-            db.flush()
+            ReturnRepository.add_refund(db, refund)
 
             ret.refund_id = refund.id
 
@@ -152,25 +132,9 @@ class ReturnService:
         page: int = 1,
         per_page: int = 20,
     ) -> dict:
-        query = (
-            select(Return)
-            .options(joinedload(Return.items))
-            .join(Order, Order.id == Return.order_id)
-            .where(Order.organization_id == org_id)
+        items, total = ReturnRepository.list_returns(
+            db, org_id, branch_id, page, per_page
         )
-
-        if branch_id is not None:
-            query = query.where(Return.branch_id == branch_id)
-
-        query = query.order_by(Return.created_at.desc())
-
-        total = db.scalar(
-            select(func.count()).select_from(query.subquery())
-        ) or 0
-
-        items = db.scalars(
-            query.offset((page - 1) * per_page).limit(per_page)
-        ).unique().all()
 
         return {
             "returns": items,
@@ -181,11 +145,7 @@ class ReturnService:
 
     @staticmethod
     def get_return(db: Session, return_id: int) -> Return:
-        ret = db.execute(
-            select(Return)
-            .options(joinedload(Return.items))
-            .where(Return.id == return_id)
-        ).unique().scalar_one_or_none()
+        ret = ReturnRepository.get_return(db, return_id)
 
         if not ret:
             raise NotFoundException(detail="Return not found")
@@ -197,11 +157,7 @@ class ReturnService:
         return_id: int,
         user_id: int,
     ) -> Return:
-        ret = db.execute(
-            select(Return)
-            .options(joinedload(Return.items))
-            .where(Return.id == return_id)
-        ).unique().scalar_one_or_none()
+        ret = ReturnRepository.get_return(db, return_id)
 
         if not ret:
             raise NotFoundException(detail="Return not found")

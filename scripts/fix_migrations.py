@@ -18,8 +18,8 @@ from pathlib import Path
 
 
 def main():
-    project_root = Path(__file__).resolve().parents[1]
-    versions_dir = project_root / "alembic" / "versions"
+    project_root = Path(__file__).resolve().parents[2]
+    versions_dir = project_root / "database" / "migrations" / "versions"
 
     if not versions_dir.exists():
         print(f"ERROR: {versions_dir} does not exist")

@@ -1,9 +1,8 @@
-from datetime import date, datetime, time, timezone
+﻿from datetime import date
 
-from sqlalchemy import case, cast, Date, extract, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, OrderItem, Product, Refund
+from database.repositories.reports import ReportRepository
 
 
 class ReportService:
@@ -15,38 +14,17 @@ class ReportService:
         date_to: date,
         branch_id: int | None = None,
     ) -> dict:
-        order_filter = [
-            Order.organization_id == organization_id,
-            Order.status == "completed",
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
-        ]
-        if branch_id:
-            order_filter.append(Order.branch_id == branch_id)
-
-        totals = db.execute(
-            select(
-                func.coalesce(func.sum(Order.grand_total), 0).label("total_sales"),
-                func.coalesce(func.count(Order.id), 0).label("total_orders"),
-            ).where(*order_filter)
-        ).one()
+        totals = ReportRepository.sales_totals(
+            db, organization_id, date_from, date_to, branch_id
+        )
 
         total_sales = float(totals.total_sales)
         total_orders = totals.total_orders
         avg_order = total_sales / total_orders if total_orders else 0.0
 
-        top_products = db.execute(
-            select(
-                OrderItem.product_name,
-                func.sum(OrderItem.quantity).label("total_qty"),
-                func.sum(OrderItem.line_total).label("total_revenue"),
-            )
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(*order_filter)
-            .group_by(OrderItem.product_name)
-            .order_by(func.sum(OrderItem.quantity).desc())
-            .limit(10)
-        ).all()
+        top_products = ReportRepository.top_products(
+            db, organization_id, date_from, date_to, branch_id
+        )
 
         top_products_list = [
             {
@@ -57,16 +35,9 @@ class ReportService:
             for row in top_products
         ]
 
-        sales_by_hour = db.execute(
-            select(
-                extract("hour", Order.created_at).label("hour"),
-                func.count(Order.id).label("order_count"),
-                func.coalesce(func.sum(Order.grand_total), 0).label("sales"),
-            )
-            .where(*order_filter)
-            .group_by(extract("hour", Order.created_at))
-            .order_by(extract("hour", Order.created_at))
-        ).all()
+        sales_by_hour = ReportRepository.sales_by_hour(
+            db, organization_id, date_from, date_to, branch_id
+        )
 
         sales_by_hour_list = [
             {
@@ -93,36 +64,13 @@ class ReportService:
         target_date: date,
         branch_id: int | None = None,
     ) -> dict:
-        order_filter = [
-            Order.organization_id == organization_id,
-            Order.status == "completed",
-            cast(Order.completed_at, Date) == target_date,
-        ]
-        if branch_id:
-            order_filter.append(Order.branch_id == branch_id)
+        totals = ReportRepository.daily_totals(
+            db, organization_id, target_date, branch_id
+        )
 
-        totals = db.execute(
-            select(
-                func.coalesce(func.count(Order.id), 0).label("total_orders"),
-                func.coalesce(func.sum(Order.grand_total), 0).label("total_revenue"),
-            ).where(*order_filter)
-        ).one()
-
-        refund_filter = [
-            Order.organization_id == organization_id,
-            Order.status == "completed",
-            cast(Order.completed_at, Date) == target_date,
-        ]
-        if branch_id:
-            refund_filter.append(Order.branch_id == branch_id)
-
-        total_refunds = db.execute(
-            select(
-                func.coalesce(func.sum(Refund.refund_amount), 0)
-            )
-            .join(Order, Order.id == Refund.order_id)
-            .where(*refund_filter)
-        ).scalar() or 0
+        total_refunds = ReportRepository.refund_total(
+            db, organization_id, target_date, branch_id
+        )
 
         total_revenue = float(totals.total_revenue)
         total_ref = float(total_refunds)

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.catalog.schemas import (
     CategoryCreate,
     CategoryResponse,
@@ -18,7 +18,7 @@ from app.domains.catalog.schemas import (
 )
 from app.domains.catalog.service import CatalogService
 from app.middleware.auth import get_current_branch, require_permission
-from app.models import User
+from database.models import User
 
 router = APIRouter()
 

@@ -1,11 +1,11 @@
-import logging
+﻿import logging
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.middleware.auth import get_current_user
-from app.models import User
+from database.models import User
 
 from .schemas import ErrorResponse, VerificationResponse
 from .service import SlipVerifyService
@@ -56,9 +56,7 @@ def get_verification(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.repositories.slip_verify_repository import SlipVerifyRepository
-
-    verification = SlipVerifyRepository.get_verification(db, verification_id)
+    verification = SlipVerifyService.get_verification(db, verification_id)
     if not verification:
         from app.shared.exceptions import NotFoundException
         raise NotFoundException(detail="Verification not found")
@@ -89,9 +87,7 @@ def list_verifications_by_order(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.repositories.slip_verify_repository import SlipVerifyRepository
-
-    verifications = SlipVerifyRepository.list_verifications_by_order(db, order_id)
+    verifications = SlipVerifyService.list_verifications_by_order(db, order_id)
     return [
         {
             "id": v.id,

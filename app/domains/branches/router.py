@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.middleware.auth import get_current_user, require_permission
-from app.models import User
+from database.models import User
 
 from .schemas import BranchCreate, BranchListResponse, BranchResponse, BranchUpdate
 from .service import BranchService

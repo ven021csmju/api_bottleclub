@@ -1,7 +1,7 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 
-from app.models import SystemSetting
+from database.models import SystemSetting
+from database.repositories.settings import SettingsRepository
 from app.shared.exceptions import NotFoundException
 
 
@@ -12,20 +12,7 @@ class SettingService:
         organization_id: int,
         branch_id: int | None = None,
     ) -> list[SystemSetting]:
-        stmt = select(SystemSetting).where(
-            SystemSetting.organization_id == organization_id,
-        )
-
-        if branch_id is not None:
-            stmt = stmt.where(
-                (SystemSetting.branch_id == branch_id)
-                | (SystemSetting.branch_id.is_(None))
-            )
-        else:
-            stmt = stmt.where(SystemSetting.branch_id.is_(None))
-
-        stmt = stmt.order_by(SystemSetting.key)
-        return list(db.scalars(stmt).all())
+        return SettingsRepository.list_settings(db, organization_id, branch_id)
 
     @staticmethod
     def get_setting(
@@ -35,23 +22,13 @@ class SettingService:
         branch_id: int | None = None,
     ) -> SystemSetting:
         if branch_id is not None:
-            setting = db.execute(
-                select(SystemSetting).where(
-                    SystemSetting.organization_id == organization_id,
-                    SystemSetting.key == key,
-                    SystemSetting.branch_id == branch_id,
-                )
-            ).scalar_one_or_none()
+            setting = SettingsRepository.get_branch_setting(
+                db, organization_id, key, branch_id
+            )
             if setting:
                 return setting
 
-        setting = db.execute(
-            select(SystemSetting).where(
-                SystemSetting.organization_id == organization_id,
-                SystemSetting.key == key,
-                SystemSetting.branch_id.is_(None),
-            )
-        ).scalar_one_or_none()
+        setting = SettingsRepository.get_org_setting(db, organization_id, key)
 
         if setting is None:
             raise NotFoundException(detail=f"Setting '{key}' not found")
@@ -66,13 +43,9 @@ class SettingService:
         value_type: str | None = None,
         branch_id: int | None = None,
     ) -> SystemSetting:
-        existing = db.execute(
-            select(SystemSetting).where(
-                SystemSetting.organization_id == organization_id,
-                SystemSetting.key == key,
-                SystemSetting.branch_id == branch_id,
-            )
-        ).scalar_one_or_none()
+        existing = SettingsRepository.get_setting_for_branch_or_none(
+            db, organization_id, key, branch_id
+        )
 
         if existing:
             existing.value = value
@@ -89,7 +62,7 @@ class SettingService:
             value=value,
             value_type=value_type or "string",
         )
-        db.add(setting)
+        SettingsRepository.add_setting(db, setting)
         db.commit()
         db.refresh(setting)
         return setting
@@ -102,13 +75,9 @@ class SettingService:
         branch_id: int | None = None,
     ) -> SystemSetting:
         if branch_id is not None:
-            branch_setting = db.execute(
-                select(SystemSetting).where(
-                    SystemSetting.organization_id == organization_id,
-                    SystemSetting.key == key,
-                    SystemSetting.branch_id == branch_id,
-                )
-            ).scalar_one_or_none()
+            branch_setting = SettingsRepository.get_branch_setting(
+                db, organization_id, key, branch_id
+            )
             if branch_setting:
                 return branch_setting
 

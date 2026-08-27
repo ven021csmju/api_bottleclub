@@ -1,10 +1,10 @@
-from datetime import datetime
+﻿from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.shifts.schemas import (
     CashMovementCreate,
     ShiftCashMovementResponse,
@@ -16,7 +16,7 @@ from app.domains.shifts.schemas import (
 )
 from app.domains.shifts.service import ShiftService
 from app.middleware.auth import require_permission
-from app.models import User
+from database.models import User
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()

@@ -4,20 +4,22 @@ services:
   # --- Application ---------------------------------------------------------
   app:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     container_name: bottle-club-app
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - ../.env
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
+      - ../api/app:/app/app
+      - ../database:/app/database
+      - ../.env:/app/.env
     networks:
       - bottle-club-net
     restart: unless-stopped

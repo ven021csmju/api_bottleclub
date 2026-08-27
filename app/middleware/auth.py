@@ -1,13 +1,14 @@
-from typing import Callable
+﻿from typing import Callable
 
 from fastapi import Depends, Header, Request
 from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from app.database import get_db
+from database.database import get_db
 from app.middleware.branch_scope import validate_branch_access
-from app.models import User
+from database.models import User
+from database.repositories.users import UserRepository
 from app.shared.audit import AuditContext
 from app.shared.exceptions import ForbiddenException, UnauthorizedException
 from app.shared.security import decode_token
@@ -31,7 +32,7 @@ async def get_current_user(
         raise UnauthorizedException(detail="Invalid token type")
 
     user_id = int(payload["sub"])
-    user = db.query(User).filter(User.id == user_id).first()
+    user = UserRepository.get_by_id(db, user_id)
     if user is None:
         raise UnauthorizedException(detail="User not found")
 

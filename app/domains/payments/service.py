@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+﻿from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Order, Payment, Refund
+from database.models import Payment, Refund
+from database.repositories.payments import PaymentRepository
 from app.shared.exceptions import (
     BadRequestException,
     NotFoundException,
@@ -21,12 +21,7 @@ class PaymentService:
         user_id: int,
         data: dict,
     ) -> Payment:
-        order = db.execute(
-            select(Order).where(
-                Order.id == order_id,
-                Order.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+        order = PaymentRepository.get_org_order(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")
@@ -43,8 +38,7 @@ class PaymentService:
             notes=data.get("notes"),
             received_by=user_id,
         )
-        db.add(payment)
-        db.flush()
+        PaymentRepository.add_payment(db, payment)
 
         order.amount_paid = Decimal(str(order.amount_paid)) + payment.amount
         if order.amount_paid > order.grand_total:
@@ -56,18 +50,11 @@ class PaymentService:
 
     @staticmethod
     def list_payments(db: Session, order_id: int) -> list[Payment]:
-        payments = db.scalars(
-            select(Payment)
-            .where(Payment.order_id == order_id)
-            .order_by(Payment.created_at.desc())
-        ).all()
-        return list(payments)
+        return PaymentRepository.list_payments(db, order_id)
 
     @staticmethod
     def get_payment(db: Session, payment_id: int) -> Payment:
-        payment = db.execute(
-            select(Payment).where(Payment.id == payment_id)
-        ).scalar_one_or_none()
+        payment = PaymentRepository.get_payment(db, payment_id)
 
         if not payment:
             raise NotFoundException(detail="Payment not found")
@@ -81,12 +68,7 @@ class PaymentService:
         user_id: int,
         data: dict,
     ) -> Refund:
-        order = db.execute(
-            select(Order).where(
-                Order.id == order_id,
-                Order.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+        order = PaymentRepository.get_org_order(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")
@@ -108,8 +90,7 @@ class PaymentService:
             processed_by=user_id,
             reason=data.get("reason"),
         )
-        db.add(refund)
-        db.flush()
+        PaymentRepository.add_refund(db, refund)
 
         order.amount_paid = Decimal(str(order.amount_paid)) - refund_amount
         db.flush()

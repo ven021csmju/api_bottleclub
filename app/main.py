@@ -1,9 +1,16 @@
+﻿import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from app.database import SessionLocal
+from database.database import SessionLocal
 from app.middleware.auth import get_current_user
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware

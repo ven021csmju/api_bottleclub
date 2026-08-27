@@ -1,10 +1,10 @@
-from datetime import date
+﻿from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.reports.schemas import (
     DailySalesSummary,
     SalesReportRequest,
@@ -12,7 +12,7 @@ from app.domains.reports.schemas import (
 )
 from app.domains.reports.service import ReportService
 from app.middleware.auth import require_permission
-from app.models import User
+from database.models import User
 
 router = APIRouter()
 

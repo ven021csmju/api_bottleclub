@@ -1,9 +1,10 @@
-from dataclasses import dataclass
+﻿from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog
+from database.models import AuditLog
+from database.repositories.audit import AuditRepository
 
 
 @dataclass
@@ -38,4 +39,4 @@ def log_audit(
         request_id=ctx.request_id,
         metadata=metadata,
     )
-    db.add(audit_log)
+    AuditRepository.add_audit_log(db, audit_log)

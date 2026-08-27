@@ -1,9 +1,8 @@
-import datetime
+﻿from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, joinedload
-
-from app.models import User, UserRole
+from database.models import User, UserRole
+from database.repositories.users import UserRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import hash_password
@@ -21,27 +20,7 @@ class UserService:
         search: str | None = None,
         status: str | None = None,
     ) -> UserListResponse:
-        query = (
-            db.query(User)
-            .filter(User.organization_id == org_id, User.deleted_at.is_(None))
-            .options(joinedload(User.user_roles))
-        )
-
-        if search:
-            like = f"%{search}%"
-            query = query.filter(
-                or_(
-                    User.username.ilike(like),
-                    User.email.ilike(like),
-                    User.display_name.ilike(like),
-                    User.phone.ilike(like),
-                )
-            )
-
-        if status:
-            query = query.filter(User.status == status)
-
-        query = query.order_by(User.created_at.desc())
+        query = UserRepository.list_query(db, org_id, search, status)
 
         items, total, current_page, _ = paginate(db, query, page, per_page)
         return UserListResponse(
@@ -53,27 +32,14 @@ class UserService:
 
     @staticmethod
     def get_user(db: Session, org_id: int, user_id: int) -> User:
-        user = (
-            db.query(User)
-            .options(joinedload(User.user_roles))
-            .filter(User.id == user_id, User.organization_id == org_id, User.deleted_at.is_(None))
-            .first()
-        )
+        user = UserRepository.get_org_user(db, org_id, user_id)
         if not user:
             raise NotFoundException(detail="User not found")
         return user
 
     @staticmethod
     def create_user(db: Session, org_id: int, data: UserCreate) -> User:
-        existing = (
-            db.query(User)
-            .filter(
-                User.organization_id == org_id,
-                User.deleted_at.is_(None),
-                or_(User.username == data.username, User.email == data.email),
-            )
-            .first()
-        )
+        existing = UserRepository.find_by_username_or_email(db, org_id, data.username, data.email)
         if existing:
             field = "username" if existing.username == data.username else "email"
             raise ConflictException(detail=f"User with this {field} already exists")
@@ -86,11 +52,10 @@ class UserService:
             display_name=data.display_name,
             phone=data.phone,
         )
-        db.add(user)
-        db.flush()
+        UserRepository.add_user(db, user)
 
         for branch_id in data.branch_ids:
-            db.add(UserRole(user_id=user.id, branch_id=branch_id))
+            UserRepository.add_user_role(db, user.id, branch_id)
 
         db.commit()
         db.refresh(user)
@@ -101,16 +66,7 @@ class UserService:
         user = UserService.get_user(db, org_id, user_id)
 
         if data.email is not None and data.email != user.email:
-            conflict = (
-                db.query(User)
-                .filter(
-                    User.organization_id == org_id,
-                    User.id != user_id,
-                    User.email == data.email,
-                    User.deleted_at.is_(None),
-                )
-                .first()
-            )
+            conflict = UserRepository.find_email_conflict(db, org_id, user_id, data.email)
             if conflict:
                 raise ConflictException(detail="Email already in use")
 
@@ -121,9 +77,9 @@ class UserService:
             setattr(user, field, value)
 
         if branch_ids is not None:
-            db.query(UserRole).filter(UserRole.user_id == user_id).delete()
+            UserRepository.delete_user_roles(db, user_id)
             for branch_id in branch_ids:
-                db.add(UserRole(user_id=user_id, branch_id=branch_id))
+                UserRepository.add_user_role(db, user_id, branch_id)
 
         db.commit()
         db.refresh(user)
@@ -137,36 +93,19 @@ class UserService:
 
     @staticmethod
     def assign_role(db: Session, user_id: int, role_id: int, branch_id: int | None = None) -> UserRole:
-        existing = (
-            db.query(UserRole)
-            .filter(
-                UserRole.user_id == user_id,
-                UserRole.role_id == role_id,
-                UserRole.branch_id == branch_id,
-            )
-            .first()
-        )
+        existing = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if existing:
             raise ConflictException(detail="Role already assigned")
 
-        user_role = UserRole(user_id=user_id, role_id=role_id, branch_id=branch_id)
-        db.add(user_role)
+        user_role = UserRepository.create_user_role(db, user_id, role_id, branch_id)
         db.commit()
         db.refresh(user_role)
         return user_role
 
     @staticmethod
     def remove_role(db: Session, user_id: int, role_id: int, branch_id: int | None = None) -> None:
-        user_role = (
-            db.query(UserRole)
-            .filter(
-                UserRole.user_id == user_id,
-                UserRole.role_id == role_id,
-                UserRole.branch_id == branch_id,
-            )
-            .first()
-        )
+        user_role = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if not user_role:
             raise NotFoundException(detail="Role assignment not found")
-        db.delete(user_role)
+        UserRepository.delete_role_assignment(db, user_role)
         db.commit()

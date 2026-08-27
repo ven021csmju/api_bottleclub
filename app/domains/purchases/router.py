@@ -1,10 +1,10 @@
-from datetime import date
+﻿from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from database.database import get_db
 from app.domains.purchases.schemas import (
     PurchaseOrderCreate,
     PurchaseOrderResponse,
@@ -15,7 +15,7 @@ from app.domains.purchases.schemas import (
 )
 from app.domains.purchases.service import PurchaseService
 from app.middleware.auth import require_permission
-from app.models import User
+from database.models import User
 
 router = APIRouter()
 

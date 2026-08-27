@@ -1,9 +1,7 @@
-from datetime import datetime, timezone
+﻿from sqlalchemy.orm import Session
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models import Promotion
+from database.models import Promotion
+from database.repositories.promotions import PromotionRepository
 from app.shared.exceptions import NotFoundException
 from app.shared.pagination import paginate
 
@@ -17,25 +15,13 @@ class PromotionService:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[Promotion], int]:
-        stmt = select(Promotion).where(
-            Promotion.organization_id == organization_id,
-        )
-
-        if is_active is not None:
-            stmt = stmt.where(Promotion.is_active == is_active)
-
-        stmt = stmt.order_by(Promotion.id.desc())
+        stmt = PromotionRepository.list_query(db, organization_id, is_active)
         items, total, _, _ = paginate(db, stmt, page, per_page)
         return list(items), total
 
     @staticmethod
     def get(db: Session, organization_id: int, promotion_id: int) -> Promotion:
-        promotion = db.execute(
-            select(Promotion).where(
-                Promotion.id == promotion_id,
-                Promotion.organization_id == organization_id,
-            )
-        ).scalar_one_or_none()
+        promotion = PromotionRepository.get_org_promotion(db, organization_id, promotion_id)
         if promotion is None:
             raise NotFoundException(detail="Promotion not found")
         return promotion
@@ -43,7 +29,7 @@ class PromotionService:
     @staticmethod
     def create(db: Session, organization_id: int, **kwargs) -> Promotion:
         promotion = Promotion(organization_id=organization_id, **kwargs)
-        db.add(promotion)
+        PromotionRepository.add_promotion(db, promotion)
         db.commit()
         db.refresh(promotion)
         return promotion

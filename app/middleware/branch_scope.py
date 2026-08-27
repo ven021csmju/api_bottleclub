@@ -1,4 +1,4 @@
-from app.models import User
+﻿from database.models import User
 from app.shared.exceptions import ForbiddenException
 
 

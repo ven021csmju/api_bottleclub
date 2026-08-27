@@ -1,8 +1,7 @@
-import datetime
+﻿import datetime
 from typing import Optional
 
-from sqlalchemy import func, select, text
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.domains.purchases.schemas import (
     PurchaseOrderCreate,
@@ -12,22 +11,19 @@ from app.domains.purchases.schemas import (
     PurchaseReceivingCreate,
     PurchaseReceivingResponse,
 )
-from app.models import (
-    Inventory,
+from database.models import (
     InventoryLot,
-    Product,
     PurchaseOrder,
     PurchaseOrderItem,
     PurchaseReceiving,
     PurchaseReceivingItem,
+    Product,
     StockMovement,
-    Supplier,
-    User,
 )
+from database.repositories.purchases import PurchaseRepository
 from app.shared.enums import POStatus, ReceivingStatus, StockMovementType
 from app.shared.exceptions import (
     BadRequestException,
-    ConflictException,
     NotFoundException,
 )
 
@@ -38,27 +34,19 @@ class PurchaseService:
     # ------------------------------------------------------------------
     @staticmethod
     def _generate_po_number(db: Session, org_id: int) -> str:
-        count = db.scalar(
-            select(func.count()).where(
-                PurchaseOrder.organization_id == org_id
-            )
-        ) or 0
+        count = PurchaseRepository.count_org_purchase_orders(db, org_id)
         return f"PO-{org_id:04d}-{count + 1:06d}"
 
     @staticmethod
     def _generate_receiving_number(db: Session) -> str:
-        count = db.scalar(select(func.count()).select_from(PurchaseReceiving)) or 0
+        count = PurchaseRepository.count_receivings(db)
         return f"REC-{count + 1:06d}"
 
     @staticmethod
     def _build_po_response(po: PurchaseOrder, db: Session) -> PurchaseOrderResponse:
-        supplier = db.get(Supplier, po.supplier_id)
+        supplier = PurchaseRepository.get_supplier(db, po.supplier_id)
         supplier_name = supplier.name if supplier else "Unknown"
-        items = db.scalars(
-            select(PurchaseOrderItem).where(
-                PurchaseOrderItem.purchase_order_id == po.id
-            )
-        ).all()
+        items = PurchaseRepository.list_po_items(db, po.id)
 
         return PurchaseOrderResponse(
             id=po.id,
@@ -83,34 +71,9 @@ class PurchaseService:
         date_from: Optional[datetime.date] = None,
         date_to: Optional[datetime.date] = None,
     ) -> PurchaseOrderListResponse:
-        stmt = select(PurchaseOrder).where(
-            PurchaseOrder.organization_id == org_id
+        pos, total = PurchaseRepository.list_purchase_orders(
+            db, org_id, page, per_page, status, supplier_id, date_from, date_to
         )
-
-        if status:
-            stmt = stmt.where(PurchaseOrder.status == status)
-
-        if supplier_id:
-            stmt = stmt.where(PurchaseOrder.supplier_id == supplier_id)
-
-        if date_from:
-            stmt = stmt.where(
-                func.date(PurchaseOrder.created_at) >= date_from
-            )
-
-        if date_to:
-            stmt = stmt.where(
-                func.date(PurchaseOrder.created_at) <= date_to
-            )
-
-        total_stmt = select(func.count()).select_from(stmt.subquery())
-        total = db.scalar(total_stmt) or 0
-
-        stmt = stmt.order_by(PurchaseOrder.created_at.desc()).offset(
-            (page - 1) * per_page
-        ).limit(per_page)
-
-        pos = db.scalars(stmt).all()
         response_items = [PurchaseService._build_po_response(po, db) for po in pos]
 
         return PurchaseOrderListResponse(
@@ -124,7 +87,7 @@ class PurchaseService:
     def get_purchase_order(
         db: Session, org_id: int, po_id: int
     ) -> PurchaseOrder:
-        po = db.get(PurchaseOrder, po_id)
+        po = PurchaseRepository.get_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
         return po
@@ -136,7 +99,7 @@ class PurchaseService:
     def update_purchase_order(
         db: Session, org_id: int, po_id: int, data: PurchaseOrderUpdate
     ) -> PurchaseOrder:
-        po = db.get(PurchaseOrder, po_id)
+        po = PurchaseRepository.get_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
 
@@ -153,19 +116,15 @@ class PurchaseService:
 
         if data.items is not None:
             # Delete existing items
-            existing_items = db.scalars(
-                select(PurchaseOrderItem).where(
-                    PurchaseOrderItem.purchase_order_id == po.id
-                )
-            ).all()
+            existing_items = PurchaseRepository.list_po_items(db, po.id)
             for item in existing_items:
-                db.delete(item)
+                PurchaseRepository.delete_po_item(db, item)
             db.flush()
 
             # Create new items
             total = 0.0
             for item_data in data.items:
-                product = db.get(Product, item_data.product_id)
+                product = PurchaseRepository.get_product(db, item_data.product_id)
                 if not product or product.organization_id != org_id or product.deleted_at is not None:
                     raise NotFoundException(
                         detail=f"Product {item_data.product_id} not found"
@@ -177,7 +136,7 @@ class PurchaseService:
                     quantity_ordered=item_data.quantity_ordered,
                     unit_cost=item_data.unit_cost,
                 )
-                db.add(po_item)
+                PurchaseRepository.add_po_item(db, po_item)
                 total += float(item_data.unit_cost) * item_data.quantity_ordered
 
             po.total_amount = total
@@ -193,12 +152,12 @@ class PurchaseService:
     def create_purchase_order(
         db: Session, org_id: int, user_id: int, data: PurchaseOrderCreate
     ) -> PurchaseOrder:
-        supplier = db.get(Supplier, data.supplier_id)
+        supplier = PurchaseRepository.get_supplier(db, data.supplier_id)
         if not supplier or supplier.organization_id != org_id:
             raise NotFoundException(detail="Supplier not found")
 
         for item in data.items:
-            product = db.get(Product, item.product_id)
+            product = PurchaseRepository.get_product(db, item.product_id)
             if not product or product.organization_id != org_id or product.deleted_at is not None:
                 raise NotFoundException(
                     detail=f"Product {item.product_id} not found"
@@ -221,8 +180,7 @@ class PurchaseService:
             expected_delivery_date=data.expected_delivery_date,
             created_by=user_id,
         )
-        db.add(po)
-        db.flush()
+        PurchaseRepository.add_po(db, po)
 
         for item in data.items:
             po_item = PurchaseOrderItem(
@@ -231,7 +189,7 @@ class PurchaseService:
                 quantity_ordered=item.quantity_ordered,
                 unit_cost=item.unit_cost,
             )
-            db.add(po_item)
+            PurchaseRepository.add_po_item(db, po_item)
 
         db.flush()
         db.refresh(po)
@@ -244,7 +202,7 @@ class PurchaseService:
     def approve_purchase_order(
         db: Session, org_id: int, po_id: int, user_id: int
     ) -> PurchaseOrder:
-        po = db.get(PurchaseOrder, po_id)
+        po = PurchaseRepository.get_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
 
@@ -271,7 +229,7 @@ class PurchaseService:
         data: PurchaseReceivingCreate,
         user_id: int,
     ) -> PurchaseReceiving:
-        po = db.get(PurchaseOrder, po_id)
+        po = PurchaseRepository.get_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
 
@@ -291,13 +249,12 @@ class PurchaseService:
             status=ReceivingStatus.COMPLETED.value,
             received_by=user_id,
         )
-        db.add(receiving)
-        db.flush()
+        PurchaseRepository.add_receiving(db, receiving)
 
         all_fully_received = True
 
         for item_data in data.received_items:
-            po_item = db.get(PurchaseOrderItem, item_data.purchase_order_item_id)
+            po_item = PurchaseRepository.get_po_item(db, item_data.purchase_order_item_id)
             if not po_item or po_item.purchase_order_id != po.id:
                 raise NotFoundException(
                     detail=f"PO item {item_data.purchase_order_item_id} not found"
@@ -311,16 +268,11 @@ class PurchaseService:
                 cost_price=item_data.cost_price,
                 expiry_date=item_data.expiry_date,
             )
-            db.add(receiving_item)
-            db.flush()
+            PurchaseRepository.add_receiving_item(db, receiving_item)
 
             # Create or update inventory lot
-            lot = db.scalar(
-                select(InventoryLot).where(
-                    InventoryLot.branch_id == branch_id,
-                    InventoryLot.product_id == po_item.product_id,
-                    InventoryLot.lot_number == item_data.lot_number,
-                )
+            lot = PurchaseRepository.find_lot(
+                db, branch_id, po_item.product_id, item_data.lot_number
             )
             if lot:
                 lot.quantity += item_data.quantity_received
@@ -337,7 +289,7 @@ class PurchaseService:
                     expiry_date=item_data.expiry_date,
                     purchase_receiving_id=receiving.id,
                 )
-                db.add(lot)
+                PurchaseRepository.add_lot(db, lot)
 
             db.flush()
 
@@ -345,18 +297,8 @@ class PurchaseService:
             receiving_item.inventory_lot_id = lot.id
 
             # Atomic inventory balance update
-            db.execute(
-                text(
-                    """
-                    INSERT INTO inventory (branch_id, product_id, on_hand, reserved, updated_at)
-                    VALUES (:bid, :pid, :qty, 0, NOW())
-                    ON CONFLICT (branch_id, product_id)
-                    DO UPDATE SET
-                        on_hand = inventory.on_hand + :qty,
-                        updated_at = NOW()
-                    """
-                ),
-                {"bid": branch_id, "pid": po_item.product_id, "qty": item_data.quantity_received},
+            PurchaseRepository.upsert_inventory(
+                db, branch_id, po_item.product_id, item_data.quantity_received
             )
 
             # Create stock movement
@@ -371,7 +313,7 @@ class PurchaseService:
                 notes=f"Received via {receiving_number}",
                 user_id=user_id,
             )
-            db.add(movement)
+            PurchaseRepository.add_stock_movement(db, movement)
 
             # Update PO item quantity_received
             po_item.quantity_received += item_data.quantity_received
@@ -396,7 +338,7 @@ class PurchaseService:
     def cancel_purchase_order(
         db: Session, org_id: int, po_id: int, user_id: int
     ) -> PurchaseOrder:
-        po = db.get(PurchaseOrder, po_id)
+        po = PurchaseRepository.get_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
 

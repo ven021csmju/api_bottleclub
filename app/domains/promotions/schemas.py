@@ -8,8 +8,8 @@ class PromotionCreate(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
     promotion_type: str = Field(..., max_length=50)
-    discount_value: Optional[float] = Field(None, ge=0, decimal_places=2)
-    minimum_purchase: float = Field(0, ge=0, decimal_places=2)
+    discount_value: Optional[float] = Field(None, ge=0)
+    minimum_purchase: float = Field(0, ge=0)
     max_uses: Optional[int] = Field(None, gt=0)
     branch_ids: Optional[list[int]] = None
     start_date: datetime
@@ -21,8 +21,8 @@ class PromotionUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None
     promotion_type: Optional[str] = Field(None, max_length=50)
-    discount_value: Optional[float] = Field(None, ge=0, decimal_places=2)
-    minimum_purchase: Optional[float] = Field(None, ge=0, decimal_places=2)
+    discount_value: Optional[float] = Field(None, ge=0)
+    minimum_purchase: Optional[float] = Field(None, ge=0)
     max_uses: Optional[int] = Field(None, gt=0)
     branch_ids: Optional[list[int]] = None
     start_date: Optional[datetime] = None

@@ -1,7 +1,7 @@
-from sqlalchemy import or_
-from sqlalchemy.orm import Session, joinedload
+﻿from sqlalchemy.orm import Session
 
-from app.models import Permission, Role, RolePermission, UserRole
+from database.models import Permission, Role
+from database.repositories.roles import RoleRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 
@@ -11,12 +11,7 @@ from .schemas import PermissionResponse, RoleCreate, RoleListResponse, RoleRespo
 class RoleService:
     @staticmethod
     def list_roles(db: Session, org_id: int, page: int = 1, per_page: int = 20) -> RoleListResponse:
-        query = (
-            db.query(Role)
-            .filter(Role.organization_id == org_id)
-            .options(joinedload(Role.role_permissions).joinedload(RolePermission.permission))
-            .order_by(Role.created_at.desc())
-        )
+        query = RoleRepository.list_query(db, org_id)
 
         items, total, current_page, _ = paginate(db, query, page, per_page)
         return RoleListResponse(
@@ -28,32 +23,22 @@ class RoleService:
 
     @staticmethod
     def get_role(db: Session, org_id: int, role_id: int) -> Role:
-        role = (
-            db.query(Role)
-            .options(joinedload(Role.role_permissions).joinedload(RolePermission.permission))
-            .filter(Role.id == role_id, Role.organization_id == org_id)
-            .first()
-        )
+        role = RoleRepository.get_org_role(db, org_id, role_id)
         if not role:
             raise NotFoundException(detail="Role not found")
         return role
 
     @staticmethod
     def create_role(db: Session, org_id: int, data: RoleCreate) -> Role:
-        existing = (
-            db.query(Role)
-            .filter(Role.organization_id == org_id, Role.name == data.name)
-            .first()
-        )
+        existing = RoleRepository.find_by_name(db, org_id, data.name)
         if existing:
             raise ConflictException(detail="Role with this name already exists")
 
         role = Role(organization_id=org_id, name=data.name, description=data.description)
-        db.add(role)
-        db.flush()
+        RoleRepository.add_role(db, role)
 
         for perm_id in data.permission_ids:
-            db.add(RolePermission(role_id=role.id, permission_id=perm_id))
+            RoleRepository.add_role_permission(db, role.id, perm_id)
 
         db.commit()
         db.refresh(role)
@@ -67,15 +52,7 @@ class RoleService:
             raise BadRequestException(detail="Cannot rename a system role")
 
         if data.name is not None and data.name != role.name:
-            conflict = (
-                db.query(Role)
-                .filter(
-                    Role.organization_id == org_id,
-                    Role.id != role_id,
-                    Role.name == data.name,
-                )
-                .first()
-            )
+            conflict = RoleRepository.find_name_conflict(db, org_id, role_id, data.name)
             if conflict:
                 raise ConflictException(detail="Role with this name already exists")
 
@@ -86,9 +63,7 @@ class RoleService:
             setattr(role, field, value)
 
         if permission_ids is not None:
-            db.query(RolePermission).filter(RolePermission.role_id == role_id).delete()
-            for perm_id in permission_ids:
-                db.add(RolePermission(role_id=role_id, permission_id=perm_id))
+            RoleRepository.replace_role_permissions(db, role_id, permission_ids)
 
         db.commit()
         db.refresh(role)
@@ -101,15 +76,15 @@ class RoleService:
         if role.is_system:
             raise BadRequestException(detail="Cannot delete a system role")
 
-        user_count = db.query(UserRole).filter(UserRole.role_id == role_id).count()
+        user_count = RoleRepository.count_user_assignments(db, role_id)
         if user_count > 0:
             raise BadRequestException(
                 detail=f"Cannot delete role: {user_count} user(s) assigned"
             )
 
-        db.delete(role)
+        RoleRepository.delete_role(db, role)
         db.commit()
 
     @staticmethod
     def list_permissions(db: Session) -> list[Permission]:
-        return db.query(Permission).order_by(Permission.module, Permission.code).all()
+        return RoleRepository.list_all_permissions(db)

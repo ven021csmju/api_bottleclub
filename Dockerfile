@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt .
+COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-COPY . .
+COPY api/app ./app
+COPY api/scripts ./scripts
+COPY database ./database
+COPY alembic.ini ./alembic.ini
+COPY .env ./.env
 
 RUN chown -R appuser:appuser /app
 USER appuser

@@ -1,6 +1,6 @@
-from fastapi.testclient import TestClient
+﻿from fastapi.testclient import TestClient
 
-from app.models import Inventory, Order, Product
+from database.models import Inventory, Order, Product
 
 
 class TestCreateOrder:
