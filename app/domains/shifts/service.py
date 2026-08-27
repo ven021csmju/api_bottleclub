@@ -1,10 +1,10 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from database.models import Shift, ShiftCashMovement
-from database.repositories.shifts import ShiftRepository
+from app.db.models import Shift, ShiftCashMovement
+from app.db.repositories.shifts import ShiftRepository
 from app.shared.exceptions import BadRequestException, NotFoundException
 
 

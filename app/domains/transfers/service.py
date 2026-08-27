@@ -1,9 +1,9 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import Inventory, StockMovement, StockTransfer, StockTransferItem
-from database.repositories.transfers import TransferRepository
+from app.db.models import Inventory, StockMovement, StockTransfer, StockTransferItem
+from app.db.repositories.transfers import TransferRepository
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,

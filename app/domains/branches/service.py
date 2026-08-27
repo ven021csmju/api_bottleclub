@@ -1,7 +1,7 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
-from database.models import Branch
-from database.repositories.branches import BranchRepository
+from app.db.models import Branch
+from app.db.repositories.branches import BranchRepository
 from app.shared.exceptions import ConflictException, NotFoundException
 from app.shared.pagination import paginate
 

@@ -1,11 +1,11 @@
-﻿import logging
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from app.db.session import get_db
 from app.middleware.auth import get_current_user
-from database.models import User
+from app.db.models import User
 
 from .schemas import ErrorResponse, VerificationResponse
 from .service import SlipVerifyService

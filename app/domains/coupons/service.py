@@ -1,9 +1,9 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import Coupon
-from database.repositories.coupons import CouponRepository
+from app.db.models import Coupon
+from app.db.repositories.coupons import CouponRepository
 from app.shared.exceptions import (
     ConflictException,
     NotFoundException,

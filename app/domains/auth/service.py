@@ -1,10 +1,10 @@
-﻿from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from database.models import User
-from database.repositories.auth import AuthRepository
+from app.db.models import User
+from app.db.repositories.auth import AuthRepository
 from app.shared.exceptions import (
     BadRequestException,
     UnauthorizedException,

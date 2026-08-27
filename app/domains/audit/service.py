@@ -1,9 +1,9 @@
-﻿from datetime import datetime
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.domains.audit.schemas import AuditLogResponse
-from database.repositories.audit import AuditRepository
+from app.db.repositories.audit import AuditRepository
 from app.shared.exceptions import NotFoundException
 
 

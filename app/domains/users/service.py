@@ -1,8 +1,8 @@
-﻿from sqlalchemy import func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from database.models import User, UserRole
-from database.repositories.users import UserRepository
+from app.db.models import User, UserRole
+from app.db.repositories.users import UserRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import hash_password

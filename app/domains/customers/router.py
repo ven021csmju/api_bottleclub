@@ -1,7 +1,7 @@
-﻿from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from app.db.session import get_db
 from app.domains.customers.schemas import (
     CustomerCreate,
     CustomerListResponse,
@@ -10,7 +10,7 @@ from app.domains.customers.schemas import (
 )
 from app.domains.customers.service import CustomerService
 from app.middleware.auth import get_current_user, require_permission
-from database.models import User
+from app.db.models import User
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()

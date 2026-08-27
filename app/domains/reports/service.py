@@ -1,8 +1,8 @@
-﻿from datetime import date
+from datetime import date
 
 from sqlalchemy.orm import Session
 
-from database.repositories.reports import ReportRepository
+from app.db.repositories.reports import ReportRepository
 
 
 class ReportService:

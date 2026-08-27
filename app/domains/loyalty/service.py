@@ -1,9 +1,9 @@
-﻿from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import Customer, LoyaltyTransaction
-from database.repositories.loyalty import LoyaltyRepository
+from app.db.models import Customer, LoyaltyTransaction
+from app.db.repositories.loyalty import LoyaltyRepository
 from app.shared.exceptions import BadRequestException, NotFoundException
 from app.shared.pagination import paginate
 

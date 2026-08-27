@@ -1,10 +1,10 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from database.models import AuditLog
-from database.repositories.audit import AuditRepository
+from app.db.models import AuditLog
+from app.db.repositories.audit import AuditRepository
 
 
 @dataclass

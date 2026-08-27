@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -12,14 +12,14 @@ from app.domains.inventory.schemas import (
     StockMovementListResponse,
     StockMovementResponse,
 )
-from database.repositories.inventory import InventoryRepository
+from app.db.repositories.inventory import InventoryRepository
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,
     NotFoundException,
 )
 from app.shared.enums import StockMovementType
-from database.models import StockMovement, Inventory
+from app.db.models import StockMovement, Inventory
 
 
 class InventoryService:

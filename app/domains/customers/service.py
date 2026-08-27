@@ -1,9 +1,9 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from database.models import Customer
-from database.repositories.customers import CustomerRepository
+from app.db.models import Customer
+from app.db.repositories.customers import CustomerRepository
 from app.shared.exceptions import ConflictException, NotFoundException
 from app.shared.pagination import paginate
 

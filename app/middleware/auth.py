@@ -1,14 +1,14 @@
-﻿from typing import Callable
+from typing import Callable
 
 from fastapi import Depends, Header, Request
 from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
-from database.database import get_db
+from app.db.session import get_db
 from app.middleware.branch_scope import validate_branch_access
-from database.models import User
-from database.repositories.users import UserRepository
+from app.db.models import User
+from app.db.repositories.users import UserRepository
 from app.shared.audit import AuditContext
 from app.shared.exceptions import ForbiddenException, UnauthorizedException
 from app.shared.security import decode_token

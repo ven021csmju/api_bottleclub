@@ -1,4 +1,4 @@
-﻿import datetime
+import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -11,7 +11,7 @@ from app.domains.purchases.schemas import (
     PurchaseReceivingCreate,
     PurchaseReceivingResponse,
 )
-from database.models import (
+from app.db.models import (
     InventoryLot,
     PurchaseOrder,
     PurchaseOrderItem,
@@ -20,7 +20,7 @@ from database.models import (
     Product,
     StockMovement,
 )
-from database.repositories.purchases import PurchaseRepository
+from app.db.repositories.purchases import PurchaseRepository
 from app.shared.enums import POStatus, ReceivingStatus, StockMovementType
 from app.shared.exceptions import (
     BadRequestException,

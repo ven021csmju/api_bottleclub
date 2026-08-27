@@ -1,7 +1,7 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
-from database.models import SystemSetting
-from database.repositories.settings import SettingsRepository
+from app.db.models import SystemSetting
+from app.db.repositories.settings import SettingsRepository
 from app.shared.exceptions import NotFoundException
 
 

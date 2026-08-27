@@ -1,7 +1,7 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
-from database.models import Permission, Role
-from database.repositories.roles import RoleRepository
+from app.db.models import Permission, Role
+from app.db.repositories.roles import RoleRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 

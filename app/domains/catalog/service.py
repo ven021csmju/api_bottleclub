@@ -1,4 +1,4 @@
-﻿import datetime
+import datetime
 
 from sqlalchemy.orm import Session
 
@@ -19,13 +19,13 @@ from app.domains.catalog.schemas import (
     SupplierResponse,
     SupplierUpdate,
 )
-from database.models import (
+from app.db.models import (
     Category,
     Product,
     Supplier,
     SupplierProduct,
 )
-from database.repositories.catalog import CatalogRepository
+from app.db.repositories.catalog import CatalogRepository
 from app.shared.exceptions import (
     BadRequestException,
     ConflictException,

@@ -1,10 +1,10 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from database.models import Order, OrderItem, StockMovement
-from database.repositories.orders import OrderRepository
+from app.db.models import Order, OrderItem, StockMovement
+from app.db.repositories.orders import OrderRepository
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,
@@ -180,7 +180,7 @@ class OrderService:
                         quantity_change=item.quantity,
                         reference_type="order",
                         reference_id=order.id,
-                        notes="Order cancelled â€“ stock restored",
+                        notes="Order cancelled – stock restored",
                         user_id=user_id,
                     ),
                 )

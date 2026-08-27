@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database.models import PaymentVerification
+from app.db.models import PaymentVerification
 
 
 class DuplicateCheckService:
@@ -26,7 +26,7 @@ class DuplicateCheckService:
 
     @staticmethod
     def get_failed_attempts_count(db: Session, order_id: int) -> int:
-        from database.models import VerificationAttempt
+        from app.db.models import VerificationAttempt
         result = db.execute(
             select(VerificationAttempt).where(
                 VerificationAttempt.order_id == order_id,

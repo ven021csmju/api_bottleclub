@@ -1,9 +1,9 @@
-﻿from typing import Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from database.database import get_db
+from app.db.session import get_db
 from app.domains.settings.schemas import (
     SettingListResponse,
     SettingResponse,
@@ -11,7 +11,7 @@ from app.domains.settings.schemas import (
 )
 from app.domains.settings.service import SettingService
 from app.middleware.auth import require_permission
-from database.models import User
+from app.db.models import User
 
 router = APIRouter()
 

@@ -1,7 +1,7 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
-from database.models import Promotion
-from database.repositories.promotions import PromotionRepository
+from app.db.models import Promotion
+from app.db.repositories.promotions import PromotionRepository
 from app.shared.exceptions import NotFoundException
 from app.shared.pagination import paginate
 

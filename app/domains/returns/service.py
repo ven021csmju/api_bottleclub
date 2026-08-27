@@ -1,7 +1,7 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
-from database.models import Inventory, Refund, Return, ReturnItem, StockMovement
-from database.repositories.returns import ReturnRepository
+from app.db.models import Inventory, Refund, Return, ReturnItem, StockMovement
+from app.db.repositories.returns import ReturnRepository
 from app.shared.exceptions import (
     BadRequestException,
     InvalidOrderStateException,
