@@ -1,17 +1,9 @@
-﻿import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
+﻿
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from database.database import SessionLocal
-from app.middleware.auth import get_current_user
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
@@ -32,12 +24,16 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(CorrelationMiddleware)
 
     # --- Exception handlers ---
     @app.exception_handler(AppException)
-    async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    async def app_exception_handler(
+        request: Request,
+        exc: AppException,
+    ) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -77,30 +73,140 @@ def create_app() -> FastAPI:
     from app.domains.audit.router import router as audit_router
     from app.domains.slip_verify.router import router as slip_verify_router
 
-    app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
-    app.include_router(users_router, prefix="/api/v1/users", tags=["Users"])
-    app.include_router(branches_router, prefix="/api/v1/branches", tags=["Branches"])
-    app.include_router(roles_router, prefix="/api/v1/roles", tags=["Roles"])
-    app.include_router(catalog_router, prefix="/api/v1/catalog", tags=["Catalog"])
-    app.include_router(inventory_router, prefix="/api/v1/inventory", tags=["Inventory"])
-    app.include_router(orders_router, prefix="/api/v1/orders", tags=["Orders"])
-    app.include_router(payments_router, prefix="/api/v1/payments", tags=["Payments"])
-    app.include_router(purchases_router, prefix="/api/v1/purchases", tags=["Purchases"])
-    app.include_router(suppliers_router, prefix="/api/v1/suppliers", tags=["Suppliers"])
-    app.include_router(transfers_router, prefix="/api/v1/transfers", tags=["Transfers"])
-    app.include_router(returns_router, prefix="/api/v1/returns", tags=["Returns"])
-    app.include_router(refunds_router, prefix="/api/v1/refunds", tags=["Refunds"])
-    app.include_router(promotions_router, prefix="/api/v1/promotions", tags=["Promotions"])
-    app.include_router(coupons_router, prefix="/api/v1/coupons", tags=["Coupons"])
-    app.include_router(customers_router, prefix="/api/v1/customers", tags=["Customers"])
-    app.include_router(loyalty_router, prefix="/api/v1/loyalty", tags=["Loyalty"])
-    app.include_router(shifts_router, prefix="/api/v1/shifts", tags=["Shifts"])
-    app.include_router(settings_router, prefix="/api/v1/settings", tags=["Settings"])
-    app.include_router(reports_router, prefix="/api/v1/reports", tags=["Reports"])
-    app.include_router(audit_router, prefix="/api/v1/audit", tags=["Audit"])
-    app.include_router(slip_verify_router, prefix="/api/v1/slip-verify", tags=["Slip Verification"])
+    app.include_router(
+        auth_router,
+        prefix="/api/v1/auth",
+        tags=["Auth"],
+    )
+
+    app.include_router(
+        users_router,
+        prefix="/api/v1/users",
+        tags=["Users"],
+    )
+
+    app.include_router(
+        branches_router,
+        prefix="/api/v1/branches",
+        tags=["Branches"],
+    )
+
+    app.include_router(
+        roles_router,
+        prefix="/api/v1/roles",
+        tags=["Roles"],
+    )
+
+    app.include_router(
+        catalog_router,
+        prefix="/api/v1/catalog",
+        tags=["Catalog"],
+    )
+
+    app.include_router(
+        inventory_router,
+        prefix="/api/v1/inventory",
+        tags=["Inventory"],
+    )
+
+    app.include_router(
+        orders_router,
+        prefix="/api/v1/orders",
+        tags=["Orders"],
+    )
+
+    app.include_router(
+        payments_router,
+        prefix="/api/v1/payments",
+        tags=["Payments"],
+    )
+
+    app.include_router(
+        purchases_router,
+        prefix="/api/v1/purchases",
+        tags=["Purchases"],
+    )
+
+    app.include_router(
+        suppliers_router,
+        prefix="/api/v1/suppliers",
+        tags=["Suppliers"],
+    )
+
+    app.include_router(
+        transfers_router,
+        prefix="/api/v1/transfers",
+        tags=["Transfers"],
+    )
+
+    app.include_router(
+        returns_router,
+        prefix="/api/v1/returns",
+        tags=["Returns"],
+    )
+
+    app.include_router(
+        refunds_router,
+        prefix="/api/v1/refunds",
+        tags=["Refunds"],
+    )
+
+    app.include_router(
+        promotions_router,
+        prefix="/api/v1/promotions",
+        tags=["Promotions"],
+    )
+
+    app.include_router(
+        coupons_router,
+        prefix="/api/v1/coupons",
+        tags=["Coupons"],
+    )
+
+    app.include_router(
+        customers_router,
+        prefix="/api/v1/customers",
+        tags=["Customers"],
+    )
+
+    app.include_router(
+        loyalty_router,
+        prefix="/api/v1/loyalty",
+        tags=["Loyalty"],
+    )
+
+    app.include_router(
+        shifts_router,
+        prefix="/api/v1/shifts",
+        tags=["Shifts"],
+    )
+
+    app.include_router(
+        settings_router,
+        prefix="/api/v1/settings",
+        tags=["Settings"],
+    )
+
+    app.include_router(
+        reports_router,
+        prefix="/api/v1/reports",
+        tags=["Reports"],
+    )
+
+    app.include_router(
+        audit_router,
+        prefix="/api/v1/audit",
+        tags=["Audit"],
+    )
+
+    app.include_router(
+        slip_verify_router,
+        prefix="/api/v1/slip-verify",
+        tags=["Slip Verification"],
+    )
 
     return app
 
 
 app = create_app()
+
