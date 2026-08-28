@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,14 +16,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/upload", response_model=None)
-async def upload_slip(
+async def _process_slip(
     request: Request,
-    file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
-    order_id: int = Form(..., description="Order ID to verify against"),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
+    file: UploadFile,
+    order_id: int,
+    user: User,
+    db: Session,
+) -> JSONResponse:
     file_bytes = await file.read()
 
     result = SlipVerifyService.verify_slip(
@@ -46,8 +46,29 @@ async def upload_slip(
     elif result.get("status") in ("order_already_paid",):
         status_code = 400
 
-    from fastapi.responses import JSONResponse
     return JSONResponse(status_code=status_code, content=result)
+
+
+@router.post("/upload", response_model=None)
+async def upload_slip(
+    request: Request,
+    file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
+    order_id: int = Form(..., description="Order ID to verify against"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await _process_slip(request, file, order_id, user, db)
+
+
+@router.post("/checkslip", response_model=None)
+async def check_slip(
+    request: Request,
+    file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
+    order_id: int = Form(..., description="Order ID to verify against"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await _process_slip(request, file, order_id, user, db)
 
 
 @router.get("/{verification_id}")
