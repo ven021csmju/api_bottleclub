@@ -27,19 +27,19 @@ class TestGenerateOrderNumber:
     def test_basic_format(self, mock_seq):
         session = MagicMock()
         result = generate_order_number(session, "MBR")
-        assert result == "MBR-20260817-0001"
+        assert result == f"MBR-{_format_date_suffix(date.today())}-0001"
 
     @patch("app.shared.ordering._next_sequence", return_value=123)
     def test_padded_sequence(self, mock_seq):
         session = MagicMock()
         result = generate_order_number(session, "NYC")
-        assert result == "NYC-20260817-0123"
+        assert result == f"NYC-{_format_date_suffix(date.today())}-0123"
 
     @patch("app.shared.ordering._next_sequence", return_value=9999)
     def test_max_sequence(self, mock_seq):
         session = MagicMock()
         result = generate_order_number(session, "LAX")
-        assert result == "LAX-20260817-9999"
+        assert result == f"LAX-{_format_date_suffix(date.today())}-9999"
 
 
 class TestGeneratePONumber:

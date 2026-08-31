@@ -143,6 +143,17 @@ class PurchaseRepository:
         )
 
     @staticmethod
+    def get_inventory_on_hand(
+        db: Session, branch_id: int, product_id: int
+    ) -> int | None:
+        return db.scalar(
+            select(Inventory.on_hand).where(
+                Inventory.branch_id == branch_id,
+                Inventory.product_id == product_id,
+            )
+        )
+
+    @staticmethod
     def upsert_inventory(
         db: Session, branch_id: int, product_id: int, quantity: int
     ) -> None:

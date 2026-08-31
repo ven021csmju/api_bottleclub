@@ -61,6 +61,17 @@ class OrderRepository:
         db.add(item)
 
     @staticmethod
+    def get_inventory_on_hand(
+        db: Session, branch_id: int, product_id: int
+    ) -> int | None:
+        return db.scalar(
+            select(Inventory.on_hand).where(
+                Inventory.branch_id == branch_id,
+                Inventory.product_id == product_id,
+            )
+        )
+
+    @staticmethod
     def deduct_stock(
         db: Session, branch_id: int, product_id: int, quantity: int
     ) -> int:
@@ -143,4 +154,12 @@ class OrderRepository:
             select(Order)
             .options(joinedload(Order.items))
             .where(Order.id == order_id, Order.organization_id == org_id)
+        ).unique().scalar_one_or_none()
+
+    @staticmethod
+    def get_org_order_by_number(db: Session, org_id: int, order_number: str) -> Order | None:
+        return db.execute(
+            select(Order)
+            .options(joinedload(Order.items))
+            .where(Order.order_number == order_number, Order.organization_id == org_id)
         ).unique().scalar_one_or_none()

@@ -77,6 +77,7 @@ class ReturnService:
                 inv = ReturnRepository.get_inventory(
                     db, branch_id, item_data["product_id"]
                 )
+                on_hand_before = inv.on_hand if inv else 0
 
                 if inv:
                     inv.on_hand += qty
@@ -98,6 +99,8 @@ class ReturnService:
                         product_id=item_data["product_id"],
                         movement_type="return",
                         quantity_change=qty,
+                        quantity_before=on_hand_before,
+                        quantity_after=on_hand_before + qty,
                         reference_type="return",
                         reference_id=ret.id,
                         user_id=user_id,

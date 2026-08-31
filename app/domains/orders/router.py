@@ -9,10 +9,12 @@ from app.middleware.auth import get_current_branch, require_permission
 from app.db.models import User
 
 from .schemas import (
+    OrderCancel,
     OrderCreate,
     OrderListResponse,
     OrderResponse,
     OrderStatusUpdate,
+    ReceiptResponse,
 )
 from .service import OrderService
 
@@ -69,30 +71,60 @@ def list_orders(
     )
 
 
-@router.get("/{order_id}", response_model=OrderResponse)
+@router.get("/{reference}", response_model=OrderResponse)
 def get_order(
-    order_id: int,
+    reference: str,
     user: User = Depends(require_permission("orders.read")),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
-    order = OrderService.get_order(
+    """Get an order by its integer id or its alphanumeric order number."""
+    order = OrderService.get_order_by_reference(
         db=db,
         org_id=user.organization_id,
-        order_id=order_id,
+        reference=reference,
     )
     return OrderResponse.model_validate(order)
 
 
+@router.get("/{reference}/receipt", response_model=ReceiptResponse)
+def get_order_receipt(
+    reference: str,
+    user: User = Depends(require_permission("orders.read")),
+    db: Session = Depends(get_db),
+) -> ReceiptResponse:
+    order = OrderService.get_order_by_reference(
+        db=db,
+        org_id=user.organization_id,
+        reference=reference,
+    )
+    receipt = OrderService.get_receipt(db=db, org_id=user.organization_id, order_id=order.id)
+    return ReceiptResponse(**receipt)
+
+
 @router.put("/{order_id}/status", response_model=OrderResponse)
-def cancel_order(
+def update_order_status(
     order_id: int,
     body: OrderStatusUpdate,
+    user: User = Depends(require_permission("orders.update")),
+    db: Session = Depends(get_db),
+) -> OrderResponse:
+    order = OrderService.update_status(
+        db=db,
+        org_id=user.organization_id,
+        order_id=order_id,
+        target_status=body.status,
+        user_id=user.id,
+    )
+    return OrderResponse.model_validate(order)
+
+
+@router.post("/{order_id}/cancel", response_model=OrderResponse)
+def cancel_order(
+    order_id: int,
+    body: OrderCancel,
     user: User = Depends(require_permission("orders.cancel")),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
-    if body.status != "cancelled":
-        from app.shared.exceptions import BadRequestException
-        raise BadRequestException(detail="Only cancellation is supported via this endpoint")
     order = OrderService.cancel_order(
         db=db,
         org_id=user.organization_id,

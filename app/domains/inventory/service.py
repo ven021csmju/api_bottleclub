@@ -113,11 +113,14 @@ class InventoryService:
             )
 
         # Create stock movement
+        on_hand_after = inv.on_hand if inv else adjustment
         movement = StockMovement(
             branch_id=branch_id,
             product_id=product_id,
             movement_type=StockMovementType.ADJUSTMENT.value,
             quantity_change=adjustment,
+            quantity_before=on_hand_after - adjustment,
+            quantity_after=on_hand_after,
             reference_type="adjustment",
             notes=reason,
             user_id=user_id,

@@ -71,6 +71,10 @@ class OrderStatusUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class OrderCancel(BaseModel):
+    reason: Optional[str] = None
+
+
 class OrderSummary(BaseModel):
     branch_id: int
     date_from: datetime
@@ -79,3 +83,51 @@ class OrderSummary(BaseModel):
     total_revenue: Decimal
     total_discounts: Decimal
     total_tax: Decimal
+
+
+class ReceiptItem(BaseModel):
+    product_id: int
+    product_name: str
+    product_sku: str
+    quantity: int
+    unit_price: Decimal
+    discount_amount: Decimal
+    tax_amount: Decimal
+    line_total: Decimal
+
+
+class ReceiptPayment(BaseModel):
+    id: int
+    payment_method: str
+    amount: Decimal
+    status: str
+    external_reference: Optional[str] = None
+    provider: Optional[str] = None
+    created_at: datetime
+
+
+class ReceiptOrder(BaseModel):
+    id: int
+    order_number: str
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    branch_id: int
+    branch_name: Optional[str] = None
+    register_id: Optional[int] = None
+    shift_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    subtotal: Decimal
+    discount_amount: Decimal
+    tax_amount: Decimal
+    grand_total: Decimal
+    amount_paid: Decimal
+    change_amount: Decimal
+    loyalty_points_earned: int
+    loyalty_points_redeemed: int
+    items: list[ReceiptItem]
+
+
+class ReceiptResponse(BaseModel):
+    order: ReceiptOrder
+    payments: list[ReceiptPayment]

@@ -11,6 +11,7 @@ from app.db.models import User
 from app.db.repositories.users import UserRepository
 from app.shared.audit import AuditContext
 from app.shared.exceptions import ForbiddenException, UnauthorizedException
+from app.shared.permissions import normalize_permission
 from app.shared.security import decode_token
 
 
@@ -68,7 +69,8 @@ def require_permission(permission_code: str) -> Callable:
         payload = getattr(request.state, "token_payload", {})
         permissions: list[str] = payload.get("permissions", [])
 
-        if permission_code not in permissions:
+        required = normalize_permission(permission_code)
+        if required not in permissions and permission_code not in permissions:
             raise ForbiddenException(
                 detail=f"Missing required permission: {permission_code}"
             )

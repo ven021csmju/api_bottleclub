@@ -31,6 +31,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("users.update", "users", "Update users"),
     ("users.delete", "users", "Delete users"),
     ("users.assign_roles", "users", "Assign roles to users"),
+    ("roles.read", "roles", "View roles"),
     ("roles.create", "roles", "Create roles"),
     ("roles.update", "roles", "Update roles"),
     ("roles.delete", "roles", "Delete roles"),
@@ -40,6 +41,7 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("orders.read", "orders", "View orders"),
     ("orders.cancel", "orders", "Cancel orders"),
     ("orders.complete", "orders", "Complete orders"),
+    ("orders.update", "orders", "Update order workflow status"),
     ("payments.create", "payments", "Process payments"),
     ("payments.read", "payments", "View payments"),
     ("payments.refund", "payments", "Process refunds"),
@@ -71,12 +73,14 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("promotions.delete", "promotions", "Delete promotions"),
     ("coupons.read", "coupons", "View coupons"),
     ("coupons.create", "coupons", "Create coupons"),
+    ("coupons.update", "coupons", "Update coupons"),
     ("coupons.delete", "coupons", "Delete coupons"),
     ("reports.sales", "reports", "View sales reports"),
     ("reports.read", "reports", "View general reports"),
     ("audit.read", "audit", "View audit logs"),
     ("settings.read", "settings", "View system settings"),
     ("settings.update", "settings", "Update system settings"),
+    ("branches.read", "branches", "View branches"),
     ("branches.create", "branches", "Create branches"),
     ("branches.update", "branches", "Update branches"),
     ("branches.delete", "branches", "Delete branches"),
@@ -91,9 +95,9 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
     "Superadmin": [p[0] for p in PERMISSIONS],  # everything
     "Manager": [
         "users.read", "users.create", "users.update", "users.assign_roles",
-        "roles.create", "roles.update",
+        "roles.read", "roles.create", "roles.update",
         "catalog.read", "catalog.create",
-        "orders.create", "orders.read", "orders.cancel", "orders.complete",
+        "orders.create", "orders.read", "orders.cancel", "orders.complete", "orders.update",
         "payments.create", "payments.read", "payments.refund",
         "refunds.read",
         "returns.create", "returns.read", "returns.process",
@@ -103,15 +107,15 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "purchases.read", "purchases.create", "purchases.approve", "purchases.receive",
         "transfers.create", "transfers.read", "transfers.approve", "transfers.ship", "transfers.receive",
         "promotions.read", "promotions.create", "promotions.update", "promotions.delete",
-        "coupons.read", "coupons.create", "coupons.delete",
+        "coupons.read", "coupons.create", "coupons.update", "coupons.delete",
         "reports.sales", "reports.read",
         "audit.read",
         "settings.read", "settings.update",
-        "branches.create", "branches.update",
+        "branches.read", "branches.create", "branches.update",
         "shifts.open", "shifts.close", "shifts.cash_movement", "shifts.read",
     ],
     "Cashier": [
-        "orders.create", "orders.read", "orders.complete",
+        "orders.create", "orders.read", "orders.update", "orders.complete",
         "payments.create", "payments.read",
         "customers.read", "customers.create",
         "loyalty.earn", "loyalty.redeem", "loyalty.read",
@@ -122,7 +126,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "refunds.read",
     ],
     "Staff": [
-        "orders.read",
+        "orders.read", "orders.update",
         "payments.read",
         "customers.read",
         "inventory.read",
@@ -241,6 +245,40 @@ def seed(conn: psycopg.Connection) -> None:
         cur.execute("SELECT id, name FROM roles WHERE organization_id = %s", (org_id,))
         role_ids = {name: rid for rid, name in cur.fetchall()}
         print(f"  [=] Roles        already exist")
+
+    # --- Ensure missing permission codes + role-permission assignments (idempotent) ---
+    cur.execute("SELECT id, code FROM permissions")
+    known_perms = {code: pid for pid, code in cur.fetchall()}
+    added = 0
+    for code, module, desc in PERMISSIONS:
+        if code in known_perms:
+            continue
+        cur.execute(
+            "INSERT INTO permissions (code, module, description) VALUES (%s, %s, %s) RETURNING id",
+            (code, module, desc),
+        )
+        known_perms[code] = cur.fetchone()[0]
+        added += 1
+    if added:
+        print(f"  [+] Permissions  {added} missing codes inserted")
+        for role_name, perm_codes in ROLE_PERMISSIONS.items():
+            for code in perm_codes:
+                perm_id = known_perms.get(code)
+                if perm_id is None:
+                    continue
+                cur.execute(
+                    """SELECT 1 FROM role_permissions rp
+                       JOIN roles r ON r.id = rp.role_id
+                       WHERE r.organization_id = %s AND r.name = %s AND rp.permission_id = %s""",
+                    (org_id, role_name, perm_id),
+                )
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """INSERT INTO role_permissions (role_id, permission_id)
+                           SELECT id, %s FROM roles
+                           WHERE organization_id = %s AND name = %s""",
+                        (perm_id, org_id, role_name),
+                    )
 
     # --- Admin User ---
     admin_user_id: int | None = None

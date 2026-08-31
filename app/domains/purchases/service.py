@@ -297,6 +297,12 @@ class PurchaseService:
             receiving_item.inventory_lot_id = lot.id
 
             # Atomic inventory balance update
+            on_hand_before = (
+                PurchaseRepository.get_inventory_on_hand(
+                    db, branch_id, po_item.product_id
+                )
+                or 0
+            )
             PurchaseRepository.upsert_inventory(
                 db, branch_id, po_item.product_id, item_data.quantity_received
             )
@@ -307,6 +313,8 @@ class PurchaseService:
                 product_id=po_item.product_id,
                 movement_type=StockMovementType.PURCHASE.value,
                 quantity_change=item_data.quantity_received,
+                quantity_before=on_hand_before,
+                quantity_after=on_hand_before + item_data.quantity_received,
                 reference_type="purchase_receiving",
                 reference_id=receiving.id,
                 lot_id=lot.id,

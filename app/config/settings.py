@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     OCR_SERVICE_URL: str = "http://127.0.0.1:9000"
     OCR_SERVICE_TIMEOUT: int = 60
 
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN: str = "30/minute"
+    RATE_LIMIT_REFRESH: str = "60/minute"
+
     model_config = SettingsConfigDict(
         env_file=str(API_DIR / ".env"),
         env_file_encoding="utf-8",

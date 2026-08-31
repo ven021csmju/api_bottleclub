@@ -145,11 +145,15 @@ class TransferService:
             product_id = transfer_item.product_id
             lot_id = ship_item_data.get("lot_id")
 
+            source_inv = TransferRepository.get_inventory(
+                db, transfer.source_branch_id, product_id
+            )
+            on_hand_before = source_inv.on_hand if source_inv else 0
+
             rowcount = TransferRepository.deduct_stock(
                 db, transfer.source_branch_id, product_id, qty_shipped
             )
             if rowcount == 0:
-                db.rollback()
                 raise InsufficientStockException(
                     detail=f"Insufficient stock for product id={product_id} at source branch"
                 )
@@ -161,6 +165,8 @@ class TransferService:
                     product_id=product_id,
                     movement_type="transfer_out",
                     quantity_change=-qty_shipped,
+                    quantity_before=on_hand_before,
+                    quantity_after=on_hand_before - qty_shipped,
                     reference_type="stock_transfer",
                     reference_id=transfer.id,
                     lot_id=lot_id,
@@ -213,10 +219,13 @@ class TransferService:
 
             product_id = transfer_item.product_id
 
+            on_hand_after_transfer_in = None
+
             if qty_received > 0:
                 dest_inv = TransferRepository.get_dest_inventory(
                     db, transfer.dest_branch_id, product_id
                 )
+                on_hand_before = dest_inv.on_hand if dest_inv else 0
 
                 if dest_inv:
                     dest_inv.on_hand += qty_received
@@ -231,6 +240,8 @@ class TransferService:
                         ),
                     )
 
+                on_hand_after_transfer_in = on_hand_before + qty_received
+
                 TransferRepository.add_stock_movement(
                     db,
                     StockMovement(
@@ -238,6 +249,8 @@ class TransferService:
                         product_id=product_id,
                         movement_type="transfer_in",
                         quantity_change=qty_received,
+                        quantity_before=on_hand_before,
+                        quantity_after=on_hand_after_transfer_in,
                         reference_type="stock_transfer",
                         reference_id=transfer.id,
                         user_id=user_id,
@@ -245,6 +258,9 @@ class TransferService:
                 )
 
             if qty_damaged > 0:
+                damaged_before = (
+                    on_hand_after_transfer_in if on_hand_after_transfer_in is not None else 0
+                )
                 TransferRepository.add_stock_movement(
                     db,
                     StockMovement(
@@ -252,6 +268,8 @@ class TransferService:
                         product_id=product_id,
                         movement_type="damage",
                         quantity_change=-qty_damaged,
+                        quantity_before=damaged_before,
+                        quantity_after=damaged_before - qty_damaged,
                         reference_type="stock_transfer",
                         reference_id=transfer.id,
                         user_id=user_id,

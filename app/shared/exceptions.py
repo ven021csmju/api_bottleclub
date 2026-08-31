@@ -20,27 +20,27 @@ class AppException(Exception):
 
 class NotFoundException(AppException):
     def __init__(self, detail: str = "Resource not found", code: str | None = None) -> None:
-        super().__init__(status_code=404, detail=detail, code=code)
+        super().__init__(status_code=404, detail=detail, code=code or "NOT_FOUND")
 
 
 class BadRequestException(AppException):
     def __init__(self, detail: str = "Bad request", code: str | None = None) -> None:
-        super().__init__(status_code=400, detail=detail, code=code)
+        super().__init__(status_code=400, detail=detail, code=code or "BAD_REQUEST")
 
 
 class ConflictException(AppException):
     def __init__(self, detail: str = "Conflict", code: str | None = None) -> None:
-        super().__init__(status_code=409, detail=detail, code=code)
+        super().__init__(status_code=409, detail=detail, code=code or "CONFLICT")
 
 
 class ForbiddenException(AppException):
     def __init__(self, detail: str = "Forbidden", code: str | None = None) -> None:
-        super().__init__(status_code=403, detail=detail, code=code)
+        super().__init__(status_code=403, detail=detail, code=code or "FORBIDDEN")
 
 
 class UnauthorizedException(AppException):
     def __init__(self, detail: str = "Unauthorized", code: str | None = None) -> None:
-        super().__init__(status_code=401, detail=detail, code=code)
+        super().__init__(status_code=401, detail=detail, code=code or "UNAUTHORIZED")
 
 
 class InsufficientStockException(AppException):
@@ -50,9 +50,9 @@ class InsufficientStockException(AppException):
 
 class InvalidOrderStateException(AppException):
     def __init__(self, detail: str = "Invalid order state transition", code: str | None = None) -> None:
-        super().__init__(status_code=400, detail=detail, code=code)
+        super().__init__(status_code=400, detail=detail, code=code or "INVALID_ORDER_STATE")
 
 
 class IdempotencyConflictException(AppException):
     def __init__(self, detail: str = "Idempotency key conflict", code: str | None = None) -> None:
-        super().__init__(status_code=409, detail=detail, code=code)
+        super().__init__(status_code=409, detail=detail, code=code or "IDEMPOTENCY_CONFLICT")

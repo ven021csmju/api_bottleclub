@@ -38,8 +38,10 @@ class TestCreateOrder:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "pending"
-        assert body["grand_total"] == "150.00"
+        assert body["data"]["status"] == "pending"
+        assert body["data"]["grand_total"] == "150.00"
+        assert body["meta"] is None
+        assert body["request_id"]
 
         session.refresh(inv)
         assert inv.on_hand == 97
@@ -116,18 +118,18 @@ class TestCancelOrder:
             },
         )
         assert create_resp.status_code == 200
-        order_id = create_resp.json()["id"]
+        order_id = create_resp.json()["data"]["id"]
 
         session.refresh(inv)
         assert inv.on_hand == 46
 
-        cancel_resp = client.put(
-            f"/api/v1/orders/{order_id}/status",
+        cancel_resp = client.post(
+            f"/api/v1/orders/{order_id}/cancel",
             headers=auth_headers,
-            json={"status": "cancelled"},
+            json={},
         )
         assert cancel_resp.status_code == 200
-        assert cancel_resp.json()["status"] == "cancelled"
+        assert cancel_resp.json()["data"]["status"] == "cancelled"
 
         session.refresh(inv)
         assert inv.on_hand == 50  # restored

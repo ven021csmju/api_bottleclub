@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -836,7 +837,7 @@ class Order(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'completed', 'cancelled')",
+            "status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')",
             name="ck_order_status",
         ),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
@@ -1482,7 +1483,7 @@ class PaymentVerification(Base):
 
     # Verification result
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
-    risk_score: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="'{}'::jsonb")
+    risk_score: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     risk_signals: Mapped[dict | None] = mapped_column(JSONB)
     failure_reason: Mapped[str | None] = mapped_column(Text)
 

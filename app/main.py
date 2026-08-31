@@ -1,12 +1,22 @@
 ﻿
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config.settings import settings
 from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.envelope import ResponseEnvelopeMiddleware
+from app.middleware.rate_limit import limiter
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "")
 
 
 def create_app() -> FastAPI:
@@ -15,8 +25,10 @@ def create_app() -> FastAPI:
         description="POS System API for The Bottle Club",
         version="1.0.0",
     )
+    app.state.limiter = limiter
 
     # --- Middleware (order matters: first added = outermost) ---
+    app.add_middleware(ResponseEnvelopeMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
@@ -24,11 +36,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
+    if settings.RATE_LIMIT_ENABLED:
+        app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(CorrelationMiddleware)
 
-    # --- Exception handlers ---
+    # --- Exception handlers (single source of truth for the error contract) ---
     @app.exception_handler(AppException)
     async def app_exception_handler(
         request: Request,
@@ -37,10 +50,60 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={
-                "error": {
-                    "code": exc.code or "ERROR",
-                    "message": exc.detail,
-                }
+                "detail": exc.detail,
+                "code": exc.code,
+                "request_id": _request_id(request),
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "; ".join(err.get("msg", "Invalid input") for err in exc.errors()),
+                "code": "VALIDATION_ERROR",
+                "request_id": _request_id(request),
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        request: Request,
+        exc: StarletteHTTPException,
+    ) -> JSONResponse:
+        status_code = exc.status_code
+        error_code = {
+            401: "UNAUTHORIZED",
+            403: "FORBIDDEN",
+            404: "NOT_FOUND",
+            405: "METHOD_NOT_ALLOWED",
+            409: "CONFLICT",
+            429: "TOO_MANY_REQUESTS",
+        }.get(status_code, str(exc.detail))
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "detail": str(exc.detail),
+                "code": error_code,
+                "request_id": _request_id(request),
+            },
+        )
+
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limit_exceeded_handler(
+        request: Request,
+        exc: RateLimitExceeded,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Rate limit exceeded",
+                "code": "RATE_LIMIT_EXCEEDED",
+                "request_id": _request_id(request),
             },
         )
 

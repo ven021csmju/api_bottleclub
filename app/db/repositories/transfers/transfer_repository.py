@@ -80,6 +80,17 @@ class TransferRepository:
         ).unique().scalar_one_or_none()
 
     @staticmethod
+    def get_inventory(
+        db: Session, branch_id: int, product_id: int
+    ) -> Inventory | None:
+        return db.execute(
+            select(Inventory).where(
+                Inventory.branch_id == branch_id,
+                Inventory.product_id == product_id,
+            )
+        ).scalar_one_or_none()
+
+    @staticmethod
     def deduct_stock(
         db: Session, branch_id: int, product_id: int, quantity: int
     ) -> int:

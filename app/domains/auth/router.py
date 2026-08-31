@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.db.session import get_db
 from app.middleware.auth import get_current_user
+from app.middleware.rate_limit import limiter
 from app.db.models import User
 
 from .schemas import LoginRequest, RefreshTokenRequest, TokenResponse, UserProfileResponse
@@ -12,9 +14,10 @@ router = APIRouter()
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login(
-    body: LoginRequest,
     request: Request,
+    body: LoginRequest,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
@@ -29,9 +32,10 @@ def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit(settings.RATE_LIMIT_REFRESH)
 def refresh(
-    body: RefreshTokenRequest,
     request: Request,
+    body: RefreshTokenRequest,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
@@ -42,15 +46,15 @@ def refresh(
     )
 
 
-@router.post("/logout")
+@router.post("/logout", status_code=204)
 def logout(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> Response:
     token_hash: str = getattr(request.state, "refresh_token_hash", "")
     AuthService.logout(db=db, user_id=user.id, token_hash=token_hash)
-    return {"detail": "Logged out"}
+    return Response(status_code=204)
 
 
 @router.get("/me", response_model=UserProfileResponse)
