@@ -135,6 +135,7 @@ def create_app() -> FastAPI:
     from app.domains.reports.router import router as reports_router
     from app.domains.audit.router import router as audit_router
     from app.domains.slip_verify.router import router as slip_verify_router
+    from app.domains.wine_products.router import router as wine_products_router
 
     app.include_router(
         auth_router,
@@ -266,6 +267,12 @@ def create_app() -> FastAPI:
         slip_verify_router,
         prefix="/api/v1/slip-verify",
         tags=["Slip Verification"],
+    )
+
+    app.include_router(
+        wine_products_router,
+        prefix="/api/v1/wine-products",
+        tags=["Wine Products"],
     )
 
     return app

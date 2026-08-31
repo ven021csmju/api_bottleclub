@@ -1518,7 +1518,35 @@ class PaymentVerification(Base):
 
 
 # ---------------------------------------------------------------------------
-# 44. VerificationAttempt (Audit Trail)
+# 44.1 WineProduct (reference catalog from Open Food Facts)
+# ---------------------------------------------------------------------------
+class WineProduct(Base):
+    __tablename__ = "wine_products"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    product_name: Mapped[str | None] = mapped_column(String(500))
+    brands: Mapped[str | None] = mapped_column(String(255))
+    categories_en: Mapped[str | None] = mapped_column(Text)
+    origins_en: Mapped[str | None] = mapped_column(Text)
+    countries_en: Mapped[str | None] = mapped_column(String(255))
+    quantity: Mapped[str | None] = mapped_column(String(100))
+    ingredients_text: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    image_small_url: Mapped[str | None] = mapped_column(Text)
+    alcohol_100g: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_wine_products_name", "product_name"),
+        Index("ix_wine_products_brands", "brands"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 45. VerificationAttempt (Audit Trail)
 # ---------------------------------------------------------------------------
 class VerificationAttempt(Base):
     __tablename__ = "verification_attempts"
