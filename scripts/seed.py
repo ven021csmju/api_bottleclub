@@ -292,24 +292,32 @@ def seed(conn: psycopg.Connection) -> None:
         added += 1
     if added:
         print(f"  [+] Permissions  {added} missing codes inserted")
-        for role_name, perm_codes in ROLE_PERMISSIONS.items():
-            for code in perm_codes:
-                perm_id = known_perms.get(code)
-                if perm_id is None:
-                    continue
+
+    # Reconcile role->permission assignments for every role (idempotent), so
+    # newly created roles (e.g. Kitchen / Bar) always get their configured perms
+    # even when no new permission codes were inserted this run.
+    assigned = 0
+    for role_name, perm_codes in ROLE_PERMISSIONS.items():
+        for code in perm_codes:
+            perm_id = known_perms.get(code)
+            if perm_id is None:
+                continue
+            cur.execute(
+                """SELECT 1 FROM role_permissions rp
+                   JOIN roles r ON r.id = rp.role_id
+                   WHERE r.organization_id = %s AND r.name = %s AND rp.permission_id = %s""",
+                (org_id, role_name, perm_id),
+            )
+            if cur.fetchone() is None:
                 cur.execute(
-                    """SELECT 1 FROM role_permissions rp
-                       JOIN roles r ON r.id = rp.role_id
-                       WHERE r.organization_id = %s AND r.name = %s AND rp.permission_id = %s""",
-                    (org_id, role_name, perm_id),
+                    """INSERT INTO role_permissions (role_id, permission_id)
+                       SELECT id, %s FROM roles
+                       WHERE organization_id = %s AND name = %s""",
+                    (perm_id, org_id, role_name),
                 )
-                if cur.fetchone() is None:
-                    cur.execute(
-                        """INSERT INTO role_permissions (role_id, permission_id)
-                           SELECT id, %s FROM roles
-                           WHERE organization_id = %s AND name = %s""",
-                        (perm_id, org_id, role_name),
-                    )
+                assigned += 1
+    if assigned:
+        print(f"  [+] Role-Permissions  {assigned} new assignments created")
 
     # --- Admin User ---
     admin_user_id: int | None = None
