@@ -66,6 +66,7 @@ class CatalogService:
             sort_order=data.sort_order,
         )
         CatalogRepository.add_category(db, category)
+        db.commit()
         db.refresh(category)
         return category
 
@@ -101,6 +102,7 @@ class CatalogService:
             setattr(category, field, value)
 
         db.flush()
+        db.commit()
         db.refresh(category)
         return category
 
@@ -124,6 +126,7 @@ class CatalogService:
 
         category.is_active = False
         db.flush()
+        db.commit()
 
     # ------------------------------------------------------------------
     # Products
@@ -189,6 +192,7 @@ class CatalogService:
             has_expiry=data.has_expiry,
         )
         CatalogRepository.add_product(db, product)
+        db.commit()
         db.refresh(product)
         return product
 
@@ -229,6 +233,7 @@ class CatalogService:
             setattr(product, field, value)
 
         db.flush()
+        db.commit()
         db.refresh(product)
         return product
 
@@ -240,6 +245,7 @@ class CatalogService:
 
         product.deleted_at = datetime.datetime.now(datetime.timezone.utc)
         db.flush()
+        db.commit()
 
     # ------------------------------------------------------------------
     # Suppliers
@@ -285,6 +291,7 @@ class CatalogService:
             address=data.address,
         )
         CatalogRepository.add_supplier(db, supplier)
+        db.commit()
         db.refresh(supplier)
         return supplier
 
@@ -311,6 +318,7 @@ class CatalogService:
             setattr(supplier, field, value)
 
         db.flush()
+        db.commit()
         db.refresh(supplier)
         return supplier
 
@@ -322,6 +330,7 @@ class CatalogService:
 
         supplier.is_active = False
         db.flush()
+        db.commit()
 
     # ------------------------------------------------------------------
     # Supplier Products
@@ -374,6 +383,7 @@ class CatalogService:
             supplier_sku=data.supplier_sku,
         )
         CatalogRepository.add_supplier_product(db, sp)
+        db.commit()
         db.refresh(sp)
         return sp
 
@@ -394,6 +404,7 @@ class CatalogService:
             setattr(sp, field, value)
 
         db.flush()
+        db.commit()
         db.refresh(sp)
         return sp
 
@@ -410,3 +421,4 @@ class CatalogService:
             raise NotFoundException(detail="Supplier not found")
 
         CatalogRepository.delete_supplier_product(db, sp)
+        db.commit()

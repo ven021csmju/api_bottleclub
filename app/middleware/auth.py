@@ -2,15 +2,16 @@ from typing import Callable
 
 from fastapi import Depends, Header, Request
 from jose import JWTError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.session import get_db
 from app.middleware.branch_scope import validate_branch_access
-from app.db.models import User
+from app.db.models import OrderItem, User
 from app.db.repositories.users import UserRepository
 from app.shared.audit import AuditContext
-from app.shared.exceptions import ForbiddenException, UnauthorizedException
+from app.shared.exceptions import ForbiddenException, NotFoundException, UnauthorizedException
 from app.shared.permissions import normalize_permission
 from app.shared.security import decode_token
 
@@ -77,6 +78,40 @@ def require_permission(permission_code: str) -> Callable:
         return user
 
     return permission_checker
+
+
+async def require_station_item_permission(
+    order_id: int,
+    run_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Check the caller may act on a station item.
+
+    Resolves the target :class:`OrderItem`, determines its station, then requires
+    the matching ``kds.<station>.update`` permission so kitchen role can only
+    advance kitchen items and bar role only bar items.
+    """
+    payload = getattr(request.state, "token_payload", {})
+    permissions: list[str] = payload.get("permissions", [])
+
+    item = db.execute(
+        select(OrderItem).where(
+            OrderItem.id == run_id,
+            OrderItem.order_id == order_id,
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        raise NotFoundException(detail="Order item not found")
+
+    station = item.station or "kitchen"
+    required = normalize_permission(f"kds.{station}.update")
+    if required not in permissions and f"kds.{station}.update" not in permissions:
+        raise ForbiddenException(
+            detail=f"Missing required permission: kds.{station}.update"
+        )
+    return user
 
 
 def get_audit_context(

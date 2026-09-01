@@ -42,6 +42,10 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("orders.cancel", "orders", "Cancel orders"),
     ("orders.complete", "orders", "Complete orders"),
     ("orders.update", "orders", "Update order workflow status"),
+    ("kds.kitchen.read", "kds", "View kitchen queue"),
+    ("kds.kitchen.update", "kds", "Advance kitchen item status"),
+    ("kds.bar.read", "kds", "View bar queue"),
+    ("kds.bar.update", "kds", "Advance bar item status"),
     ("payments.create", "payments", "Process payments"),
     ("payments.read", "payments", "View payments"),
     ("payments.refund", "payments", "Process refunds"),
@@ -132,6 +136,16 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "inventory.read",
         "catalog.read",
         "shifts.read",
+    ],
+    "Kitchen": [
+        "kds.kitchen.read", "kds.kitchen.update",
+        "orders.read",
+        "catalog.read",
+    ],
+    "Bar": [
+        "kds.bar.read", "kds.bar.update",
+        "orders.read",
+        "catalog.read",
     ],
 }
 

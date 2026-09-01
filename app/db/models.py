@@ -248,6 +248,9 @@ class Category(Base):
     description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    station: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="kitchen"
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -257,6 +260,10 @@ class Category(Base):
 
     __table_args__ = (
         UniqueConstraint("organization_id", "name", name="uq_category_org_name"),
+        CheckConstraint(
+            "station IN ('kitchen', 'bar')",
+            name="ck_category_station",
+        ),
     )
 
 
@@ -837,7 +844,7 @@ class Order(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')",
+            "status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled', 'paid', 'held', 'refunded')",
             name="ck_order_status",
         ),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
@@ -875,6 +882,12 @@ class OrderItem(Base):
     promotion_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("promotions.id", ondelete="SET NULL")
     )
+    station: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="kitchen"
+    )
+    item_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="pending"
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -885,6 +898,14 @@ class OrderItem(Base):
         CheckConstraint("quantity > 0", name="ck_order_item_quantity_positive"),
         CheckConstraint("unit_price >= 0", name="ck_order_item_unit_price_non_negative"),
         CheckConstraint("line_total >= 0", name="ck_order_item_line_total_non_negative"),
+        CheckConstraint(
+            "station IN ('kitchen', 'bar')",
+            name="ck_order_item_station",
+        ),
+        CheckConstraint(
+            "item_status IN ('pending', 'preparing', 'ready', 'served', 'cancelled')",
+            name="ck_order_item_status",
+        ),
     )
 
 

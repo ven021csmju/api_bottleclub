@@ -33,6 +33,8 @@ class OrderItemResponse(BaseModel):
     discount_amount: Decimal
     line_total: Decimal
     cost_price: Optional[Decimal] = None
+    station: Optional[str] = None
+    item_status: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -73,6 +75,39 @@ class OrderStatusUpdate(BaseModel):
 
 class OrderCancel(BaseModel):
     reason: Optional[str] = None
+
+
+class CheckoutPayment(BaseModel):
+    payment_method: str = Field(..., max_length=30)
+    amount: Decimal = Field(..., gt=0, decimal_places=2)
+    external_reference: Optional[str] = Field(None, max_length=255)
+    notes: Optional[str] = None
+
+
+class CheckoutRequest(BaseModel):
+    payments: list[CheckoutPayment] = Field(..., min_length=1)
+    redeem_points: int = Field(0, ge=0)
+    earn_points: bool = True
+    idempotency_key: Optional[str] = Field(None, max_length=255)
+
+
+class CheckoutResponse(BaseModel):
+    id: int
+    order_number: str
+    status: str
+    customer_id: Optional[int] = None
+    subtotal: Decimal
+    discount_amount: Decimal
+    tax_amount: Decimal
+    grand_total: Decimal
+    loyalty_points_redeemed: int
+    loyalty_points_earned: int
+    amount_paid: Decimal
+    change_amount: Decimal
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
 
 
 class OrderSummary(BaseModel):
@@ -131,3 +166,49 @@ class ReceiptOrder(BaseModel):
 class ReceiptResponse(BaseModel):
     order: ReceiptOrder
     payments: list[ReceiptPayment]
+
+
+class OrderItemStatusUpdate(BaseModel):
+    item_status: str
+    notes: Optional[str] = None
+
+
+class StationOrderItem(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    product_sku: str
+    quantity: int
+    station: str
+    item_status: str
+    line_total: Decimal
+
+
+class StationOrderResponse(BaseModel):
+    id: int
+    order_id: int
+    order_number: str
+    branch_id: int
+    status: str
+    notes: Optional[str] = None
+    created_at: datetime
+    items: list[StationOrderItem]
+
+
+class StationItemUpdateResponse(BaseModel):
+    id: int
+    product_name: str
+    product_sku: str
+    quantity: int
+    station: str
+    item_status: str
+    order_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class StationItemsListResponse(BaseModel):
+    orders: list[StationOrderResponse]
+    total: int
+    page: int
+    per_page: int

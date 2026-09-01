@@ -44,6 +44,7 @@ class PaymentService:
         if order.amount_paid > order.grand_total:
             order.change_amount = order.amount_paid - order.grand_total
         db.flush()
+        db.commit()
 
         db.refresh(payment)
         return payment
@@ -86,7 +87,7 @@ class PaymentService:
             refund_number=refund_number,
             refund_amount=refund_amount,
             refund_method=data["refund_method"],
-            status="processed",
+            status="completed",
             processed_by=user_id,
             reason=data.get("reason"),
         )
@@ -94,6 +95,7 @@ class PaymentService:
 
         order.amount_paid = Decimal(str(order.amount_paid)) - refund_amount
         db.flush()
+        db.commit()
 
         db.refresh(refund)
         return refund

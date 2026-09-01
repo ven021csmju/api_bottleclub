@@ -50,6 +50,22 @@ class OrderStatus(str, enum.Enum):
     READY = "ready"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+    PAID = "paid"
+    HELD = "held"
+    REFUNDED = "refunded"
+
+
+class StationType(str, enum.Enum):
+    KITCHEN = "kitchen"
+    BAR = "bar"
+
+
+class ItemStatus(str, enum.Enum):
+    PENDING = "pending"
+    PREPARING = "preparing"
+    READY = "ready"
+    SERVED = "served"
+    CANCELLED = "cancelled"
 
 
 class PaymentMethod(str, enum.Enum):
@@ -70,9 +86,8 @@ class PaymentStatus(str, enum.Enum):
 
 class RefundStatus(str, enum.Enum):
     PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    PROCESSED = "processed"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class ReturnStatus(str, enum.Enum):

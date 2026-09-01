@@ -92,5 +92,6 @@ class RefundService:
         )
 
         db.flush()
+        db.commit()
         db.refresh(refund)
         return refund

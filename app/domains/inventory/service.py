@@ -128,6 +128,7 @@ class InventoryService:
         )
         InventoryRepository.add_stock_movement(db, movement)
         db.flush()
+        db.commit()
 
     # ------------------------------------------------------------------
     # Lots

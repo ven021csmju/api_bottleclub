@@ -59,6 +59,7 @@ class TransferService:
             )
 
         db.flush()
+        db.commit()
         db.refresh(transfer)
         return transfer
 
@@ -109,6 +110,7 @@ class TransferService:
         transfer.approved_by = user_id
         transfer.approved_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
         db.refresh(transfer)
         return transfer
 
@@ -182,6 +184,7 @@ class TransferService:
         transfer.shipped_by = user_id
         transfer.shipped_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
         db.refresh(transfer)
         return transfer
 
@@ -283,6 +286,7 @@ class TransferService:
         transfer.received_by = user_id
         transfer.received_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
         db.refresh(transfer)
         return transfer
 
@@ -302,5 +306,6 @@ class TransferService:
 
         transfer.status = "cancelled"
         db.flush()
+        db.commit()
         db.refresh(transfer)
         return transfer

@@ -5,16 +5,25 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_current_branch, require_permission
+from app.middleware.auth import (
+    get_current_branch,
+    require_permission,
+    require_station_item_permission,
+)
 from app.db.models import User
 
 from .schemas import (
+    CheckoutRequest,
+    CheckoutResponse,
     OrderCancel,
     OrderCreate,
     OrderListResponse,
     OrderResponse,
     OrderStatusUpdate,
     ReceiptResponse,
+    OrderItemStatusUpdate,
+    StationItemsListResponse,
+    StationItemUpdateResponse,
 )
 from .service import OrderService
 
@@ -146,3 +155,69 @@ def complete_order(
         order_id=order_id,
     )
     return OrderResponse.model_validate(order)
+
+
+@router.post("/{order_id}/checkout", response_model=CheckoutResponse)
+def checkout_order(
+    order_id: int,
+    body: CheckoutRequest,
+    user: User = Depends(require_permission("payments.create")),
+    db: Session = Depends(get_db),
+) -> CheckoutResponse:
+    order = OrderService.checkout_order(
+        db=db,
+        org_id=user.organization_id,
+        order_id=order_id,
+        user_id=user.id,
+        data=body.model_dump(),
+    )
+    return CheckoutResponse.model_validate(order)
+
+
+# ---------------------------------------------------------------------------
+# Kitchen / Bar (KDS)
+# ---------------------------------------------------------------------------
+@router.get("/station/kitchen", response_model=StationItemsListResponse)
+def list_kitchen_orders(
+    user: User = Depends(require_permission("kds.kitchen.read")),
+    branch_id: int = Depends(get_current_branch),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    item_status: Optional[str] = None,
+) -> StationItemsListResponse:
+    result = OrderService.list_station_items(
+        db, user.organization_id, "kitchen", branch_id=branch_id,
+        item_status=item_status, page=page, per_page=per_page,
+    )
+    return OrderService._build_station_response(result, page, per_page)
+
+
+@router.get("/station/bar", response_model=StationItemsListResponse)
+def list_bar_orders(
+    user: User = Depends(require_permission("kds.bar.read")),
+    branch_id: int = Depends(get_current_branch),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    item_status: Optional[str] = None,
+) -> StationItemsListResponse:
+    result = OrderService.list_station_items(
+        db, user.organization_id, "bar", branch_id=branch_id,
+        item_status=item_status, page=page, per_page=per_page,
+    )
+    return OrderService._build_station_response(result, page, per_page)
+
+
+@router.patch("/{order_id}/station-items/{run_id}/status", response_model=StationItemUpdateResponse)
+def update_station_item_status(
+    order_id: int,
+    run_id: int,
+    body: OrderItemStatusUpdate,
+    user: User = Depends(require_station_item_permission),
+    db: Session = Depends(get_db),
+) -> StationItemUpdateResponse:
+    item = OrderService.update_item_status(
+        db, user.organization_id, order_id, run_id, body.item_status, user.id,
+    )
+    return StationItemUpdateResponse.model_validate(item)

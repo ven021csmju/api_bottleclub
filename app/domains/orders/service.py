@@ -4,8 +4,17 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Branch, Order, OrderItem, Payment, StockMovement
+from app.db.models import (
+    Branch,
+    LoyaltyTransaction,
+    Order,
+    OrderItem,
+    Payment,
+    StockMovement,
+)
+from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.orders import OrderRepository
+from app.db.repositories.payments import PaymentRepository
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,
@@ -23,6 +32,7 @@ class OrderService:
         "confirmed": {"preparing", "ready"},
         "preparing": {"ready"},
         "ready": {"completed"},
+        "paid": {"completed"},
         "completed": set(),
         "cancelled": set(),
     }
@@ -96,6 +106,10 @@ class OrderService:
         subtotal = Decimal("0")
         order_items = []
 
+        stations = OrderRepository.get_stations_for_products(
+            db, org_id, product_ids
+        )
+
         for item_data in data["items"]:
             product = products_map[item_data["product_id"]]
             quantity = item_data["quantity"]
@@ -114,6 +128,8 @@ class OrderService:
                 discount_amount=item_discount,
                 tax_amount=Decimal("0"),
                 line_total=line_total,
+                station=stations.get(product.id, "kitchen"),
+                item_status="pending",
             )
             order_items.append(order_item)
             OrderRepository.add_order_item(db, order_item)
@@ -156,6 +172,7 @@ class OrderService:
         order.change_amount = Decimal("0")
 
         db.flush()
+        db.commit()
         db.refresh(order)
         return order
 
@@ -301,6 +318,163 @@ class OrderService:
         order.status = "cancelled"
         order.cancelled_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
+        db.refresh(order)
+        return order
+
+    #: Statuses from which checkout (settlement) is allowed.
+    CHECKOUTABLE_STATUSES = {"pending", "confirmed", "preparing", "ready", "held"}
+
+    #: 1 loyalty point = 1 Baht of credit applied toward the order total.
+    POINTS_VALUE_PER_BAHT = 1
+    #: Loyalty points earned per Baht of net spend at checkout.
+    POINTS_EARN_PER_BAHT = 1
+
+    @staticmethod
+    def checkout_order(
+        db: Session,
+        org_id: int,
+        order_id: int,
+        user_id: int,
+        data: dict,
+    ) -> Order:
+        """Settle an order in a single transaction.
+
+        Applies optional loyalty-point redemption (as a discount), records
+        payments, updates the order's paid/change amounts, awards loyalty
+        points on the net spend and marks the order ``paid``. Everything is
+        flushed once and committed atomically — either all of it persists or
+        none of it does.
+
+        Re-submitting with the same request for an already-settled order is a
+        no-op (idempotent), so a client retry cannot double-charge.
+        """
+        idempotency_key = data.get("idempotency_key")
+
+        order = OrderRepository.get_org_order(db, org_id, order_id)
+        if not order:
+            raise NotFoundException(detail="Order not found")
+
+        # Idempotency: an already-settled order is the success result of a
+        # previous attempt, so return it unchanged instead of charging again.
+        if idempotency_key and order.status in ("paid", "completed", "refunded"):
+            return order
+
+        if order.status not in OrderService.CHECKOUTABLE_STATUSES:
+            raise InvalidOrderStateException(
+                detail=f"Cannot checkout order in '{order.status}' status"
+            )
+
+        customer = None
+        if order.customer_id is not None:
+            customer = LoyaltyRepository.find_org_customer(db, org_id, order.customer_id)
+            if customer is None:
+                raise NotFoundException(detail="Customer not found")
+
+        # ---- Loyalty redemption (points as discount) ----
+        redeem_points = int(data.get("redeem_points") or 0)
+        redeemed = 0
+        if redeem_points > 0:
+            if customer is None:
+                raise BadRequestException(
+                    detail="Cannot redeem points without a customer on the order"
+                )
+            if customer.loyalty_points_balance < redeem_points:
+                raise BadRequestException(
+                    detail=(
+                        f"Insufficient points. Available: "
+                        f"{customer.loyalty_points_balance}, requested: {redeem_points}"
+                    )
+                )
+            max_credit = int(order.grand_total) // OrderService.POINTS_VALUE_PER_BAHT
+            redeemed = min(redeem_points, max_credit)
+            if redeemed == 0:
+                raise BadRequestException(detail="Points do not cover any amount due")
+
+            before = customer.loyalty_points_balance
+            after = before - redeemed
+            LoyaltyRepository.add_transaction(
+                db,
+                LoyaltyTransaction(
+                    customer_id=order.customer_id,
+                    transaction_type="redeem",
+                    points=-redeemed,
+                    points_before=before,
+                    points_after=after,
+                    reference_type="order",
+                    reference_id=order.id,
+                    notes="Points redeemed at checkout",
+                    user_id=user_id,
+                ),
+            )
+            customer.loyalty_points_balance = after
+            order.loyalty_points_redeemed = redeemed
+
+        due = order.grand_total - Decimal(redeemed)
+
+        # ---- Payments ----
+        payments = data.get("payments") or []
+        if not payments:
+            raise BadRequestException(detail="At least one payment is required")
+
+        paid_total = Decimal("0")
+        for pay in payments:
+            amount = Decimal(str(pay["amount"]))
+            if amount <= 0:
+                raise BadRequestException(detail="Payment amount must be positive")
+            payment = Payment(
+                order_id=order.id,
+                payment_method=pay["payment_method"],
+                amount=amount,
+                status="completed",
+                external_reference=pay.get("external_reference"),
+                notes=pay.get("notes"),
+                received_by=user_id,
+            )
+            PaymentRepository.add_payment(db, payment)
+            paid_total += amount
+
+        if paid_total < due:
+            raise BadRequestException(
+                detail=f"Payments ({paid_total}) less than amount due ({due})"
+            )
+
+        order.amount_paid = paid_total
+        order.change_amount = paid_total - due
+
+        # ---- Loyalty earn on net spend ----
+        points_earned = 0
+        if customer is not None and redeemed < int(order.grand_total):
+            spend_whole = int(due)
+            points_earned = (
+                spend_whole // OrderService.POINTS_EARN_PER_BAHT
+                if OrderService.POINTS_EARN_PER_BAHT
+                else spend_whole
+            )
+            if points_earned > 0:
+                before = customer.loyalty_points_balance
+                after = before + points_earned
+                LoyaltyRepository.add_transaction(
+                    db,
+                    LoyaltyTransaction(
+                        customer_id=order.customer_id,
+                        transaction_type="earn",
+                        points=points_earned,
+                        points_before=before,
+                        points_after=after,
+                        reference_type="order",
+                        reference_id=order.id,
+                        notes="Points earned at checkout",
+                        user_id=user_id,
+                    ),
+                )
+                customer.loyalty_points_balance = after
+                order.loyalty_points_earned = points_earned
+
+        order.status = "paid"
+
+        db.flush()
+        db.commit()
         db.refresh(order)
         return order
 
@@ -310,9 +484,9 @@ class OrderService:
 
         if not order:
             raise NotFoundException(detail="Order not found")
-        # Backward-compatible: allow completing straight from pending (POS flow)
-        # as well as from the queue's ready state.
-        if order.status not in ("pending", "ready"):
+        # Backward-compatible: allow completing straight from pending (POS flow),
+        # from the queue's ready state, or after checkout (paid).
+        if order.status not in ("pending", "ready", "paid"):
             raise InvalidOrderStateException(
                 detail=f"Cannot complete order in '{order.status}' status"
             )
@@ -324,6 +498,7 @@ class OrderService:
         order.status = "completed"
         order.completed_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
         db.refresh(order)
         return order
 
@@ -357,5 +532,131 @@ class OrderService:
                 raise BadRequestException(detail="Order is not fully paid")
             order.completed_at = datetime.now(timezone.utc)
         db.flush()
+        db.commit()
         db.refresh(order)
         return order
+
+    # ------------------------------------------------------------------
+    # Kitchen / Bar (KDS) — per-item station workflow
+    # ------------------------------------------------------------------
+    ITEM_STATUS_TRANSITIONS: dict[str, set[str]] = {
+        "pending": {"preparing", "cancelled"},
+        "preparing": {"ready", "cancelled"},
+        "ready": {"served"},
+        "served": set(),
+        "cancelled": set(),
+    }
+
+    @staticmethod
+    def _validate_item_status(value: str) -> None:
+        from app.shared.enums import ItemStatus
+
+        if value not in {s.value for s in ItemStatus}:
+            raise BadRequestException(
+                detail=f"Invalid item status: '{value}'",
+                code="VALIDATION_ERROR",
+            )
+
+    @staticmethod
+    def update_item_status(
+        db: Session,
+        org_id: int,
+        order_id: int,
+        run_id: int,
+        target_status: str,
+        user_id: int | None = None,
+    ) -> OrderItem:
+        """Advance a single item's status within a station workflow.
+
+        ``run_id`` is the id of the :class:`OrderItem` being worked on by the
+        kitchen or bar station.
+        """
+        OrderService._validate_item_status(target_status)
+        order = OrderRepository.get_org_order(db, org_id, order_id)
+        if not order:
+            raise NotFoundException(detail="Order not found")
+
+        item = next(
+            (i for i in order.items if i.id == run_id),
+            None,
+        )
+        if item is None:
+            raise NotFoundException(detail="Order item not found")
+
+        allowed = OrderService.ITEM_STATUS_TRANSITIONS.get(item.item_status, set())
+        if target_status not in allowed:
+            raise InvalidOrderStateException(
+                detail=(
+                    f"Cannot transition item '{item.id}' from "
+                    f"'{item.item_status}' to '{target_status}'"
+                )
+            )
+
+        item.item_status = target_status
+        db.flush()
+        db.commit()
+        db.refresh(item)
+        return item
+
+    @staticmethod
+    def list_station_items(
+        db: Session,
+        org_id: int,
+        station: str,
+        branch_id: int | None = None,
+        item_status: str | None = None,
+        page: int = 1,
+        per_page: int = 20,
+    ) -> tuple[list[tuple[Order, OrderItem]], int]:
+        """List open orders' items that belong to a given station (kitchen/bar)."""
+        return OrderRepository.list_station_items(
+            db,
+            org_id,
+            station,
+            branch_id=branch_id,
+            item_status=item_status,
+            page=page,
+            per_page=per_page,
+        )
+
+    @staticmethod
+    def _build_station_response(
+        result: tuple[list[tuple[Order, OrderItem]], int],
+        page: int,
+        per_page: int,
+    ) -> dict:
+        rows, total = result
+        orders = {}
+        for order, item in rows:
+            bucket = orders.setdefault(order.id, {"order": order, "items": []})
+            bucket["items"].append(item)
+        return {
+            "orders": [
+                {
+                    "id": order.id,
+                    "order_id": order.id,
+                    "order_number": order.order_number,
+                    "branch_id": order.branch_id,
+                    "status": order.status,
+                    "notes": order.notes,
+                    "created_at": order.created_at,
+                    "items": [
+                        {
+                            "id": it.id,
+                            "product_id": it.product_id,
+                            "product_name": it.product_name,
+                            "product_sku": it.product_sku,
+                            "quantity": it.quantity,
+                            "station": it.station,
+                            "item_status": it.item_status,
+                            "line_total": it.line_total,
+                        }
+                        for it in bucket["items"]
+                    ],
+                }
+                for bucket in orders.values()
+            ],
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+        }

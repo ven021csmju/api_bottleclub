@@ -111,11 +111,10 @@ class ReturnService:
             refund_number = generate_refund_number(db)
             refund = Refund(
                 order_id=order.id,
-                return_id=ret.id,
                 refund_number=refund_number,
                 refund_amount=total_refund,
                 refund_method="original",
-                status="processed",
+                status="completed",
                 processed_by=user_id,
                 reason=data.get("reason"),
             )
@@ -124,6 +123,7 @@ class ReturnService:
             ret.refund_id = refund.id
 
         db.flush()
+        db.commit()
         db.refresh(ret)
         return ret
 
@@ -172,5 +172,6 @@ class ReturnService:
 
         ret.status = "completed"
         db.flush()
+        db.commit()
         db.refresh(ret)
         return ret

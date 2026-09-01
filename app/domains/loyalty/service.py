@@ -24,12 +24,17 @@ class LoyaltyService:
         if customer is None:
             raise NotFoundException(detail="Customer not found")
 
+        points_before = customer.loyalty_points_balance
+        points_after = points_before + points
+
         expires_at = datetime.now(timezone.utc) + timedelta(days=365)
 
         transaction = LoyaltyTransaction(
             customer_id=customer_id,
             transaction_type="earn",
             points=points,
+            points_before=points_before,
+            points_after=points_after,
             reference_type=reference_type,
             reference_id=reference_id,
             notes=notes,
@@ -38,7 +43,7 @@ class LoyaltyService:
         )
         LoyaltyRepository.add_transaction(db, transaction)
 
-        customer.loyalty_points_balance += points
+        customer.loyalty_points_balance = points_after
         db.commit()
         db.refresh(transaction)
         return transaction
@@ -63,10 +68,15 @@ class LoyaltyService:
                 detail=f"Insufficient points. Available: {customer.loyalty_points_balance}, requested: {points}"
             )
 
+        points_before = customer.loyalty_points_balance
+        points_after = points_before - points
+
         transaction = LoyaltyTransaction(
             customer_id=customer_id,
             transaction_type="redeem",
             points=points,
+            points_before=points_before,
+            points_after=points_after,
             reference_type=reference_type,
             reference_id=reference_id,
             notes=notes,
@@ -74,7 +84,7 @@ class LoyaltyService:
         )
         LoyaltyRepository.add_transaction(db, transaction)
 
-        customer.loyalty_points_balance -= points
+        customer.loyalty_points_balance = points_after
         db.commit()
         db.refresh(transaction)
         return transaction

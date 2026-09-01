@@ -7,6 +7,7 @@ from app.db.models import User
 
 from .schemas import PaymentCreate, PaymentRefundRequest, PaymentResponse
 from .service import PaymentService
+from app.domains.refunds.schemas import RefundResponse
 
 router = APIRouter()
 
@@ -37,13 +38,13 @@ def list_payments(
     return [PaymentResponse.model_validate(p) for p in payments]
 
 
-@router.post("/{order_id}/refund", response_model=PaymentResponse)
+@router.post("/{order_id}/refund", response_model=RefundResponse)
 def process_refund(
     order_id: int,
     body: PaymentRefundRequest,
     user: User = Depends(require_permission("payments.refund")),
     db: Session = Depends(get_db),
-) -> PaymentResponse:
+) -> RefundResponse:
     refund = PaymentService.process_refund(
         db=db,
         org_id=user.organization_id,
@@ -51,4 +52,4 @@ def process_refund(
         user_id=user.id,
         data=body.model_dump(),
     )
-    return PaymentResponse.model_validate(refund)
+    return RefundResponse.model_validate(refund)

@@ -142,6 +142,7 @@ class PurchaseService:
             po.total_amount = total
 
         db.flush()
+        db.commit()
         db.refresh(po)
         return po
 
@@ -192,6 +193,7 @@ class PurchaseService:
             PurchaseRepository.add_po_item(db, po_item)
 
         db.flush()
+        db.commit()
         db.refresh(po)
         return po
 
@@ -214,6 +216,7 @@ class PurchaseService:
         po.status = POStatus.APPROVED.value
         po.approved_by = user_id
         db.flush()
+        db.commit()
         db.refresh(po)
         return po
 
@@ -336,6 +339,7 @@ class PurchaseService:
             po.status = POStatus.PARTIALLY_RECEIVED.value
 
         db.flush()
+        db.commit()
         db.refresh(receiving)
         return receiving
 
@@ -357,5 +361,6 @@ class PurchaseService:
 
         po.status = POStatus.CANCELLED.value
         db.flush()
+        db.commit()
         db.refresh(po)
         return po
