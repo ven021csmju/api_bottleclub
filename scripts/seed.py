@@ -228,15 +228,17 @@ def seed(conn: psycopg.Connection) -> None:
         perm_ids = {code: pid for pid, code in cur.fetchall()}
         print(f"  [=] Permissions  {len(perm_ids)} already exist")
 
-    # --- Roles ---
+    # --- Roles (idempotent upsert: create any missing roles) ---
+    role_descriptions = {
+        "Superadmin": "Full system access with all permissions",
+        "Manager": "Branch management with most operational permissions",
+        "Cashier": "Point-of-sale operations and basic customer management",
+        "Staff": "Basic read-only access",
+        "Kitchen": "Kitchen station queue operations",
+        "Bar": "Bar station queue operations",
+    }
     if table_empty(cur, "roles"):
         role_ids: dict[str, int] = {}
-        role_descriptions = {
-            "Superadmin": "Full system access with all permissions",
-            "Manager": "Branch management with most operational permissions",
-            "Cashier": "Point-of-sale operations and basic customer management",
-            "Staff": "Basic read-only access",
-        }
         for role_name in ROLE_PERMISSIONS:
             cur.execute(
                 """INSERT INTO roles (organization_id, name, description, is_system)
@@ -258,7 +260,22 @@ def seed(conn: psycopg.Connection) -> None:
     else:
         cur.execute("SELECT id, name FROM roles WHERE organization_id = %s", (org_id,))
         role_ids = {name: rid for rid, name in cur.fetchall()}
-        print(f"  [=] Roles        already exist")
+        # Upsert any roles not yet present (e.g. Kitchen / Bar on existing installs).
+        created = 0
+        for role_name in ROLE_PERMISSIONS:
+            if role_name in role_ids:
+                continue
+            cur.execute(
+                """INSERT INTO roles (organization_id, name, description, is_system)
+                   VALUES (%s, %s, %s, true) RETURNING id""",
+                (org_id, role_name, role_descriptions.get(role_name)),
+            )
+            role_ids[role_name] = cur.fetchone()[0]
+            created += 1
+        if created:
+            print(f"  [+] Roles        {created} missing roles created")
+        else:
+            print(f"  [=] Roles        already exist")
 
     # --- Ensure missing permission codes + role-permission assignments (idempotent) ---
     cur.execute("SELECT id, code FROM permissions")
@@ -450,7 +467,7 @@ def seed(conn: psycopg.Connection) -> None:
     print(f" Branch       : Main Branch      (code: MNB)")
     print(f" Admin login  : admin / admin123")
     print(f" Test login   : ven / 0217")
-    print(f" Roles        : Superadmin, Manager, Cashier, Staff")
+    print(f" Roles        : Superadmin, Manager, Cashier, Staff, Kitchen, Bar")
     print(f" Categories   : Beer, Wine, Spirits, Non-Alcoholic, Snacks")
     print(f" Suppliers    : {len(SUPPLIERS)}")
     print(f" Products     : {len(PRODUCTS)}")
