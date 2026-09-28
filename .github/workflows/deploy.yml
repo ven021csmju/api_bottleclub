@@ -1,0 +1,24 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Deploy API
+        run: |
+          cd ~/api_bottleclub
+          git pull origin main
+
+      - name: Restart FastAPI
+        run: |
+          sudo systemctl restart fastapi
+
+      - name: Check FastAPI
+        run: |
+          sudo systemctl is-active fastapi
