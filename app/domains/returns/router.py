@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -18,6 +18,7 @@ router = APIRouter()
 
 @router.post("/", response_model=ReturnResponse)
 def create_return(
+    request: Request,
     body: ReturnCreate,
     user: User = Depends(require_permission("returns.create")),
     branch_id: int = Depends(get_current_branch),
@@ -29,6 +30,7 @@ def create_return(
         branch_id=branch_id,
         user_id=user.id,
         data=body.model_dump(),
+        request_id=getattr(request.state, "request_id", ""),
     )
     return ReturnResponse.model_validate(ret)
 

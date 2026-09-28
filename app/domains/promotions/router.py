@@ -1,79 +1,78 @@
-from typing import Optional
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.domains.promotions.schemas import (
+    PromotionBulkItem,
+    PromotionBulkResponse,
     PromotionCreate,
     PromotionListResponse,
+    PromotionMutationResponse,
     PromotionResponse,
     PromotionUpdate,
 )
 from app.domains.promotions.service import PromotionService
 from app.middleware.auth import require_permission
 from app.db.models import User
-from app.shared.pagination import PaginationParams
 
 router = APIRouter()
 
 
-@router.get("/", response_model=PromotionListResponse)
+def _response(promotion) -> PromotionResponse:
+    return PromotionResponse.model_validate(promotion)
+
+
+@router.get("/promotions", response_model=PromotionListResponse)
 def list_promotions(
-    is_active: Optional[bool] = Query(None),
-    pagination: PaginationParams = Depends(),
+    featured: bool | None = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("promotions.read")),
 ) -> PromotionListResponse:
-    promotions, total = PromotionService.list(
-        db, user.organization_id, is_active=is_active,
-        page=pagination.page, per_page=pagination.per_page,
-    )
     return PromotionListResponse(
-        promotions=promotions,
-        total=total,
-        page=pagination.page,
-        per_page=pagination.per_page,
+        promotions=[_response(item) for item in PromotionService.list(db, featured)]
     )
 
 
-@router.get("/{promotion_id}", response_model=PromotionResponse)
-def get_promotion(
-    promotion_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_permission("promotions.read")),
-) -> PromotionResponse:
-    return PromotionService.get(db, user.organization_id, promotion_id)
-
-
-@router.post("/", response_model=PromotionResponse, status_code=201)
+@router.post("/admin/promotions", response_model=PromotionMutationResponse, status_code=status.HTTP_201_CREATED)
 def create_promotion(
     data: PromotionCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("promotions.create")),
-) -> PromotionResponse:
-    return PromotionService.create(
-        db, user.organization_id, **data.model_dump()
+    _: User = Depends(require_permission("promotions.create")),
+) -> PromotionMutationResponse:
+    return PromotionMutationResponse(
+        promotion=_response(PromotionService.create(db, data.model_dump(by_alias=False)))
     )
 
 
-@router.put("/{promotion_id}", response_model=PromotionResponse)
+@router.put("/admin/promotions", response_model=PromotionMutationResponse)
 def update_promotion(
-    promotion_id: int,
     data: PromotionUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("promotions.update")),
-) -> PromotionResponse:
-    return PromotionService.update(
-        db, user.organization_id, promotion_id,
-        **data.model_dump(exclude_unset=True),
+    _: User = Depends(require_permission("promotions.update")),
+) -> PromotionMutationResponse:
+    return PromotionMutationResponse(
+        promotion=_response(
+            PromotionService.update(db, data.model_dump(exclude_unset=True, by_alias=False))
+        )
     )
 
 
-@router.delete("/{promotion_id}", status_code=204)
-def delete_promotion(
-    promotion_id: int,
+@router.put("/admin/promotions/bulk", response_model=PromotionBulkResponse)
+def bulk_update_promotions(
+    data: list[PromotionBulkItem],
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("promotions.delete")),
-) -> None:
-    PromotionService.delete(db, user.organization_id, promotion_id)
+    _: User = Depends(require_permission("promotions.update")),
+) -> PromotionBulkResponse:
+    count = PromotionService.bulk_update(
+        db, [item.model_dump(exclude_unset=True, by_alias=False) for item in data]
+    )
+    return PromotionBulkResponse(count=count)
+
+
+@router.delete("/admin/promotions")
+def delete_promotion(
+    promotion_id: str = Query(..., alias="id"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("promotions.delete")),
+) -> dict:
+    PromotionService.delete(db, promotion_id)
+    return {"success": True, "message": "ลบโปรโมชั่นสำเร็จ"}

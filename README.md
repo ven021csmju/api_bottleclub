@@ -208,3 +208,61 @@ alembic history
 # Rollback 1 step
 alembic downgrade -1
 ```
+
+---
+
+## MongoDB Log Service Integration
+
+ระบบบันทึก Log (user activity / search / system events) จะเก็บใน MongoDB ที่อยู่บนเครื่อง Ubuntu เดียวกับ
+PostgreSQL แต่ไม่เปิด port 27017 ให้ Internet ภายนอก เข้าถึงผ่าน **SSH Tunnel** เท่านั้น
+
+### 1. เปิด SSH Tunnel ไปยัง MongoDB
+
+```bash
+ssh -L 27017:localhost:27017 kittikun@192.168.1.146
+```
+
+เปิดไว้ทิ้งไว้ (อย่าปิด) แล้วรัน API ตามปกติ ระยะเวลา tunnel พัง/เสถียรภาพ ระบบจะพยายามเชื่อมต่อใหม่เอง
+โดยอัตโนมัติ และ **จะไม่มีผลต่อ business API** (เข้าใช้งานได้ตามปกติแม้ MongoDB ติดต่อไม่ได้)
+
+### 2. ตั้งค่า Environment
+
+เพิ่มใน `.env` (ดูตัวอย่างใน `.env.example`):
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DATABASE=system_logs
+MONGODB_CONNECTION_TIMEOUT_MS=2000
+MONGODB_SERVER_SELECTION_TIMEOUT_MS=1500
+MONGODB_MAX_POOL_SIZE=10
+MONGODB_MIN_POOL_SIZE=1
+MONGODB_RETRY_COOLDOWN_SECONDS=15
+MONGODB_USER_LOGS_TTL_DAYS=90
+MONGODB_SEARCH_LOGS_TTL_DAYS=90
+MONGODB_SYSTEM_EVENTS_TTL_DAYS=180
+```
+
+### 3. Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check ปกติ (PostgreSQL) — ยังคง `{"status": "healthy"}` เสมอ |
+| GET | `/health/mongodb` | สถานะการเชื่อมต่อ MongoDB (`connected`/`disconnected`) |
+
+### 4. Collections และ TTL
+
+| Collection | เนื้อหา | TTL |
+|------------|---------|-----|
+| `user_logs` | activity ของ user รวมถึง `action=login` | 90 วัน |
+| `search_logs` | ประวัติค้นหา | 90 วัน |
+| `system_events` | เหตุการณ์ภายในระบบ | 180 วัน |
+
+ทุก collection มี index `created_at` แบบ TTL และ index สำหรับ filter (user_id, action, query,
+event_type, severity, request_id)
+
+### 5. ข้อควรระวัง
+
+- ต้องเปิด SSH tunnel ก่อนจึงจะบันทึก log ได้ หากไม่ได้เปิด ระบบจะข้ามไปเงียบ ๆ (fail-silent)
+  โดยมี cooldown retry ตาม `MONGODB_RETRY_COOLDOWN_SECONDS`
+- Server ที่ใช้รัน MongoDB 4.4 (CPU ไม่รองรับ AVX) — อย่าอัปเกรดเป็น MongoDB 5.0+ บนเครื่องนี้
+```

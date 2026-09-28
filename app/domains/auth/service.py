@@ -3,8 +3,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
+from app.db.mongodb import sync_log_user_activity
 from app.db.models import User
 from app.db.repositories.auth import AuthRepository
+from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
     UnauthorizedException,
@@ -40,6 +42,7 @@ class AuthService:
         password: str,
         ip_address: str,
         user_agent: str,
+        request_id: str = "",
     ) -> TokenResponse:
         user = AuthRepository.find_by_username(db, username)
 
@@ -98,6 +101,26 @@ class AuthService:
             expires_at=refresh_expires,
         )
         db.commit()
+
+        # MongoDB user activity log. Fail-silent and bounded by a retry
+        # cooldown: a down SSH tunnel / MongoDB can never break login.
+        sync_log_user_activity(
+            user_id=str(user.id),
+            action="login",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            request_id=request_id,
+            metadata={"username": username},
+        )
+
+        # RabbitMQ pipeline (Phase 5). Published after the transaction
+        # committed; publish_user_event_sync never raises.
+        user_events.publish_user_event_sync(
+            "login",
+            user.id,
+            request_id,
+            {"success": True},
+        )
 
         return TokenResponse(
             access_token=access_token,
@@ -175,12 +198,20 @@ class AuthService:
         db: Session,
         user_id: int,
         token_hash: str,
+        request_id: str = "",
     ) -> None:
         record = AuthRepository.find_active_refresh_token(db, user_id, token_hash)
 
         if record:
             record.is_revoked = True
             db.commit()
+            # Only after the refresh session was actually invalidated.
+            user_events.publish_user_event_sync(
+                "logout",
+                user_id,
+                request_id,
+                {"success": True},
+            )
 
     @classmethod
     def get_profile(cls, db: Session, user_id: int) -> UserProfileResponse:

@@ -18,7 +18,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 #: Prefixes that always return raw payloads (backward/extra compat).
-RAW_PREFIXES: tuple[str, ...] = ("/health", "/openapi.json", "/docs", "/redoc")
+RAW_PREFIXES: tuple[str, ...] = (
+    "/health",
+    "/openapi.json",
+    "/docs",
+    "/redoc",
+    "/api/promotions",
+    "/api/admin/promotions",
+)
 
 PAGINATION_KEYS = ("page", "per_page", "total")
 

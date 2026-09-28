@@ -1,51 +1,78 @@
+from __future__ import annotations
+
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.models import Promotion
 from app.db.repositories.promotions import PromotionRepository
-from app.shared.exceptions import NotFoundException
-from app.shared.pagination import paginate
+from app.shared.exceptions import ConflictException, DatabaseException, NotFoundException
 
 
 class PromotionService:
     @staticmethod
-    def list(
-        db: Session,
-        organization_id: int,
-        is_active: bool | None = None,
-        page: int = 1,
-        per_page: int = 20,
-    ) -> tuple[list[Promotion], int]:
-        stmt = PromotionRepository.list_query(db, organization_id, is_active)
-        items, total, _, _ = paginate(db, stmt, page, per_page)
-        return list(items), total
+    def list(db: Session, featured: bool | None = None) -> list[Promotion]:
+        return PromotionRepository.list_public(db, featured)
 
     @staticmethod
-    def get(db: Session, organization_id: int, promotion_id: int) -> Promotion:
-        promotion = PromotionRepository.get_org_promotion(db, organization_id, promotion_id)
+    def create(db: Session, data: dict) -> Promotion:
+        if PromotionRepository.get(db, data["id"]):
+            raise ConflictException(detail="Promotion ID already exists")
+        promotion = Promotion(**data)
+        try:
+            db.add(promotion)
+            db.commit()
+            db.refresh(promotion)
+            return promotion
+        except IntegrityError:
+            db.rollback()
+            raise ConflictException(detail="Promotion ID already exists")
+        except SQLAlchemyError:
+            db.rollback()
+            raise DatabaseException()
+
+    @staticmethod
+    def update(db: Session, data: dict) -> Promotion:
+        promotion = PromotionRepository.get(db, data["id"])
         if promotion is None:
-            raise NotFoundException(detail="Promotion not found")
-        return promotion
-
-    @staticmethod
-    def create(db: Session, organization_id: int, **kwargs) -> Promotion:
-        promotion = Promotion(organization_id=organization_id, **kwargs)
-        PromotionRepository.add_promotion(db, promotion)
-        db.commit()
-        db.refresh(promotion)
-        return promotion
-
-    @staticmethod
-    def update(db: Session, organization_id: int, promotion_id: int, **kwargs) -> Promotion:
-        promotion = PromotionService.get(db, organization_id, promotion_id)
-        for key, value in kwargs.items():
-            if value is not None:
+            raise NotFoundException(detail="ไม่พบโปรโมชั่น")
+        for key, value in data.items():
+            if key != "id":
                 setattr(promotion, key, value)
-        db.commit()
-        db.refresh(promotion)
-        return promotion
+        try:
+            db.commit()
+            db.refresh(promotion)
+            return promotion
+        except SQLAlchemyError:
+            db.rollback()
+            raise DatabaseException()
 
     @staticmethod
-    def delete(db: Session, organization_id: int, promotion_id: int) -> None:
-        promotion = PromotionService.get(db, organization_id, promotion_id)
-        promotion.is_active = False
-        db.commit()
+    def bulk_update(db: Session, items: list[dict]) -> int:
+        try:
+            for data in items:
+                promotion = PromotionRepository.get(db, data["id"])
+                if promotion is None:
+                    raise NotFoundException(detail="ไม่พบโปรโมชั่น")
+                for key, value in data.items():
+                    if key != "id":
+                        setattr(promotion, key, value)
+            db.commit()
+            return len(items)
+        except NotFoundException:
+            db.rollback()
+            raise
+        except SQLAlchemyError:
+            db.rollback()
+            raise DatabaseException()
+
+    @staticmethod
+    def delete(db: Session, promotion_id: str) -> None:
+        promotion = PromotionRepository.get(db, promotion_id)
+        if promotion is None:
+            raise NotFoundException(detail="ไม่พบโปรโมชั่น")
+        try:
+            db.delete(promotion)
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            raise DatabaseException()

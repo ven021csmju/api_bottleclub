@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -40,6 +40,7 @@ def list_payments(
 
 @router.post("/{order_id}/refund", response_model=RefundResponse)
 def process_refund(
+    request: Request,
     order_id: int,
     body: PaymentRefundRequest,
     user: User = Depends(require_permission("payments.refund")),
@@ -51,5 +52,6 @@ def process_refund(
         order_id=order_id,
         user_id=user.id,
         data=body.model_dump(),
+        request_id=getattr(request.state, "request_id", ""),
     )
     return RefundResponse.model_validate(refund)

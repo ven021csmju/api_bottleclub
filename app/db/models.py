@@ -290,6 +290,7 @@ class Product(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     track_inventory: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     has_expiry: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    image_url: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -822,7 +823,13 @@ class Order(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    shipping_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     grand_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    order_source: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pos")
+    fulfillment_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default="unfulfilled"
+    )
+    tracking_number: Mapped[str | None] = mapped_column(String(100))
     amount_paid: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     change_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     loyalty_points_earned: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -847,6 +854,15 @@ class Order(Base):
             "status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled', 'paid', 'held', 'refunded')",
             name="ck_order_status",
         ),
+        CheckConstraint(
+            "order_source IN ('pos', 'ecommerce', 'qr', 'phone')",
+            name="ck_order_source",
+        ),
+        CheckConstraint(
+            "fulfillment_status IN ('unfulfilled', 'processing', 'shipped', 'delivered', 'picked_up', 'cancelled')",
+            name="ck_order_fulfillment_status",
+        ),
+        CheckConstraint("shipping_fee >= 0", name="ck_order_shipping_fee_non_negative"),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
         Index("ix_orders_status", "status"),
         Index(
@@ -879,9 +895,10 @@ class OrderItem(Base):
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     line_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
-    promotion_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("promotions.id", ondelete="SET NULL")
-    )
+    # Legacy order records use numeric promotion references. The new public
+    # promotions contract uses VARCHAR ids, so this legacy column is kept
+    # unlinked in ORM metadata rather than creating an incompatible FK.
+    promotion_id: Mapped[int | None] = mapped_column(BigInteger)
     station: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="kitchen"
     )
@@ -1061,21 +1078,23 @@ class ReturnItem(Base):
 class Promotion(Base):
     __tablename__ = "promotions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    organization_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    promotion_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    discount_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    minimum_purchase: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
-    max_uses: Mapped[int | None] = mapped_column(Integer)
-    used_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    start_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    end_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    subtitle: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    image_url: Mapped[str] = mapped_column(Text, nullable=False)
+    images: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    hero_image_url: Mapped[str | None] = mapped_column(Text)
+    badge: Mapped[str | None] = mapped_column(String(100), server_default="PROMOTION")
+    discount_tag: Mapped[str | None] = mapped_column(String(100))
+    valid_until: Mapped[str | None] = mapped_column(String(100))
+    link_url: Mapped[str | None] = mapped_column(String(255), server_default="/#products")
+    cta_text: Mapped[str | None] = mapped_column(String(100), server_default="ดูสินค้าโปรโมชั่น")
+    secondary_cta_text: Mapped[str | None] = mapped_column(String(100))
+    secondary_link_url: Mapped[str | None] = mapped_column(String(255))
+    is_featured: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true", index=True)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1083,21 +1102,7 @@ class Promotion(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (
-        CheckConstraint(
-            "promotion_type IN ('percentage_discount', 'fixed_discount', 'buy_x_get_y', 'free_item', 'min_purchase_discount')",
-            name="ck_promotion_type",
-        ),
-        CheckConstraint("end_date > start_date", name="ck_promotion_date_range"),
-        CheckConstraint("max_uses IS NULL OR max_uses > 0", name="ck_promotion_max_uses"),
-        Index(
-            "ix_promotions_active",
-            "organization_id",
-            "start_date",
-            "end_date",
-            postgresql_where="is_active = true",
-        ),
-    )
+    __table_args__ = (Index("ix_promotions_active_sort", "is_active", "sort_order"),)
 
 
 # ---------------------------------------------------------------------------
@@ -1107,9 +1112,7 @@ class PromotionBranch(Base):
     __tablename__ = "promotion_branches"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    promotion_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("promotions.id", ondelete="CASCADE"), nullable=False
-    )
+    promotion_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     branch_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("branches.id", ondelete="CASCADE"), nullable=False
     )
@@ -1126,9 +1129,7 @@ class PromotionRule(Base):
     __tablename__ = "promotion_rules"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    promotion_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("promotions.id", ondelete="CASCADE"), nullable=False
-    )
+    promotion_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     rule_type: Mapped[str] = mapped_column(String(30), nullable=False)
     target_type: Mapped[str] = mapped_column(String(30), nullable=False)
     target_id: Mapped[int | None] = mapped_column(BigInteger)
@@ -1162,9 +1163,7 @@ class Coupon(Base):
         BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
     )
     code: Mapped[str] = mapped_column(String(100), nullable=False)
-    promotion_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("promotions.id", ondelete="RESTRICT"), nullable=False
-    )
+    promotion_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     max_uses: Mapped[int | None] = mapped_column(Integer)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     max_uses_per_customer: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -1600,4 +1599,71 @@ class VerificationAttempt(Base):
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# ---------------------------------------------------------------------------
+# 46. CustomerAddress
+# ---------------------------------------------------------------------------
+class CustomerAddress(Base):
+    __tablename__ = "customer_addresses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    customer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False
+    )
+    recipient_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(50))
+    address_line: Mapped[str] = mapped_column(String(500), nullable=False)
+    subdistrict: Mapped[str | None] = mapped_column(String(255))
+    district: Mapped[str | None] = mapped_column(String(255))
+    province: Mapped[str | None] = mapped_column(String(255))
+    postal_code: Mapped[str | None] = mapped_column(String(20))
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_customer_addresses_customer", "customer_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 47. Review
+# ---------------------------------------------------------------------------
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    )
+    order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("orders.id", ondelete="SET NULL")
+    )
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("rating BETWEEN 1 AND 5", name="ck_review_rating_range"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'hidden')",
+            name="ck_review_status",
+        ),
+        Index("ix_reviews_product", "product_id"),
+        Index("ix_reviews_customer", "customer_id"),
     )

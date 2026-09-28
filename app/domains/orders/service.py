@@ -15,6 +15,7 @@ from app.db.models import (
 from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.orders import OrderRepository
 from app.db.repositories.payments import PaymentRepository
+from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
     InsufficientStockException,
@@ -51,6 +52,14 @@ class OrderService:
             )
 
     @staticmethod
+    def _order_source_value(value) -> str:
+        from app.shared.enums import OrderSource
+
+        if isinstance(value, OrderSource):
+            return value.value
+        return value
+
+    @staticmethod
     def _assert_transition(current: str, target: str) -> None:
         allowed = OrderService.VALID_TRANSITIONS.get(current, set())
         if target not in allowed:
@@ -65,6 +74,7 @@ class OrderService:
         branch_id: int,
         user_id: int,
         data: dict,
+        request_id: str = "",
     ) -> Order:
         idempotency_key = data.get("idempotency_key")
         if idempotency_key:
@@ -99,6 +109,7 @@ class OrderService:
             register_id=data.get("register_id"),
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
+            order_source=OrderService._order_source_value(data.get("order_source", "pos")),
             idempotency_key=idempotency_key,
         )
         OrderRepository.add_order(db, order)
@@ -174,6 +185,12 @@ class OrderService:
         db.flush()
         db.commit()
         db.refresh(order)
+        user_events.publish_user_event_sync(
+            "order_created",
+            user_id,
+            request_id,
+            {"order_id": order.id, "order_number": order.order_number},
+        )
         return order
 
     @staticmethod
@@ -280,7 +297,13 @@ class OrderService:
         }
 
     @staticmethod
-    def cancel_order(db: Session, org_id: int, order_id: int, user_id: int) -> Order:
+    def cancel_order(
+        db: Session,
+        org_id: int,
+        order_id: int,
+        user_id: int,
+        request_id: str = "",
+    ) -> Order:
         order = OrderRepository.get_org_order(db, org_id, order_id)
 
         if not order:
@@ -320,6 +343,12 @@ class OrderService:
         db.flush()
         db.commit()
         db.refresh(order)
+        user_events.publish_user_event_sync(
+            "order_cancelled",
+            user_id,
+            request_id,
+            {"order_id": order.id},
+        )
         return order
 
     #: Statuses from which checkout (settlement) is allowed.
@@ -337,6 +366,7 @@ class OrderService:
         order_id: int,
         user_id: int,
         data: dict,
+        request_id: str = "",
     ) -> Order:
         """Settle an order in a single transaction.
 
@@ -476,6 +506,12 @@ class OrderService:
         db.flush()
         db.commit()
         db.refresh(order)
+        user_events.publish_user_event_sync(
+            "purchase_completed",
+            user_id,
+            request_id,
+            {"order_id": order.id, "amount_paid": str(order.amount_paid)},
+        )
         return order
 
     @staticmethod

@@ -13,9 +13,10 @@ class ReportService:
         date_from: date,
         date_to: date,
         branch_id: int | None = None,
+        order_source: str | None = None,
     ) -> dict:
         totals = ReportRepository.sales_totals(
-            db, organization_id, date_from, date_to, branch_id
+            db, organization_id, date_from, date_to, branch_id, order_source
         )
 
         total_sales = float(totals.total_sales)
@@ -23,7 +24,7 @@ class ReportService:
         avg_order = total_sales / total_orders if total_orders else 0.0
 
         top_products = ReportRepository.top_products(
-            db, organization_id, date_from, date_to, branch_id
+            db, organization_id, date_from, date_to, branch_id, order_source
         )
 
         top_products_list = [
@@ -36,7 +37,7 @@ class ReportService:
         ]
 
         sales_by_hour = ReportRepository.sales_by_hour(
-            db, organization_id, date_from, date_to, branch_id
+            db, organization_id, date_from, date_to, branch_id, order_source
         )
 
         sales_by_hour_list = [

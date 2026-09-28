@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Coupon
 from app.db.repositories.coupons import CouponRepository
+from app.services import user_events
 from app.shared.exceptions import (
     ConflictException,
     NotFoundException,
@@ -53,6 +54,29 @@ class CouponService:
 
     @staticmethod
     def validate_coupon(
+        db: Session,
+        organization_id: int,
+        code: str,
+        customer_id: int,
+        user_id: int | None = None,
+        request_id: str = "",
+    ) -> dict:
+        result = CouponService._validate_coupon_inner(
+            db, organization_id, code, customer_id
+        )
+        # The validation operation itself ran to completion (a user tried to
+        # redeem `code`); valid=False is its normal business output, not a
+        # system failure, so the activity is still emitted.
+        user_events.publish_user_event_sync(
+            "coupon_validate",
+            user_id,
+            request_id,
+            {"coupon_id": result.get("coupon_id"), "valid": result["valid"]},
+        )
+        return result
+
+    @staticmethod
+    def _validate_coupon_inner(
         db: Session,
         organization_id: int,
         code: str,

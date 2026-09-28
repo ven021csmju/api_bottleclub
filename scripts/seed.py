@@ -92,6 +92,13 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("shifts.close", "shifts", "Close shifts"),
     ("shifts.cash_movement", "shifts", "Record cash movements"),
     ("shifts.read", "shifts", "View shifts"),
+    ("customer_addresses.read", "customer_addresses", "View customer addresses"),
+    ("customer_addresses.create", "customer_addresses", "Create customer addresses"),
+    ("customer_addresses.update", "customer_addresses", "Update customer addresses"),
+    ("customer_addresses.delete", "customer_addresses", "Delete customer addresses"),
+    ("reviews.read", "reviews", "View product reviews"),
+    ("reviews.create", "reviews", "Create product reviews"),
+    ("reviews.moderate", "reviews", "Moderate (approve/reject/hide) product reviews"),
 ]
 
 # Role -> list of permission codes
@@ -117,11 +124,15 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "settings.read", "settings.update",
         "branches.read", "branches.create", "branches.update",
         "shifts.open", "shifts.close", "shifts.cash_movement", "shifts.read",
+        "customer_addresses.read", "customer_addresses.create", "customer_addresses.update", "customer_addresses.delete",
+        "reviews.read", "reviews.create", "reviews.moderate",
     ],
     "Cashier": [
         "orders.create", "orders.read", "orders.update", "orders.complete",
         "payments.create", "payments.read",
         "customers.read", "customers.create",
+        "customer_addresses.read", "customer_addresses.create",
+        "reviews.read", "reviews.create",
         "loyalty.earn", "loyalty.redeem", "loyalty.read",
         "inventory.read",
         "shifts.read",

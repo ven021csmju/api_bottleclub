@@ -68,6 +68,13 @@ class ItemStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class OrderSource(str, enum.Enum):
+    POS = "pos"
+    ECOMMERCE = "ecommerce"
+    QR = "qr"
+    PHONE = "phone"
+
+
 class PaymentMethod(str, enum.Enum):
     CASH = "cash"
     CREDIT_CARD = "credit_card"

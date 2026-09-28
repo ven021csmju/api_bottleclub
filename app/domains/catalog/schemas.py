@@ -53,6 +53,7 @@ class ProductCreate(BaseModel):
     unit: str = Field("each", max_length=20)
     track_inventory: bool = True
     has_expiry: bool = False
+    image_url: Optional[str] = None
 
 
 class ProductUpdate(BaseModel):
@@ -66,6 +67,7 @@ class ProductUpdate(BaseModel):
     is_active: Optional[bool] = None
     track_inventory: Optional[bool] = None
     has_expiry: Optional[bool] = None
+    image_url: Optional[str] = None
 
 
 class ProductResponse(BaseModel):
@@ -80,6 +82,7 @@ class ProductResponse(BaseModel):
     is_active: bool
     track_inventory: bool
     has_expiry: bool
+    image_url: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

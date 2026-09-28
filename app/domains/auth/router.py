@@ -28,6 +28,7 @@ def login(
         password=body.password,
         ip_address=ip_address,
         user_agent=user_agent,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
 
@@ -53,7 +54,12 @@ def logout(
     db: Session = Depends(get_db),
 ) -> Response:
     token_hash: str = getattr(request.state, "refresh_token_hash", "")
-    AuthService.logout(db=db, user_id=user.id, token_hash=token_hash)
+    AuthService.logout(
+        db=db,
+        user_id=user.id,
+        token_hash=token_hash,
+        request_id=getattr(request.state, "request_id", ""),
+    )
     return Response(status_code=204)
 
 

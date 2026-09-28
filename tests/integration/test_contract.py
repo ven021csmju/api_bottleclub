@@ -55,19 +55,27 @@ class TestRateLimit:
 
             pytest.skip("rate limiting disabled")
 
-        statuses = []
-        for _ in range(60):
-            resp = client.post(
-                "/api/v1/auth/login",
-                json={"username": "ghost", "password": "nope"},
-            )
-            statuses.append(resp.status_code)
-            if resp.status_code == 429:
-                body = resp.json()
-                assert {"detail", "code", "request_id"} == set(body)
-                assert body["code"] == "RATE_LIMIT_EXCEEDED"
-                break
-        else:
-            raise AssertionError("expected a 429 after exceeding login rate limit")
+        from app.middleware.rate_limit import limiter
 
-        assert any(code == 429 for code in statuses)
+        # The shared `client` fixture disables the limiter by default; this
+        # test re-enables it to verify enforcement end-to-end.
+        limiter.enabled = True
+        try:
+            statuses = []
+            for _ in range(60):
+                resp = client.post(
+                    "/api/v1/auth/login",
+                    json={"username": "ghost", "password": "nope"},
+                )
+                statuses.append(resp.status_code)
+                if resp.status_code == 429:
+                    body = resp.json()
+                    assert {"detail", "code", "request_id"} == set(body)
+                    assert body["code"] == "RATE_LIMIT_EXCEEDED"
+                    break
+            else:
+                raise AssertionError("expected a 429 after exceeding login rate limit")
+
+            assert any(code == 429 for code in statuses)
+        finally:
+            limiter.enabled = False

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -19,6 +19,7 @@ from app.domains.catalog.schemas import (
 from app.domains.catalog.service import CatalogService
 from app.middleware.auth import get_current_branch, require_permission
 from app.db.models import User
+from app.services import user_events
 
 router = APIRouter()
 
@@ -69,6 +70,7 @@ def delete_category(
 # ---------------------------------------------------------------------------
 @router.get("/products", response_model=list[ProductResponse])
 def list_products(
+    request: Request,
     page: int = 1,
     per_page: int = 20,
     search: str | None = None,
@@ -80,16 +82,39 @@ def list_products(
     result = CatalogService.list_products(
         db, user.organization_id, page, per_page, search, category_id, is_active
     )
+    request_id = getattr(request.state, "request_id", "")
+    if search:
+        user_events.publish_user_event_sync(
+            "product_search",
+            user.id,
+            request_id,
+            {"query": search, "result_count": result.total},
+        )
+    else:
+        user_events.publish_user_event_sync(
+            "product_list_browse",
+            user.id,
+            request_id,
+            {"page": page, "per_page": per_page, "result_count": result.total},
+        )
     return result.products
 
 
 @router.get("/products/{product_id}", response_model=ProductResponse)
 def get_product(
+    request: Request,
     product_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("catalog.read")),
 ):
-    return CatalogService.get_product(db, user.organization_id, product_id)
+    product = CatalogService.get_product(db, user.organization_id, product_id)
+    user_events.publish_user_event_sync(
+        "product_view",
+        user.id,
+        getattr(request.state, "request_id", ""),
+        {"product_id": product_id},
+    )
+    return product
 
 
 @router.post("/products", response_model=ProductResponse, status_code=201)

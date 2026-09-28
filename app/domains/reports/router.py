@@ -15,6 +15,7 @@ from app.domains.reports.schemas import (
 )
 from app.domains.reports.service import ReportService
 from app.middleware.auth import require_permission
+from app.shared.enums import OrderSource
 from app.shared.exceptions import AppException
 from app.db.models import User
 
@@ -42,6 +43,7 @@ def get_sales_report(
     to_date: Optional[date] = Query(None, alias="to_date"),
     group_by: Optional[str] = Query(None),
     branch_id: Optional[int] = Query(None),
+    order_source: Optional[OrderSource] = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("reports.sales")),
 ) -> SalesReportResponse:
@@ -54,13 +56,14 @@ def get_sales_report(
             detail="Either 'date_from/date_to' or 'from_date/to_date' query params are required.",
             code="VALIDATION_ERROR",
         )
+    order_source_value = order_source.value if order_source else None
     result = ReportService.get_sales_report(
-        db, user.organization_id, resolved_from, resolved_to, branch_id
+        db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value
     )
     # Optional ``group_by`` — currently only used to switch category grouping.
     if group_by == "category":
         result["sales_by_category"] = _category_breakdown(
-            db, user.organization_id, resolved_from, resolved_to, branch_id
+            db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value
         )
     return SalesReportResponse(**result)
 
@@ -135,6 +138,7 @@ def _category_breakdown(
     date_from: date,
     date_to: date,
     branch_id: Optional[int],
+    order_source: Optional[str] = None,
 ) -> list[dict]:
     from app.db.repositories.reports.report_repository import ReportRepository
     from app.db.models import Category, Product, OrderItem, Order
@@ -148,6 +152,8 @@ def _category_breakdown(
     ]
     if branch_id:
         order_filter.append(Order.branch_id == branch_id)
+    if order_source:
+        order_filter.append(Order.order_source == order_source)
 
     rows = db.execute(
         select(

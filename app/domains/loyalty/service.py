@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Customer, LoyaltyTransaction
 from app.db.repositories.loyalty import LoyaltyRepository
+from app.services import user_events
 from app.shared.exceptions import BadRequestException, NotFoundException
 from app.shared.pagination import paginate
 
@@ -19,6 +20,7 @@ class LoyaltyService:
         reference_type: str | None = None,
         reference_id: int | None = None,
         notes: str | None = None,
+        request_id: str = "",
     ) -> LoyaltyTransaction:
         customer = LoyaltyRepository.find_org_customer(db, organization_id, customer_id)
         if customer is None:
@@ -46,6 +48,18 @@ class LoyaltyService:
         customer.loyalty_points_balance = points_after
         db.commit()
         db.refresh(transaction)
+        user_events.publish_user_event_sync(
+            "loyalty_earn",
+            user_id,
+            request_id,
+            {
+                "customer_id": customer_id,
+                "points": points,
+                "transaction_id": transaction.id,
+                "reference_type": reference_type,
+                "reference_id": reference_id,
+            },
+        )
         return transaction
 
     @staticmethod
@@ -58,6 +72,7 @@ class LoyaltyService:
         reference_type: str | None = None,
         reference_id: int | None = None,
         notes: str | None = None,
+        request_id: str = "",
     ) -> LoyaltyTransaction:
         customer = LoyaltyRepository.find_org_customer(db, organization_id, customer_id)
         if customer is None:
@@ -74,7 +89,7 @@ class LoyaltyService:
         transaction = LoyaltyTransaction(
             customer_id=customer_id,
             transaction_type="redeem",
-            points=points,
+            points=-points,
             points_before=points_before,
             points_after=points_after,
             reference_type=reference_type,
@@ -87,6 +102,18 @@ class LoyaltyService:
         customer.loyalty_points_balance = points_after
         db.commit()
         db.refresh(transaction)
+        user_events.publish_user_event_sync(
+            "loyalty_redeem",
+            user_id,
+            request_id,
+            {
+                "customer_id": customer_id,
+                "points": points,
+                "transaction_id": transaction.id,
+                "reference_type": reference_type,
+                "reference_id": reference_id,
+            },
+        )
         return transaction
 
     @staticmethod

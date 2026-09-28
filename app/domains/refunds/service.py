@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Refund
 from app.db.repositories.refunds import RefundRepository
+from app.services import user_events
 from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
     BadRequestException,
@@ -94,4 +95,11 @@ class RefundService:
         db.flush()
         db.commit()
         db.refresh(refund)
+        # Emitted after the transaction committed; never raises.
+        user_events.publish_user_event_sync(
+            "refund_created",
+            user_id,
+            audit.request_id,
+            {"order_id": order.id, "refund_id": refund.id},
+        )
         return refund

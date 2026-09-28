@@ -24,6 +24,14 @@ class SlipVerifyRepository:
 
     @staticmethod
     def create_verification(db: Session, **kwargs) -> PaymentVerification:
+        # risk_score is JSONB (stored as a JSON number); Decimal is not
+        # JSON-serializable, so store a JSON-serializable primitive.
+        if kwargs.get("risk_score") is not None and "risk_score" in kwargs:
+            kwargs["risk_score"] = (
+                float(kwargs["risk_score"])
+                if isinstance(kwargs["risk_score"], Decimal)
+                else kwargs["risk_score"]
+            )
         verification = PaymentVerification(**kwargs)
         db.add(verification)
         db.flush()
@@ -69,7 +77,9 @@ class SlipVerifyRepository:
             return None
 
         verification.status = status
-        verification.risk_score = risk_score
+        verification.risk_score = (
+            float(risk_score) if isinstance(risk_score, Decimal) else risk_score
+        )
         verification.risk_signals = risk_signals
         verification.failure_reason = failure_reason
         verification.updated_at = datetime.now(timezone.utc)
@@ -111,7 +121,8 @@ class SlipVerifyRepository:
             ocr_amount=ocr_amount,
             http_status=http_status,
             status=status,
-            risk_score=risk_score,
+            # risk_score is a JSONB column; Decimal is not JSON-serializable.
+            risk_score=float(risk_score) if risk_score is not None else None,
             failure_reason=failure_reason,
         )
         db.add(attempt)

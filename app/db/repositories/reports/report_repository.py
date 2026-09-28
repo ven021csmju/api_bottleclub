@@ -18,7 +18,13 @@ from app.db.models import (
 
 class ReportRepository:
     @staticmethod
-    def _order_filter(organization_id: int, date_from: date, date_to: date, branch_id: int | None):
+    def _order_filter(
+        organization_id: int,
+        date_from: date,
+        date_to: date,
+        branch_id: int | None = None,
+        order_source: str | None = None,
+    ):
         order_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
@@ -27,14 +33,21 @@ class ReportRepository:
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
+        if order_source:
+            order_filter.append(Order.order_source == order_source)
         return order_filter
 
     @staticmethod
     def sales_totals(
-        db: Session, organization_id: int, date_from: date, date_to: date, branch_id: int | None
+        db: Session,
+        organization_id: int,
+        date_from: date,
+        date_to: date,
+        branch_id: int | None = None,
+        order_source: str | None = None,
     ):
         order_filter = ReportRepository._order_filter(
-            organization_id, date_from, date_to, branch_id
+            organization_id, date_from, date_to, branch_id, order_source
         )
         return db.execute(
             select(
@@ -45,10 +58,15 @@ class ReportRepository:
 
     @staticmethod
     def top_products(
-        db: Session, organization_id: int, date_from: date, date_to: date, branch_id: int | None
+        db: Session,
+        organization_id: int,
+        date_from: date,
+        date_to: date,
+        branch_id: int | None = None,
+        order_source: str | None = None,
     ) -> list[tuple]:
         order_filter = ReportRepository._order_filter(
-            organization_id, date_from, date_to, branch_id
+            organization_id, date_from, date_to, branch_id, order_source
         )
         return db.execute(
             select(
@@ -65,10 +83,15 @@ class ReportRepository:
 
     @staticmethod
     def sales_by_hour(
-        db: Session, organization_id: int, date_from: date, date_to: date, branch_id: int | None
+        db: Session,
+        organization_id: int,
+        date_from: date,
+        date_to: date,
+        branch_id: int | None = None,
+        order_source: str | None = None,
     ) -> list[tuple]:
         order_filter = ReportRepository._order_filter(
-            organization_id, date_from, date_to, branch_id
+            organization_id, date_from, date_to, branch_id, order_source
         )
         return db.execute(
             select(

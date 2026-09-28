@@ -56,3 +56,8 @@ class InvalidOrderStateException(AppException):
 class IdempotencyConflictException(AppException):
     def __init__(self, detail: str = "Idempotency key conflict", code: str | None = None) -> None:
         super().__init__(status_code=409, detail=detail, code=code or "IDEMPOTENCY_CONFLICT")
+
+
+class DatabaseException(AppException):
+    def __init__(self, detail: str = "Database operation failed") -> None:
+        super().__init__(status_code=500, detail=detail, code="DATABASE_ERROR")

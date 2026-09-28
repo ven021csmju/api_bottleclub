@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.middleware.auth import get_current_user
 from app.db.models import User
+from app.services import user_events
 
 from .schemas import ErrorResponse, VerificationResponse
 from .service import SlipVerifyService
@@ -14,6 +15,18 @@ from .service import SlipVerifyService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: Statuses where the uploaded slip image was accepted into the system (a
+#: Verification record was created for it). Everything else rejected the
+#: upload before a record existed, so no ``slip_upload`` event is emitted.
+_UPLOAD_ACCEPTED_STATUSES = {
+    "ocr_failed",
+    "verified",
+    "review",
+    "rejected",
+    "amount_mismatch",
+    "duplicate_reference",
+}
 
 
 async def _process_slip(
@@ -45,6 +58,31 @@ async def _process_slip(
         status_code = 422
     elif result.get("status") in ("order_already_paid",):
         status_code = 400
+
+    status = result.get("status")
+    if status in _UPLOAD_ACCEPTED_STATUSES:
+        verification_id = None
+        storage_key = None
+        data = result.get("data")
+        if isinstance(data, dict) and data.get("verification_id"):
+            verification_id = data["verification_id"]
+        latest = SlipVerifyService.list_verifications_by_order(db, order_id, limit=1)
+        if latest:
+            verification_id = verification_id or latest[0].id
+            storage_key = latest[0].image_storage_key
+        # Async entry point (this endpoint runs in the event loop), so use the
+        # awaitable helper; publish_user_event never raises.
+        await user_events.publish_user_event(
+            "slip_upload",
+            user.id,
+            getattr(request.state, "request_id", ""),
+            {
+                "order_id": order_id,
+                "verification_id": verification_id,
+                "storage_key": storage_key,
+                "status": status,
+            },
+        )
 
     return JSONResponse(status_code=status_code, content=result)
 

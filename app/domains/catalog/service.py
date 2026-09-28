@@ -190,6 +190,7 @@ class CatalogService:
             unit=data.unit,
             track_inventory=data.track_inventory,
             has_expiry=data.has_expiry,
+            image_url=data.image_url,
         )
         CatalogRepository.add_product(db, product)
         db.commit()

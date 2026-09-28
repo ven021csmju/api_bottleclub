@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -32,6 +32,7 @@ router = APIRouter()
 
 @router.post("/", response_model=OrderResponse)
 def create_order(
+    request: Request,
     body: OrderCreate,
     user: User = Depends(require_permission("orders.create")),
     branch_id: int = Depends(get_current_branch),
@@ -43,6 +44,7 @@ def create_order(
         branch_id=branch_id,
         user_id=user.id,
         data=body.model_dump(),
+        request_id=getattr(request.state, "request_id", ""),
     )
     return OrderResponse.model_validate(order)
 
@@ -129,6 +131,7 @@ def update_order_status(
 
 @router.post("/{order_id}/cancel", response_model=OrderResponse)
 def cancel_order(
+    request: Request,
     order_id: int,
     body: OrderCancel,
     user: User = Depends(require_permission("orders.cancel")),
@@ -139,6 +142,7 @@ def cancel_order(
         org_id=user.organization_id,
         order_id=order_id,
         user_id=user.id,
+        request_id=getattr(request.state, "request_id", ""),
     )
     return OrderResponse.model_validate(order)
 
@@ -159,6 +163,7 @@ def complete_order(
 
 @router.post("/{order_id}/checkout", response_model=CheckoutResponse)
 def checkout_order(
+    request: Request,
     order_id: int,
     body: CheckoutRequest,
     user: User = Depends(require_permission("payments.create")),
@@ -170,6 +175,7 @@ def checkout_order(
         order_id=order_id,
         user_id=user.id,
         data=body.model_dump(),
+        request_id=getattr(request.state, "request_id", ""),
     )
     return CheckoutResponse.model_validate(order)
 

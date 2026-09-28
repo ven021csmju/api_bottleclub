@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Generator
 
+from dotenv import load_dotenv
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -16,9 +17,10 @@ from app.shared.security import create_access_token, hash_password
 
 # ---------------------------------------------------------------------------
 # Use a dedicated test database.  The env var TEST_DATABASE_URL can be set
-# in CI or locally; fall back to a PostgreSQL URL that points at the docker
-# postgres instance with a separate database name.
+# in CI or locally (e.g. in .env); fall back to a PostgreSQL URL that points
+# at the docker postgres instance with a separate database name.
 # ---------------------------------------------------------------------------
+load_dotenv()
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+psycopg://postgres:postgres@localhost:5432/bottle_club_test",
@@ -57,11 +59,21 @@ def client(session: Session) -> Generator[TestClient, None, None]:
         finally:
             pass
 
-    app = create_app()
-    app.dependency_overrides[get_db] = _override_get_db
+    from app.middleware.rate_limit import limiter
 
-    with TestClient(app, raise_server_exceptions=False) as c:
-        yield c
+    # Rate limits must not apply during tests unless a test explicitly
+    # re-enables the limiter (see TestRateLimit in test_contract.py). The
+    # in-memory counter would otherwise leak between tests and cause flaky 429s.
+    prev_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        app = create_app()
+        app.dependency_overrides[get_db] = _override_get_db
+
+        with TestClient(app, raise_server_exceptions=False) as c:
+            yield c
+    finally:
+        limiter.enabled = prev_enabled
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -60,11 +60,17 @@ def delete_coupon(
 
 @router.post("/validate", response_model=CouponValidationResult)
 def validate_coupon(
+    request: Request,
     data: CouponValidate,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("coupons.read")),
 ) -> CouponValidationResult:
     result = CouponService.validate_coupon(
-        db, user.organization_id, data.code, data.customer_id
+        db,
+        user.organization_id,
+        data.code,
+        data.customer_id,
+        user_id=user.id,
+        request_id=getattr(request.state, "request_id", ""),
     )
     return CouponValidationResult(**result)

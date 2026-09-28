@@ -4,6 +4,10 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.shared.enums import OrderSource
+
+ORDER_SOURCE_VALUES = tuple(s.value for s in OrderSource)
+
 
 class OrderItemCreate(BaseModel):
     product_id: int
@@ -21,6 +25,7 @@ class OrderCreate(BaseModel):
     discount_amount: Decimal = Field(Decimal("0"), ge=0, decimal_places=2)
     notes: Optional[str] = None
     idempotency_key: Optional[str] = None
+    order_source: OrderSource = Field(OrderSource.POS, description="Sales channel that created the order")
 
 
 class OrderItemResponse(BaseModel):
@@ -43,6 +48,7 @@ class OrderResponse(BaseModel):
     id: int
     order_number: str
     status: str
+    order_source: str = "pos"
     customer_id: Optional[int] = None
     user_id: int
     shift_id: Optional[int] = None

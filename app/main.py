@@ -8,15 +8,24 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config.settings import settings
+from app.db.mongodb import close_connection, get_mongodb_health
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.envelope import ResponseEnvelopeMiddleware
 from app.middleware.rate_limit import limiter
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
+from sqlalchemy.exc import SQLAlchemyError
 
 
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "")
+
+
+async def lifespan(app: FastAPI):
+    # MongoDB connects lazily on first use. Deliberately NOT touching it here
+    # so a down SSH tunnel / MongoDB never blocks or delays app startup.
+    yield
+    close_connection()
 
 
 def create_app() -> FastAPI:
@@ -24,6 +33,7 @@ def create_app() -> FastAPI:
         title="The Bottle Club",
         description="POS System API for The Bottle Club",
         version="1.0.0",
+        lifespan=lifespan,
     )
     app.state.limiter = limiter
 
@@ -52,6 +62,20 @@ def create_app() -> FastAPI:
             content={
                 "detail": exc.detail,
                 "code": exc.code,
+                "request_id": _request_id(request),
+            },
+        )
+
+    @app.exception_handler(SQLAlchemyError)
+    async def database_exception_handler(
+        request: Request,
+        exc: SQLAlchemyError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Database operation failed",
+                "code": "DATABASE_ERROR",
                 "request_id": _request_id(request),
             },
         )
@@ -112,6 +136,12 @@ def create_app() -> FastAPI:
     def health_check() -> dict[str, str]:
         return {"status": "healthy"}
 
+    # MongoDB status reported separately: a MongoDB outage (e.g. dead SSH
+    # tunnel) must NOT make the whole service unhealthy.
+    @app.get("/health/mongodb", tags=["Health"])
+    def mongodb_health() -> dict:
+        return get_mongodb_health()
+
     # --- Domain routers ---
     from app.domains.auth.router import router as auth_router
     from app.domains.users.router import router as users_router
@@ -136,6 +166,8 @@ def create_app() -> FastAPI:
     from app.domains.audit.router import router as audit_router
     from app.domains.slip_verify.router import router as slip_verify_router
     from app.domains.wine_products.router import router as wine_products_router
+    from app.domains.customer_addresses.router import router as customer_addresses_router
+    from app.domains.reviews.router import router as reviews_router
 
     app.include_router(
         auth_router,
@@ -217,7 +249,7 @@ def create_app() -> FastAPI:
 
     app.include_router(
         promotions_router,
-        prefix="/api/v1/promotions",
+        prefix="/api",
         tags=["Promotions"],
     )
 
@@ -273,6 +305,18 @@ def create_app() -> FastAPI:
         wine_products_router,
         prefix="/api/v1/wine-products",
         tags=["Wine Products"],
+    )
+
+    app.include_router(
+        customer_addresses_router,
+        prefix="/api/v1/customer-addresses",
+        tags=["Customer Addresses"],
+    )
+
+    app.include_router(
+        reviews_router,
+        prefix="/api/v1/reviews",
+        tags=["Reviews"],
     )
 
     return app

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Payment, Refund
 from app.db.repositories.payments import PaymentRepository
+from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
     NotFoundException,
@@ -68,6 +69,7 @@ class PaymentService:
         order_id: int,
         user_id: int,
         data: dict,
+        request_id: str = "",
     ) -> Refund:
         order = PaymentRepository.get_org_order(db, org_id, order_id)
 
@@ -98,4 +100,11 @@ class PaymentService:
         db.commit()
 
         db.refresh(refund)
+        # Emitted after the transaction committed; never raises.
+        user_events.publish_user_event_sync(
+            "refund_created",
+            user_id,
+            request_id,
+            {"order_id": order_id, "refund_id": refund.id},
+        )
         return refund

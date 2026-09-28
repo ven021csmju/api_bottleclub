@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Inventory, Refund, Return, ReturnItem, StockMovement
 from app.db.repositories.returns import ReturnRepository
+from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
     InvalidOrderStateException,
@@ -18,6 +19,7 @@ class ReturnService:
         branch_id: int,
         user_id: int,
         data: dict,
+        request_id: str = "",
     ) -> Return:
         order = ReturnRepository.get_org_order(db, org_id, data["order_id"])
 
@@ -27,6 +29,7 @@ class ReturnService:
         return_number = generate_return_number(db)
 
         ret = Return(
+            organization_id=org_id,
             order_id=order.id,
             branch_id=branch_id,
             return_number=return_number,
@@ -125,6 +128,13 @@ class ReturnService:
         db.flush()
         db.commit()
         db.refresh(ret)
+        # Emitted after the transaction committed; never raises.
+        user_events.publish_user_event_sync(
+            "return_created",
+            user_id,
+            request_id,
+            {"order_id": order.id, "return_id": ret.id},
+        )
         return ret
 
     @staticmethod

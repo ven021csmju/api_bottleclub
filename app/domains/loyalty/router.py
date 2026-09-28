@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -22,6 +22,7 @@ router = APIRouter()
 
 @router.post("/earn", response_model=LoyaltyTransactionResponse, status_code=201)
 def earn_points(
+    request: Request,
     data: LoyaltyPointsEarn,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("loyalty.earn")),
@@ -35,11 +36,13 @@ def earn_points(
         reference_type=data.reference_type,
         reference_id=data.reference_id,
         notes=data.notes,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
 
 @router.post("/redeem", response_model=LoyaltyTransactionResponse, status_code=201)
 def redeem_points(
+    request: Request,
     data: LoyaltyPointsRedeem,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("loyalty.redeem")),
@@ -53,6 +56,7 @@ def redeem_points(
         reference_type=data.reference_type,
         reference_id=data.reference_id,
         notes=data.notes,
+        request_id=getattr(request.state, "request_id", ""),
     )
 
 
