@@ -266,3 +266,5 @@ event_type, severity, request_id)
   โดยมี cooldown retry ตาม `MONGODB_RETRY_COOLDOWN_SECONDS`
 - Server ที่ใช้รัน MongoDB 4.4 (CPU ไม่รองรับ AVX) — อย่าอัปเกรดเป็น MongoDB 5.0+ บนเครื่องนี้
 ```
+
+<!-- deploy test 2026-09-29 -->
