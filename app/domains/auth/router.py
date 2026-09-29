@@ -1,3 +1,4 @@
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -16,6 +17,7 @@ from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 GOOGLE_STATE_COOKIE = "google_oauth_state"
 GOOGLE_NONCE_COOKIE = "google_oauth_nonce"
@@ -51,15 +53,37 @@ def google_callback(
     error: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> TokenResponse:
+    logger.debug(
+        "GOOGLE CALLBACK stage=start has_code=%s has_state=%s has_error=%s",
+        bool(code),
+        bool(state),
+        bool(error),
+    )
     if error or not code or not state:
         raise UnauthorizedException(detail="Google authentication was cancelled or failed")
     expected_state = request.cookies.get(GOOGLE_STATE_COOKIE)
     expected_nonce = request.cookies.get(GOOGLE_NONCE_COOKIE)
-    if not expected_state or not expected_nonce or not secrets.compare_digest(state, expected_state):
+    state_match = (
+        bool(state)
+        and bool(expected_state)
+        and secrets.compare_digest(state, expected_state)
+    )
+    logger.debug(
+        "GOOGLE CALLBACK stage=cookies state_present=%s nonce_present=%s state_match=%s",
+        bool(expected_state),
+        bool(expected_nonce),
+        state_match,
+    )
+    if not expected_state or not expected_nonce or not state_match:
         raise UnauthorizedException(detail="Invalid Google OAuth state")
 
+    logger.debug("GOOGLE CALLBACK stage=exchange_code start")
     token_data = exchange_code(code)
+    logger.debug("GOOGLE CALLBACK stage=exchange_code success")
+    logger.debug("GOOGLE CALLBACK stage=verify_id_token start")
     claims = verify_id_token(token_data["id_token"], expected_nonce)
+    logger.debug("GOOGLE CALLBACK stage=verify_id_token success")
+    logger.debug("GOOGLE CALLBACK stage=login_with_google start")
     token_response = AuthService.login_with_google(
         db=db,
         claims=claims,
@@ -67,6 +91,7 @@ def google_callback(
         user_agent=request.headers.get("User-Agent", ""),
         request_id=getattr(request.state, "request_id", ""),
     )
+    logger.debug("GOOGLE CALLBACK stage=login_with_google success")
     http_response.delete_cookie(GOOGLE_STATE_COOKIE)
     http_response.delete_cookie(GOOGLE_NONCE_COOKIE)
     return token_response
