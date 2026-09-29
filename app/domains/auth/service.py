@@ -1,10 +1,12 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.mongodb import sync_log_user_activity
-from app.db.models import User
+from app.db.models import Branch, Role, User, UserRole
 from app.db.repositories.auth import AuthRepository
 from app.services import user_events
 from app.shared.exceptions import (
@@ -19,6 +21,7 @@ from app.shared.security import (
     decode_token,
     hash_token,
     verify_password,
+    hash_password,
 )
 
 MAX_FAILED_ATTEMPTS = 5
@@ -192,6 +195,117 @@ class AuthService:
             refresh_token=refresh_raw,
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+
+    @classmethod
+    def login_with_google(
+        cls,
+        db: Session,
+        claims: dict,
+        ip_address: str,
+        user_agent: str,
+        request_id: str = "",
+    ) -> TokenResponse:
+        email = claims["email"].strip().lower()
+        matches = AuthRepository.find_by_email(db, email)
+        if len(matches) > 1:
+            raise BadRequestException(detail="Google email belongs to multiple accounts")
+
+        user = matches[0] if matches else cls._create_google_user(db, claims)
+        if user.status != "active" or user.deleted_at is not None:
+            raise UnauthorizedException(detail="User account is inactive")
+
+        now = datetime.now(timezone.utc)
+        user.last_login_at = now
+        user.last_login_ip = ip_address
+        db.commit()
+
+        permissions = cls._load_user_permissions(db, user)
+        branches = cls._load_user_branches(db, user)
+        access_token = create_access_token(
+            user_id=user.id,
+            org_id=user.organization_id,
+            permissions=permissions,
+            branches=branches,
+        )
+        refresh_raw = create_refresh_token(
+            user_id=user.id,
+            device_info=user_agent,
+            ip=ip_address,
+        )
+        AuthRepository.add_refresh_token(
+            db,
+            user_id=user.id,
+            token_hash=hash_token(refresh_raw),
+            device_info=user_agent,
+            ip_address=ip_address,
+            expires_at=now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        )
+        db.commit()
+
+        user_events.publish_user_event_sync(
+            "login", user.id, request_id, {"success": True, "provider": "google"}
+        )
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_raw,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+
+    @staticmethod
+    def _create_google_user(db: Session, claims: dict) -> User:
+        if settings.GOOGLE_DEFAULT_ORGANIZATION_ID is None or not settings.GOOGLE_DEFAULT_ROLE_NAME:
+            raise BadRequestException(
+                detail="Google account is new and default organization/role is not configured"
+            )
+
+        organization_id = settings.GOOGLE_DEFAULT_ORGANIZATION_ID
+        role = db.execute(
+            select(Role).where(
+                Role.organization_id == organization_id,
+                Role.name == settings.GOOGLE_DEFAULT_ROLE_NAME,
+            )
+        ).scalar_one_or_none()
+        if role is None:
+            raise BadRequestException(detail="Configured Google default role was not found")
+
+        if settings.GOOGLE_DEFAULT_BRANCH_ID is not None:
+            branch = db.execute(
+                select(Branch).where(
+                    Branch.id == settings.GOOGLE_DEFAULT_BRANCH_ID,
+                    Branch.organization_id == organization_id,
+                )
+            ).scalar_one_or_none()
+            if branch is None:
+                raise BadRequestException(
+                    detail="Configured Google default branch was not found"
+                )
+
+        email = claims["email"].strip().lower()
+        username = email.split("@", 1)[0][:80] or "google-user"
+        base_username = username
+        suffix = 1
+        while AuthRepository.find_by_username_in_org(db, organization_id, username):
+            suffix += 1
+            username = f"{base_username[:(100 - len(str(suffix)) - 1)]}-{suffix}"
+
+        user = User(
+            organization_id=organization_id,
+            username=username,
+            email=email,
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+            display_name=claims.get("name") or email,
+            status="active",
+        )
+        db.add(user)
+        db.flush()
+        db.add(
+            UserRole(
+                user_id=user.id,
+                role_id=role.id,
+                branch_id=settings.GOOGLE_DEFAULT_BRANCH_ID,
+            )
+        )
+        return user
 
     @staticmethod
     def logout(

@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Request, Response
+import secrets
+
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
@@ -6,11 +9,67 @@ from app.db.session import get_db
 from app.middleware.auth import get_current_user
 from app.middleware.rate_limit import limiter
 from app.db.models import User
+from app.shared.exceptions import UnauthorizedException
 
 from .schemas import LoginRequest, RefreshTokenRequest, TokenResponse, UserProfileResponse
 from .service import AuthService
+from .google import authorization_url, exchange_code, verify_id_token
 
 router = APIRouter()
+
+GOOGLE_STATE_COOKIE = "google_oauth_state"
+GOOGLE_NONCE_COOKIE = "google_oauth_nonce"
+
+
+def _secure_cookie() -> bool:
+    return settings.ENVIRONMENT.lower() in {"production", "staging"}
+
+
+@router.get("/google", include_in_schema=True)
+def google_login() -> RedirectResponse:
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    response = RedirectResponse(authorization_url(state, nonce), status_code=302)
+    for name, value in ((GOOGLE_STATE_COOKIE, state), (GOOGLE_NONCE_COOKIE, nonce)):
+        response.set_cookie(
+            name,
+            value,
+            httponly=True,
+            secure=_secure_cookie(),
+            samesite="lax",
+            max_age=600,
+        )
+    return response
+
+
+@router.get("/google/callback", response_model=TokenResponse)
+def google_callback(
+    request: Request,
+    http_response: Response,
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    if error or not code or not state:
+        raise UnauthorizedException(detail="Google authentication was cancelled or failed")
+    expected_state = request.cookies.get(GOOGLE_STATE_COOKIE)
+    expected_nonce = request.cookies.get(GOOGLE_NONCE_COOKIE)
+    if not expected_state or not expected_nonce or not secrets.compare_digest(state, expected_state):
+        raise UnauthorizedException(detail="Invalid Google OAuth state")
+
+    token_data = exchange_code(code)
+    claims = verify_id_token(token_data["id_token"], expected_nonce)
+    token_response = AuthService.login_with_google(
+        db=db,
+        claims=claims,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("User-Agent", ""),
+        request_id=getattr(request.state, "request_id", ""),
+    )
+    http_response.delete_cookie(GOOGLE_STATE_COOKIE)
+    http_response.delete_cookie(GOOGLE_NONCE_COOKIE)
+    return token_response
 
 
 @router.post("/login", response_model=TokenResponse)

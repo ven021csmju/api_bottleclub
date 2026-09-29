@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import LoginAttempt, Permission, RefreshToken, RolePermission, User, UserRole
@@ -11,6 +11,26 @@ class AuthRepository:
     def find_by_username(db: Session, username: str) -> User | None:
         return db.execute(
             select(User).where(User.username == username)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def find_by_email(db: Session, email: str) -> list[User]:
+        return list(
+            db.execute(
+                select(User).where(func.lower(User.email) == email.lower())
+            ).scalars()
+        )
+
+    @staticmethod
+    def find_by_username_in_org(
+        db: Session, organization_id: int, username: str
+    ) -> User | None:
+        return db.execute(
+            select(User).where(
+                User.organization_id == organization_id,
+                User.username == username,
+                User.deleted_at.is_(None),
+            )
         ).scalar_one_or_none()
 
     @staticmethod
