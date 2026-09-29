@@ -53,6 +53,31 @@ def test_callback_rejects_invalid_state_without_calling_google(monkeypatch):
     assert response.json()["code"] == "UNAUTHORIZED"
 
 
+def test_google_login_sets_production_state_and_nonce_cookies(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "client-id")
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "server-secret")
+    monkeypatch.setattr(
+        settings,
+        "GOOGLE_REDIRECT_URI",
+        "https://api.example.test/api/v1/auth/google/callback",
+    )
+    app = create_app()
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.get("/api/v1/auth/google")
+
+    assert response.status_code == 302
+    cookies = response.headers.get_list("set-cookie")
+    assert len(cookies) == 2
+    for cookie_name in ("google_oauth_state", "google_oauth_nonce"):
+        cookie = next(cookie for cookie in cookies if cookie.startswith(f"{cookie_name}="))
+        assert "HttpOnly" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=lax" in cookie
+        assert "Path=/" in cookie
+        assert "Max-Age=600" in cookie
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200, error=None):
         self.payload = payload

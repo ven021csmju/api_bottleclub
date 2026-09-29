@@ -34,13 +34,15 @@ def google_login() -> RedirectResponse:
     response = RedirectResponse(authorization_url(state, nonce), status_code=302)
     for name, value in ((GOOGLE_STATE_COOKIE, state), (GOOGLE_NONCE_COOKIE, nonce)):
         response.set_cookie(
-            name,
-            value,
+            key=name,
+            value=value,
             httponly=True,
             secure=_secure_cookie(),
             samesite="lax",
             max_age=600,
+            path="/",
         )
+    logger.debug("GOOGLE LOGIN stage=cookies_set state=True nonce=True")
     return response
 
 
