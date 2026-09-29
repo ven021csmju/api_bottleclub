@@ -33,8 +33,10 @@ def _log_debug_failure(
     exc: Exception,
     extra_sensitive: tuple[str, ...] = (),
 ) -> None:
+    prefix = "GOOGLE TOKEN ERROR" if stage == "exchange_code" else "GOOGLE VERIFY ERROR"
     logger.debug(
-        "Google OAuth debug failure: stage=%s exception_type=%s message=%s",
+        "%s stage=%s exception_type=%s message=%s",
+        prefix,
         stage,
         type(exc).__name__,
         _safe_exception_message(exc, extra_sensitive),
@@ -98,7 +100,7 @@ def exchange_code(code: str) -> dict[str, Any]:
             token_data = response.json()
             if not isinstance(token_data, dict):
                 logger.debug(
-                    "Google OAuth token response has unexpected type: type=%s",
+                    "GOOGLE TOKEN ERROR stage=exchange_code reason=unexpected_response_type type=%s",
                     type(token_data).__name__,
                 )
                 raise UnauthorizedException(detail="Invalid Google token response")
@@ -113,7 +115,10 @@ def exchange_code(code: str) -> dict[str, Any]:
         raise UnauthorizedException(detail="Unable to authenticate with Google")
 
     if not isinstance(token_data.get("id_token"), str):
-        logger.debug("Google OAuth token response missing id_token: keys=%s", sorted(token_data.keys()))
+        logger.debug(
+            "GOOGLE TOKEN ERROR stage=exchange_code reason=missing_id_token keys=%s",
+            sorted(token_data.keys()),
+        )
         raise UnauthorizedException(detail="Google did not return an ID token")
     return token_data
 
@@ -136,18 +141,37 @@ def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
             )
             jwks_response.raise_for_status()
             keys = jwks_response.json()["keys"]
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        _log_debug_failure("jwks", exc, (id_token, expected_nonce))
+        raise UnauthorizedException(detail="Unable to verify Google identity")
 
+    try:
         header = jwt.get_unverified_header(id_token)
+    except (JWTError, ValueError) as exc:
+        _log_debug_failure("jwt_decode", exc, (id_token, expected_nonce))
+        raise UnauthorizedException(detail="Unable to verify Google identity")
+
+    try:
         key_data = next((key for key in keys if key.get("kid") == header.get("kid")), None)
+    except (AttributeError, TypeError) as exc:
+        _log_debug_failure("jwks", exc, (id_token, expected_nonce))
+        raise UnauthorizedException(detail="Unable to verify Google identity")
+
+    logger.debug(
+        "Google JWKS key selection: key_count=%s kid_present=%s key_matched=%s",
+        len(keys),
+        bool(header.get("kid")),
+        key_data is not None,
+    )
+    if key_data is None:
         logger.debug(
-            "Google JWKS key selection: key_count=%s kid_present=%s key_matched=%s",
+            "GOOGLE VERIFY ERROR stage=jwks reason=key_not_found key_count=%s kid_present=%s",
             len(keys),
             bool(header.get("kid")),
-            key_data is not None,
         )
-        if key_data is None:
-            raise UnauthorizedException(detail="Unable to verify Google identity")
+        raise UnauthorizedException(detail="Unable to verify Google identity")
 
+    try:
         claims = jwt.decode(
             id_token,
             jwk.construct(key_data),
@@ -155,19 +179,17 @@ def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
             audience=client_id,
             issuer="https://accounts.google.com",
         )
-    except UnauthorizedException:
-        raise
-    except (httpx.HTTPError, KeyError, ValueError, JWTError) as exc:
-        _log_debug_failure("verify_id_token", exc, (id_token, expected_nonce))
+    except (JWTError, KeyError, TypeError, ValueError) as exc:
+        _log_debug_failure("jwt_decode", exc, (id_token, expected_nonce))
         raise UnauthorizedException(detail="Unable to verify Google identity")
 
     if claims.get("nonce") != expected_nonce:
-        logger.debug("Google ID token claim validation failed: claim=nonce")
+        logger.debug("GOOGLE VERIFY ERROR stage=verify_id_token claim=nonce")
         raise UnauthorizedException(detail="Invalid Google OAuth nonce")
     if claims.get("email_verified") is not True:
-        logger.debug("Google ID token claim validation failed: claim=email_verified")
+        logger.debug("GOOGLE VERIFY ERROR stage=verify_id_token claim=email_verified")
         raise UnauthorizedException(detail="Google email is not verified")
     if not isinstance(claims.get("email"), str) or not claims["email"]:
-        logger.debug("Google ID token claim validation failed: claim=email")
+        logger.debug("GOOGLE VERIFY ERROR stage=verify_id_token claim=email")
         raise UnauthorizedException(detail="Google account has no email")
     return claims
