@@ -3,7 +3,15 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import LoginAttempt, Permission, RefreshToken, RolePermission, User, UserRole
+from app.db.models import (
+    LoginAttempt,
+    Organization,
+    Permission,
+    RefreshToken,
+    RolePermission,
+    User,
+    UserRole,
+)
 
 
 class AuthRepository:
@@ -18,8 +26,18 @@ class AuthRepository:
         return list(
             db.execute(
                 select(User).where(func.lower(User.email) == email.lower())
-            ).scalars()
+        ).scalars()
         )
+
+    @staticmethod
+    def find_by_email_in_org(db: Session, organization_id: int, email: str) -> User | None:
+        return db.execute(
+            select(User).where(
+                User.organization_id == organization_id,
+                func.lower(User.email) == email.lower(),
+                User.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
 
     @staticmethod
     def find_by_username_in_org(
@@ -32,6 +50,16 @@ class AuthRepository:
                 User.deleted_at.is_(None),
             )
         ).scalar_one_or_none()
+
+    @staticmethod
+    def find_registration_organization(
+        db: Session, organization_id: int | None
+    ) -> Organization | None:
+        query = select(Organization).where(Organization.is_active.is_(True))
+        if organization_id is not None:
+            return db.execute(query.where(Organization.id == organization_id)).scalar_one_or_none()
+        organizations = list(db.execute(query.order_by(Organization.id)).scalars())
+        return organizations[0] if len(organizations) == 1 else None
 
     @staticmethod
     def find_by_id(db: Session, user_id: int) -> User | None:

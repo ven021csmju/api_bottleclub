@@ -2,6 +2,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
@@ -14,7 +15,7 @@ from app.shared.exceptions import (
     UnauthorizedException,
 )
 
-from .schemas import TokenResponse, UserProfileResponse
+from .schemas import RegisterRequest, RegisterResponse, TokenResponse, UserProfileResponse
 from app.shared.security import (
     create_access_token,
     create_refresh_token,
@@ -29,6 +30,39 @@ LOCKOUT_MINUTES = 30
 
 
 class AuthService:
+    @staticmethod
+    def register(db: Session, data: RegisterRequest) -> RegisterResponse:
+        organization = AuthRepository.find_registration_organization(
+            db, data.organization_id or settings.REGISTRATION_ORGANIZATION_ID
+        )
+        if organization is None:
+            raise BadRequestException(
+                detail="A valid organization_id is required for registration"
+            )
+
+        if AuthRepository.find_by_username_in_org(db, organization.id, data.username):
+            raise BadRequestException(detail="Username is already registered", code="DUPLICATE_USER")
+        if AuthRepository.find_by_email_in_org(db, organization.id, str(data.email)):
+            raise BadRequestException(detail="Email is already registered", code="DUPLICATE_USER")
+
+        user = User(
+            organization_id=organization.id,
+            username=data.username,
+            email=str(data.email).lower(),
+            password_hash=hash_password(data.password),
+            display_name=data.display_name,
+            phone=data.phone,
+            status="active",
+        )
+        try:
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            db.rollback()
+            raise BadRequestException(detail="Username or email is already registered", code="DUPLICATE_USER")
+        return RegisterResponse.model_validate(user)
+
     @staticmethod
     def _load_user_permissions(db: Session, user: User) -> list[str]:
         return AuthRepository.load_permission_codes(db, user.id)

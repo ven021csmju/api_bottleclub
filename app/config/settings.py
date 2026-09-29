@@ -25,7 +25,16 @@ class Settings(BaseSettings):
     GOOGLE_DEFAULT_ROLE_NAME: str | None = None
     GOOGLE_DEFAULT_BRANCH_ID: int | None = None
 
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    CORS_ORIGINS: list[str] = [
+        "https://the-bottle-club-ai.vercel.app",
+        "https://front-posimon.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ]
+
+    # Used only when a deployment has more than one active organization. When
+    # unset, registration may use the sole active organization in PostgreSQL.
+    REGISTRATION_ORGANIZATION_ID: int | None = None
 
     OCR_SERVICE_URL: str = "http://127.0.0.1:9000"
     OCR_SERVICE_TIMEOUT: int = 60

@@ -12,12 +12,24 @@ from app.middleware.rate_limit import limiter
 from app.db.models import User
 from app.shared.exceptions import UnauthorizedException
 
-from .schemas import LoginRequest, RefreshTokenRequest, TokenResponse, UserProfileResponse
+from .schemas import (
+    LoginRequest,
+    RefreshTokenRequest,
+    RegisterRequest,
+    RegisterResponse,
+    TokenResponse,
+    UserProfileResponse,
+)
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.post("/register", response_model=RegisterResponse, status_code=201)
+def register(body: RegisterRequest, db: Session = Depends(get_db)) -> RegisterResponse:
+    return AuthService.register(db, body)
 
 GOOGLE_STATE_COOKIE = "google_oauth_state"
 GOOGLE_NONCE_COOKIE = "google_oauth_nonce"
