@@ -41,8 +41,10 @@ def build_envelope(data: Any, meta: dict | None = None, request_id: str = "") ->
 def extract_meta(payload: dict) -> tuple[Any, dict | None]:
     if set(PAGINATION_KEYS).issubset(payload.keys()):
         meta = {key: payload[key] for key in PAGINATION_KEYS}
-        data = {k: v for k, v in payload.items() if k not in PAGINATION_KEYS}
-        return data, meta
+        # Keep pagination in data for clients whose list contract exposes it
+        # alongside the collection, while retaining meta for the envelope
+        # contract and existing clients.
+        return payload, meta
     return payload, None
 
 

@@ -50,7 +50,9 @@ class CouponRepository:
     @staticmethod
     def get_promotion(db: Session, promotion_id: int) -> Promotion | None:
         return db.execute(
-            select(Promotion).where(Promotion.id == promotion_id)
+            # Coupon records retain the legacy numeric reference while the
+            # public promotions contract uses VARCHAR identifiers.
+            select(Promotion).where(Promotion.id == str(promotion_id))
         ).scalar_one_or_none()
 
     @staticmethod

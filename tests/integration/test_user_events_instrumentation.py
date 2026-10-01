@@ -10,7 +10,6 @@ RabbitMQ server. We assert:
 
 import io
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -389,12 +388,11 @@ class TestCouponEvents:
 
         now = datetime.now(timezone.utc)
         promo = Promotion(
-            organization_id=seed_user["org_id"],
-            name="Save 10",
-            promotion_type="percentage_discount",
-            discount_value=Decimal("10"),
-            start_date=now - timedelta(days=1),
-            end_date=now + timedelta(days=30),
+            id="1",
+            title="Save 10",
+            description="Coupon promotion",
+            image_url="https://example.test/save10.jpg",
+            images=[],
             is_active=True,
         )
         session.add(promo)

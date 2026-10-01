@@ -115,7 +115,11 @@ class CouponService:
             "valid": True,
             "coupon_id": coupon.id,
             "promotion_id": coupon.promotion_id,
-            "promotion_type": promotion.promotion_type if promotion else None,
-            "discount_value": float(promotion.discount_value) if promotion else None,
+            "promotion_type": getattr(promotion, "promotion_type", None),
+            "discount_value": (
+                float(promotion.discount_value)
+                if getattr(promotion, "discount_value", None) is not None
+                else None
+            ),
             "message": "Coupon is valid",
         }

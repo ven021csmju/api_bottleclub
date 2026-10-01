@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.domains.wine_products.schemas import WineProductListResponse, WineProductResponse
 from app.domains.wine_products.service import WineProductService
+from app.services import user_events
 from app.shared.pagination import paginate
 
 router = APIRouter()
@@ -32,6 +33,13 @@ def list_wine_products(
         per_page=per_page,
     )
     pages = (total + per_page - 1) // per_page if total else 0
+    if search:
+        user_events.publish_user_event_sync(
+            "wine_product_search",
+            getattr(getattr(request.state, "user", None), "id", None),
+            getattr(request.state, "request_id", ""),
+            {"query": search, "result_count": total},
+        )
     return WineProductListResponse(
         items=items, total=total, page=page, per_page=per_page, pages=pages
     )
