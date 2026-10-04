@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,6 +15,7 @@ router = APIRouter()
 @router.get("/", response_model=WineProductListResponse)
 def list_wine_products(
     request: Request,
+    background_tasks: BackgroundTasks,
     search: Optional[str] = Query(None),
     brands: Optional[str] = Query(None),
     countries: Optional[str] = Query(None),
@@ -34,7 +35,8 @@ def list_wine_products(
     )
     pages = (total + per_page - 1) // per_page if total else 0
     if search:
-        user_events.publish_user_event_sync(
+        background_tasks.add_task(
+            user_events.publish_user_event_sync,
             "wine_product_search",
             getattr(getattr(request.state, "user", None), "id", None),
             getattr(request.state, "request_id", ""),
