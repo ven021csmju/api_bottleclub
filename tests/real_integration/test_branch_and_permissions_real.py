@@ -21,8 +21,11 @@ def test_missing_branch_header_is_rejected(api_client, admin_token):
 
 
 def test_user_cannot_use_other_branch(api_client, admin_token, real_settings):
-    if not real_settings.other_branch_id:
-        pytest.skip("TEST_OTHER_BRANCH_ID is not configured")
+    if (
+        not real_settings.other_branch_id
+        or real_settings.other_branch_id == real_settings.branch_id
+    ):
+        pytest.skip("TEST_OTHER_BRANCH_ID must be a different branch")
     response = api_client.get(
         "/api/v1/orders/?page=1&per_page=1",
         headers=auth_headers(admin_token, real_settings.other_branch_id),
