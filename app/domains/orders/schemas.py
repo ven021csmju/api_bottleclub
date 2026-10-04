@@ -56,6 +56,9 @@ class OrderResponse(BaseModel):
     discount_amount: Decimal
     tax_amount: Decimal
     grand_total: Decimal
+    shipping_fee: Decimal = Decimal("0")
+    fulfillment_status: str = "unfulfilled"
+    tracking_number: Optional[str] = None
     amount_paid: Decimal
     change_amount: Decimal
     loyalty_points_earned: int
@@ -81,6 +84,11 @@ class OrderStatusUpdate(BaseModel):
 
 class OrderCancel(BaseModel):
     reason: Optional[str] = None
+
+
+class OrderTrackingUpdate(BaseModel):
+    tracking_number: str = Field(..., min_length=1, max_length=100)
+    fulfillment_status: str = Field("shipped", max_length=30)
 
 
 class CheckoutPayment(BaseModel):

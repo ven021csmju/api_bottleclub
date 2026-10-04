@@ -2,9 +2,11 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Order, PaymentVerification, User
+from app.db.models import LoyaltyTransaction, Order, PaymentVerification, StockMovement, User
+from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.services.fraud_detection import FraudDetectionService
 from app.services.image_service import ImageService
@@ -12,8 +14,10 @@ from app.services.ocr_service import OCRService
 from app.services.slip_parser import parse_slip
 from app.shared.exceptions import (
     BadRequestException,
+    InsufficientStockException,
     NotFoundException,
 )
+from app.db.repositories.orders import OrderRepository
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,163 @@ class SlipVerifyService:
         db: Session, order_id: int, limit: int = 20
     ) -> list[PaymentVerification]:
         return SlipVerifyRepository.list_verifications_by_order(db, order_id, limit)
+
+    @staticmethod
+    def list_org_verifications_by_order(
+        db: Session, order_id: int, organization_id: int, limit: int = 20
+    ) -> list[PaymentVerification]:
+        return SlipVerifyRepository.list_org_verifications_by_order(
+            db, order_id, organization_id, limit
+        )
+
+    @staticmethod
+    def get_org_verification(
+        db: Session, verification_id: int, organization_id: int
+    ) -> PaymentVerification | None:
+        return SlipVerifyRepository.get_org_verification(
+            db, verification_id, organization_id
+        )
+
+    @staticmethod
+    def list_verifications(
+        db: Session, organization_id: int, status: str | None = None, limit: int = 100
+    ) -> list[PaymentVerification]:
+        return SlipVerifyRepository.list_org_verifications(db, organization_id, status, limit)
+
+    @staticmethod
+    def moderate_verification(
+        db: Session,
+        *,
+        verification_id: int,
+        organization_id: int,
+        user_id: int,
+        approve: bool,
+        note: str | None = None,
+    ) -> PaymentVerification:
+        """Approve/reject a slip and keep payment, stock and order atomic."""
+        verification = SlipVerifyRepository.get_org_verification(
+            db, verification_id, organization_id, for_update=True
+        )
+        if verification is None:
+            raise NotFoundException(detail="Verification not found")
+
+        order = db.scalar(
+            select(Order)
+            .where(Order.id == verification.order_id, Order.organization_id == organization_id)
+            .with_for_update()
+        )
+        if order is None:
+            raise NotFoundException(detail="Order not found")
+
+        if not approve:
+            if verification.status == "rejected":
+                return verification
+            if verification.status in {"verified", "duplicate_reference", "duplicate_image"}:
+                raise BadRequestException(detail="This verification cannot be rejected")
+            verification.status = "rejected"
+            verification.failure_reason = note or "Rejected by administrator"
+            verification.verified_by_user_id = user_id
+            verification.verified_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(verification)
+            return verification
+
+        if verification.status == "verified" and order.status == "paid":
+            return verification
+        if verification.status not in {"pending", "review", "verified"}:
+            raise BadRequestException(detail="This verification cannot be approved")
+
+        try:
+            payment_amount = verification.ocr_amount or order.grand_total
+            payment_amount = Decimal(str(payment_amount))
+            if payment_amount < Decimal(str(order.grand_total)):
+                raise BadRequestException(detail="Slip amount is less than order total")
+
+            if verification.payment_id is None:
+                payment = SlipVerifyRepository.create_payment_for_order(
+                    db,
+                    order_id=order.id,
+                    user_id=user_id,
+                    amount=payment_amount,
+                    external_reference=verification.ocr_reference,
+                    provider=verification.ocr_bank,
+                    notes=note or "Approved by administrator",
+                )
+                verification.payment_id = payment.id
+
+            # The order may already be paid by another flow. In that case do not
+            # deduct inventory a second time.
+            if order.status not in {"paid", "completed"}:
+                for item in order.items:
+                    product = OrderRepository.get_product(db, item.product_id)
+                    if not product or not product.track_inventory:
+                        continue
+                    on_hand_before = OrderRepository.get_inventory_on_hand(
+                        db, order.branch_id, item.product_id
+                    )
+                    if OrderRepository.deduct_stock(
+                        db, order.branch_id, item.product_id, item.quantity
+                    ) == 0:
+                        raise InsufficientStockException(
+                            detail=f"Insufficient stock for product '{item.product_name}'"
+                        )
+                    OrderRepository.add_stock_movement(
+                        db,
+                        StockMovement(
+                            branch_id=order.branch_id,
+                            product_id=item.product_id,
+                            movement_type="sale",
+                            quantity_change=-item.quantity,
+                            quantity_before=on_hand_before or 0,
+                            quantity_after=(on_hand_before or 0) - item.quantity,
+                            reference_type="slip_verification",
+                            reference_id=verification.id,
+                            user_id=user_id,
+                        ),
+                    )
+                order.status = "paid"
+                order.amount_paid = payment_amount
+                order.change_amount = max(
+                    Decimal("0"), payment_amount - Decimal(str(order.grand_total))
+                )
+
+                if order.customer_id is not None and order.loyalty_points_earned == 0:
+                    customer = LoyaltyRepository.find_org_customer(
+                        db, organization_id, order.customer_id
+                    )
+                    if customer is None:
+                        raise NotFoundException(detail="Customer not found")
+                    points = int(order.grand_total)
+                    if points > 0:
+                        before = customer.loyalty_points_balance
+                        after = before + points
+                        LoyaltyRepository.add_transaction(
+                            db,
+                            LoyaltyTransaction(
+                                customer_id=customer.id,
+                                transaction_type="earn",
+                                points=points,
+                                points_before=before,
+                                points_after=after,
+                                reference_type="slip_verification",
+                                reference_id=verification.id,
+                                notes="Points earned from approved slip",
+                                user_id=user_id,
+                            ),
+                        )
+                        customer.loyalty_points_balance = after
+                        order.loyalty_points_earned = points
+
+            verification.status = "verified"
+            verification.failure_reason = note
+            verification.verified_by_user_id = user_id
+            verification.verified_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(verification)
+            return verification
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _log_attempt(

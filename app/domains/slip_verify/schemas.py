@@ -82,3 +82,12 @@ class VerificationDetailResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class VerificationModerationRequest(BaseModel):
+    note: str | None = Field(None, max_length=1000)
+
+
+class VerificationListResponse(BaseModel):
+    items: list[VerificationDetailResponse]
+    total: int

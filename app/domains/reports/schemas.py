@@ -19,6 +19,16 @@ class SalesReportResponse(BaseModel):
     sales_by_category: list[dict[str, Any]]
 
 
+class EcommerceDashboardResponse(BaseModel):
+    sales_today: float
+    sales_this_month: float
+    pending_orders_count: int
+    pending_slips_count: int
+    total_members: int
+    recent_orders: list[dict[str, Any]]
+    top_selling_wines: list[dict[str, Any]]
+
+
 class DailySalesSummary(BaseModel):
     date: date
     branch_id: Optional[int] = None

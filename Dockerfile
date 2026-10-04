@@ -35,7 +35,8 @@ COPY api/app ./app
 COPY api/scripts ./scripts
 COPY database ./database
 COPY alembic.ini ./alembic.ini
-COPY .env ./.env
+# Runtime secrets are injected by the deployment environment. Never bake the
+# local .env file into the image.
 
 RUN chown -R appuser:appuser /app
 USER appuser

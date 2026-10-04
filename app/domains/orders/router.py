@@ -24,6 +24,7 @@ from .schemas import (
     OrderItemStatusUpdate,
     StationItemsListResponse,
     StationItemUpdateResponse,
+    OrderTrackingUpdate,
 )
 from .service import OrderService
 
@@ -159,6 +160,49 @@ def complete_order(
         order_id=order_id,
     )
     return OrderResponse.model_validate(order)
+
+
+@router.put("/{order_id}/tracking", response_model=OrderResponse)
+def update_order_tracking(
+    order_id: int,
+    body: OrderTrackingUpdate,
+    user: User = Depends(require_permission("orders.update")),
+    db: Session = Depends(get_db),
+) -> OrderResponse:
+    order = OrderService.update_tracking(
+        db=db,
+        org_id=user.organization_id,
+        order_id=order_id,
+        tracking_number=body.tracking_number,
+        fulfillment_status=body.fulfillment_status,
+    )
+    return OrderResponse.model_validate(order)
+
+
+@router.get("/track/{tracking_or_ref}")
+def track_order(tracking_or_ref: str, db: Session = Depends(get_db)) -> dict:
+    from sqlalchemy import select
+
+    from app.db.models import Order
+
+    order = db.scalar(
+        select(Order).where(
+            (Order.tracking_number == tracking_or_ref)
+            | (Order.order_number == tracking_or_ref)
+        )
+    )
+    if not order:
+        from app.shared.exceptions import NotFoundException
+        raise NotFoundException(detail="Order not found")
+
+    return {
+        "order_number": order.order_number,
+        "status": order.status,
+        "fulfillment_status": order.fulfillment_status,
+        "tracking_number": order.tracking_number,
+        "created_at": order.created_at,
+        "completed_at": order.completed_at,
+    }
 
 
 @router.post("/{order_id}/checkout", response_model=CheckoutResponse)

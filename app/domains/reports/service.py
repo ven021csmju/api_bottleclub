@@ -1,11 +1,89 @@
 from datetime import date
 
+from sqlalchemy import func, select
+
 from sqlalchemy.orm import Session
 
 from app.db.repositories.reports import ReportRepository
+from app.db.models import Customer, Order, PaymentVerification
 
 
 class ReportService:
+    @staticmethod
+    def get_ecommerce_dashboard(db: Session, organization_id: int) -> dict:
+        today = date.today()
+        month_start = today.replace(day=1)
+
+        today_totals = ReportRepository.sales_totals(
+            db, organization_id, today, today, order_source="ecommerce"
+        )
+        month_totals = ReportRepository.sales_totals(
+            db, organization_id, month_start, today, order_source="ecommerce"
+        )
+
+        pending_orders = db.scalar(
+            select(func.count(Order.id)).where(
+                Order.organization_id == organization_id,
+                Order.order_source == "ecommerce",
+                Order.status.in_(["pending", "confirmed", "preparing", "ready"]),
+            )
+        ) or 0
+        pending_slips = db.scalar(
+            select(func.count(PaymentVerification.id))
+            .join(Order, Order.id == PaymentVerification.order_id)
+            .where(
+                Order.organization_id == organization_id,
+                Order.order_source == "ecommerce",
+                PaymentVerification.status.in_(["pending", "review"]),
+            )
+        ) or 0
+        total_members = db.scalar(
+            select(func.count(Customer.id)).where(
+                Customer.organization_id == organization_id,
+                Customer.deleted_at.is_(None),
+            )
+        ) or 0
+
+        recent = db.scalars(
+            select(Order)
+            .where(
+                Order.organization_id == organization_id,
+                Order.order_source == "ecommerce",
+            )
+            .order_by(Order.created_at.desc())
+            .limit(10)
+        ).all()
+        top_products = ReportRepository.top_products(
+            db, organization_id, month_start, today, order_source="ecommerce"
+        )
+
+        return {
+            "sales_today": float(today_totals.total_sales),
+            "sales_this_month": float(month_totals.total_sales),
+            "pending_orders_count": int(pending_orders),
+            "pending_slips_count": int(pending_slips),
+            "total_members": int(total_members),
+            "recent_orders": [
+                {
+                    "id": order.id,
+                    "order_number": order.order_number,
+                    "customer_id": order.customer_id,
+                    "grand_total": float(order.grand_total),
+                    "status": order.status,
+                    "created_at": order.created_at,
+                }
+                for order in recent
+            ],
+            "top_selling_wines": [
+                {
+                    "product_name": row.product_name,
+                    "sold_bottles": int(row.total_qty),
+                    "total_revenue": float(row.total_revenue),
+                }
+                for row in top_products
+            ],
+        }
+
     @staticmethod
     def get_sales_report(
         db: Session,

@@ -9,8 +9,15 @@ from app.middleware.auth import get_current_user
 from app.db.models import User
 from app.services import user_events
 
-from .schemas import ErrorResponse, VerificationResponse
+from .schemas import (
+    ErrorResponse,
+    VerificationDetailResponse,
+    VerificationListResponse,
+    VerificationModerationRequest,
+    VerificationResponse,
+)
 from .service import SlipVerifyService
+from app.middleware.auth import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -109,17 +116,10 @@ async def check_slip(
     return await _process_slip(request, file, order_id, user, db)
 
 
-@router.get("/{verification_id}")
-def get_verification(
-    verification_id: int,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    verification = SlipVerifyService.get_verification(db, verification_id)
-    if not verification:
-        from app.shared.exceptions import NotFoundException
-        raise NotFoundException(detail="Verification not found")
-
+def _verification_detail(verification) -> dict:
+    risk_score = verification.risk_score
+    if isinstance(risk_score, dict):
+        risk_score = risk_score.get("score", 0)
     return {
         "id": verification.id,
         "order_id": verification.order_id,
@@ -127,17 +127,86 @@ def get_verification(
         "ocr_bank": verification.ocr_bank,
         "ocr_amount": float(verification.ocr_amount) if verification.ocr_amount else None,
         "ocr_reference": verification.ocr_reference,
-        "ocr_date": str(verification.ocr_date) if verification.ocr_date else None,
+        "ocr_date": verification.ocr_date,
         "ocr_sender_name": verification.ocr_sender_name,
         "ocr_receiver_name": verification.ocr_receiver_name,
         "ocr_receiver_account": verification.ocr_receiver_account,
         "image_sha256": verification.image_sha256,
         "status": verification.status,
-        "risk_score": float(verification.risk_score),
+        "risk_score": risk_score,
         "risk_signals": verification.risk_signals,
         "failure_reason": verification.failure_reason,
-        "created_at": verification.created_at.isoformat() if verification.created_at else None,
+        "created_at": verification.created_at,
     }
+
+
+@router.get("/list", response_model=VerificationListResponse)
+def list_verifications(
+    status: str | None = None,
+    limit: int = 100,
+    user: User = Depends(require_permission("slip_verification.read")),
+    db: Session = Depends(get_db),
+) -> VerificationListResponse:
+    if limit < 1 or limit > 100:
+        from app.shared.exceptions import BadRequestException
+        raise BadRequestException(detail="limit must be between 1 and 100")
+    items = SlipVerifyService.list_verifications(db, user.organization_id, status, limit)
+    return VerificationListResponse(
+        items=[VerificationDetailResponse.model_validate(_verification_detail(item)) for item in items],
+        total=len(items),
+    )
+
+
+@router.post("/{verification_id}/approve", response_model=VerificationDetailResponse)
+def approve_verification(
+    verification_id: int,
+    body: VerificationModerationRequest | None = None,
+    user: User = Depends(require_permission("slip_verification.approve")),
+    db: Session = Depends(get_db),
+) -> VerificationDetailResponse:
+    verification = SlipVerifyService.moderate_verification(
+        db,
+        verification_id=verification_id,
+        organization_id=user.organization_id,
+        user_id=user.id,
+        approve=True,
+        note=body.note if body else None,
+    )
+    return VerificationDetailResponse.model_validate(_verification_detail(verification))
+
+
+@router.post("/{verification_id}/reject", response_model=VerificationDetailResponse)
+def reject_verification(
+    verification_id: int,
+    body: VerificationModerationRequest | None = None,
+    user: User = Depends(require_permission("slip_verification.reject")),
+    db: Session = Depends(get_db),
+) -> VerificationDetailResponse:
+    verification = SlipVerifyService.moderate_verification(
+        db,
+        verification_id=verification_id,
+        organization_id=user.organization_id,
+        user_id=user.id,
+        approve=False,
+        note=body.note if body else None,
+    )
+    return VerificationDetailResponse.model_validate(_verification_detail(verification))
+
+
+@router.get("/{verification_id}")
+def get_verification(
+    verification_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verification = SlipVerifyService.get_org_verification(
+        db, verification_id, user.organization_id
+    )
+    if not verification:
+        from app.shared.exceptions import NotFoundException
+        raise NotFoundException(detail="Verification not found")
+
+    return _verification_detail(verification)
 
 
 @router.get("/order/{order_id}")
@@ -146,13 +215,15 @@ def list_verifications_by_order(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    verifications = SlipVerifyService.list_verifications_by_order(db, order_id)
+    verifications = SlipVerifyService.list_org_verifications_by_order(
+        db, order_id, user.organization_id
+    )
     return [
         {
             "id": v.id,
             "order_id": v.order_id,
             "status": v.status,
-            "risk_score": float(v.risk_score),
+            "risk_score": v.risk_score.get("score", 0) if isinstance(v.risk_score, dict) else v.risk_score,
             "ocr_amount": float(v.ocr_amount) if v.ocr_amount else None,
             "ocr_reference": v.ocr_reference,
             "created_at": v.created_at.isoformat() if v.created_at else None,

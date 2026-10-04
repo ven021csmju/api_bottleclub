@@ -47,6 +47,18 @@ class TestEnvelope:
         assert "paths" in body
         assert "request_id" not in body
 
+    def test_ecommerce_integration_paths_are_published(self, client: TestClient):
+        paths = client.get("/openapi.json").json()["paths"]
+        expected = {
+            "/api/v1/orders/{order_id}/tracking",
+            "/api/v1/orders/track/{tracking_or_ref}",
+            "/api/v1/slip-verify/list",
+            "/api/v1/slip-verify/{verification_id}/approve",
+            "/api/v1/slip-verify/{verification_id}/reject",
+            "/api/v1/reports/ecommerce/dashboard",
+        }
+        assert expected <= paths.keys()
+
 
 class TestRateLimit:
     def test_login_hits_rate_limit(self, client: TestClient):

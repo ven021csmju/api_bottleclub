@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -60,6 +61,11 @@ class Settings(BaseSettings):
     MONGODB_SEARCH_LOGS_TTL_DAYS: int = 90
     MONGODB_SYSTEM_EVENTS_TTL_DAYS: int = 180
 
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 1800
+
     # RabbitMQ user-log pipeline (Phase 4/5). The exchange/queue names and
     # routing keys must match the mongo-log-service root .env.
     RABBITMQ_URL: str = "amqp://guest:guest@localhost:5672/"
@@ -75,6 +81,15 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if self.ENVIRONMENT.lower() in {"production", "staging"}:
+            if self.JWT_SECRET_KEY == "change-me-in-production":
+                raise ValueError("JWT_SECRET_KEY must be changed in production")
+            if not self.DATABASE_URL:
+                raise ValueError("DATABASE_URL is required in production")
+        return self
 
 
 settings = Settings()

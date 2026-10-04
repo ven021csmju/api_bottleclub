@@ -237,6 +237,33 @@ class OrderService:
         return order
 
     @staticmethod
+    def update_tracking(
+        db: Session,
+        org_id: int,
+        order_id: int,
+        tracking_number: str,
+        fulfillment_status: str,
+    ) -> Order:
+        allowed_statuses = {
+            "unfulfilled", "processing", "shipped", "delivered", "picked_up", "cancelled"
+        }
+        if fulfillment_status not in allowed_statuses:
+            raise BadRequestException(detail="Invalid fulfillment status", code="VALIDATION_ERROR")
+
+        order = OrderRepository.get_org_order(db, org_id, order_id)
+        if not order:
+            raise NotFoundException(detail="Order not found")
+
+        tracking_number = tracking_number.strip()
+        if not tracking_number:
+            raise BadRequestException(detail="tracking_number cannot be blank", code="VALIDATION_ERROR")
+        order.tracking_number = tracking_number
+        order.fulfillment_status = fulfillment_status
+        db.commit()
+        db.refresh(order)
+        return order
+
+    @staticmethod
     def get_receipt(db: Session, org_id: int, order_id: int) -> dict:
         order = OrderService.get_order(db, org_id, order_id)
 

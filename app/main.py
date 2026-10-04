@@ -1,4 +1,6 @@
 ﻿
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,8 @@ from app.middleware.rate_limit import limiter
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
 from sqlalchemy.exc import SQLAlchemyError
+
+logger = logging.getLogger(__name__)
 
 
 def _request_id(request: Request) -> str:
@@ -127,6 +131,21 @@ def create_app() -> FastAPI:
             content={
                 "detail": "Rate limit exceeded",
                 "code": "RATE_LIMIT_EXCEEDED",
+                "request_id": _request_id(request),
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        logger.exception("Unhandled API exception request_id=%s", _request_id(request))
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal server error",
+                "code": "INTERNAL_SERVER_ERROR",
                 "request_id": _request_id(request),
             },
         )

@@ -177,12 +177,59 @@ class SlipVerifyRepository:
         return db.get(PaymentVerification, verification_id)
 
     @staticmethod
+    def get_org_verification(
+        db: Session, verification_id: int, organization_id: int, *, for_update: bool = False
+    ) -> PaymentVerification | None:
+        stmt = (
+            select(PaymentVerification)
+            .join(Order, Order.id == PaymentVerification.order_id)
+            .where(
+                PaymentVerification.id == verification_id,
+                Order.organization_id == organization_id,
+            )
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return db.scalar(stmt)
+
+    @staticmethod
+    def list_org_verifications(
+        db: Session, organization_id: int, status: str | None = None, limit: int = 100
+    ) -> list[PaymentVerification]:
+        stmt = (
+            select(PaymentVerification)
+            .join(Order, Order.id == PaymentVerification.order_id)
+            .where(Order.organization_id == organization_id)
+            .order_by(PaymentVerification.created_at.desc())
+            .limit(limit)
+        )
+        if status:
+            stmt = stmt.where(PaymentVerification.status == status)
+        return list(db.scalars(stmt).all())
+
+    @staticmethod
     def list_verifications_by_order(
         db: Session, order_id: int, limit: int = 20
     ) -> list[PaymentVerification]:
         result = db.scalars(
             select(PaymentVerification)
             .where(PaymentVerification.order_id == order_id)
+            .order_by(PaymentVerification.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+    @staticmethod
+    def list_org_verifications_by_order(
+        db: Session, order_id: int, organization_id: int, limit: int = 20
+    ) -> list[PaymentVerification]:
+        result = db.scalars(
+            select(PaymentVerification)
+            .join(Order, Order.id == PaymentVerification.order_id)
+            .where(
+                PaymentVerification.order_id == order_id,
+                Order.organization_id == organization_id,
+            )
             .order_by(PaymentVerification.created_at.desc())
             .limit(limit)
         )

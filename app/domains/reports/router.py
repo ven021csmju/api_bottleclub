@@ -10,6 +10,7 @@ from app.domains.reports.schemas import (
     FinancialReportResponse,
     InventoryReportResponse,
     LoyaltyReportResponse,
+    EcommerceDashboardResponse,
     SalesReportRequest,
     SalesReportResponse,
 )
@@ -66,6 +67,16 @@ def get_sales_report(
             db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value
         )
     return SalesReportResponse(**result)
+
+
+@router.get("/ecommerce/dashboard", response_model=EcommerceDashboardResponse)
+def get_ecommerce_dashboard(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("reports.read")),
+) -> EcommerceDashboardResponse:
+    return EcommerceDashboardResponse(
+        **ReportService.get_ecommerce_dashboard(db, user.organization_id)
+    )
 
 
 @router.get("/daily-summary", response_model=DailySalesSummary)
