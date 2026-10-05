@@ -4,6 +4,67 @@ from app.db.models import Inventory, Order, Product
 
 
 class TestCreateOrder:
+    def test_ecommerce_matching_price_uses_catalog_price(
+        self, client: TestClient, auth_headers: dict, seed_branch: int, seed_user: dict, session
+    ):
+        product = Product(
+            organization_id=seed_user["org_id"],
+            name="Ecommerce Wine",
+            sku="ECOM-001",
+            selling_price=125.00,
+            track_inventory=False,
+        )
+        session.add(product)
+        session.flush()
+
+        resp = client.post(
+            "/api/v1/orders/",
+            headers=auth_headers,
+            json={
+                "branch_id": seed_branch,
+                "order_source": "ecommerce",
+                "items": [
+                    {"product_id": product.id, "quantity": 2, "unit_price": "125.00"}
+                ],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["grand_total"] == "250.00"
+        assert data["items"][0]["unit_price"] == "125.00"
+
+    def test_ecommerce_mismatched_price_is_rejected_before_stock_deduction(
+        self, client: TestClient, auth_headers: dict, seed_branch: int, seed_user: dict, session
+    ):
+        product = Product(
+            organization_id=seed_user["org_id"],
+            name="Protected Ecommerce Wine",
+            sku="ECOM-002",
+            selling_price=125.00,
+            track_inventory=True,
+        )
+        session.add(product)
+        session.flush()
+        inventory = Inventory(branch_id=seed_branch, product_id=product.id, on_hand=5)
+        session.add(inventory)
+        session.flush()
+
+        resp = client.post(
+            "/api/v1/orders/",
+            headers=auth_headers,
+            json={
+                "branch_id": seed_branch,
+                "order_source": "ecommerce",
+                "items": [
+                    {"product_id": product.id, "quantity": 2, "unit_price": "0.01"}
+                ],
+            },
+        )
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["code"] == "PRICE_MISMATCH"
+        session.refresh(inventory)
+        assert inventory.on_hand == 5
+
     def test_create_order_deducts_stock(
         self,
         client: TestClient,

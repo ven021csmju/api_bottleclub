@@ -26,7 +26,7 @@ def test_create_order_get_order_and_cancel_cleanup(
     product = _product(api_client, admin_headers, real_settings.product_id)
     payload = {
         "branch_id": int(real_settings.branch_id),
-        "items": [
+                "items": [
             {
                 "product_id": int(real_settings.product_id),
                 "quantity": 1,
@@ -83,6 +83,7 @@ def test_client_price_cannot_override_catalog_price(
                     "unit_price": "0.01",
                 }
             ],
+            "order_source": "ecommerce",
             "idempotency_key": f"real-api-price-test-{uuid.uuid4()}",
         },
     )

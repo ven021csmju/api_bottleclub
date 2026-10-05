@@ -96,6 +96,23 @@ class OrderService:
         if missing:
             raise BadRequestException(detail=f"Products not found or inactive: {missing}")
 
+        order_source = OrderService._order_source_value(
+            data.get("order_source", "pos")
+        )
+        if order_source == "ecommerce":
+            for item_data in data["items"]:
+                product = products_map[item_data["product_id"]]
+                client_price = Decimal(str(item_data["unit_price"]))
+                catalog_price = Decimal(str(product.selling_price))
+                if client_price != catalog_price:
+                    raise BadRequestException(
+                        detail=(
+                            f"Price mismatch for product '{product.name}': "
+                            f"expected {catalog_price}, received {client_price}"
+                        ),
+                        code="PRICE_MISMATCH",
+                    )
+
         order_number = generate_order_number(db, branch.code)
 
         order = Order(
@@ -109,7 +126,7 @@ class OrderService:
             register_id=data.get("register_id"),
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
-            order_source=OrderService._order_source_value(data.get("order_source", "pos")),
+            order_source=order_source,
             idempotency_key=idempotency_key,
         )
         OrderRepository.add_order(db, order)
@@ -124,7 +141,12 @@ class OrderService:
         for item_data in data["items"]:
             product = products_map[item_data["product_id"]]
             quantity = item_data["quantity"]
-            unit_price = Decimal(str(item_data["unit_price"]))
+            client_price = Decimal(str(item_data["unit_price"]))
+            unit_price = (
+                Decimal(str(product.selling_price))
+                if order_source == "ecommerce"
+                else client_price
+            )
             item_discount = Decimal(str(item_data.get("discount_amount", 0)))
             line_total = unit_price * quantity - item_discount
 
