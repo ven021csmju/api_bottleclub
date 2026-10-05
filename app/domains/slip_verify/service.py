@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import LoyaltyTransaction, Order, PaymentVerification, StockMovement, User
+from app.db.models import LoyaltyTransaction, Order, PaymentVerification, User
 from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.services.fraud_detection import FraudDetectionService
@@ -14,10 +14,8 @@ from app.services.ocr_service import OCRService
 from app.services.slip_parser import parse_slip
 from app.shared.exceptions import (
     BadRequestException,
-    InsufficientStockException,
     NotFoundException,
 )
-from app.db.repositories.orders import OrderRepository
 
 logger = logging.getLogger(__name__)
 
@@ -383,68 +381,38 @@ class SlipVerifyService:
                 )
                 verification.payment_id = payment.id
 
-            # The order may already be paid by another flow. In that case do not
-            # deduct inventory a second time.
-            if order.status not in {"paid", "completed"}:
-                for item in order.items:
-                    product = OrderRepository.get_product(db, item.product_id)
-                    if not product or not product.track_inventory:
-                        continue
-                    on_hand_before = OrderRepository.get_inventory_on_hand(
-                        db, order.branch_id, item.product_id
-                    )
-                    if OrderRepository.deduct_stock(
-                        db, order.branch_id, item.product_id, item.quantity
-                    ) == 0:
-                        raise InsufficientStockException(
-                            detail=f"Insufficient stock for product '{item.product_name}'"
-                        )
-                    OrderRepository.add_stock_movement(
+            order.status = "paid"
+            order.amount_paid = payment_amount
+            order.change_amount = max(
+                Decimal("0"), payment_amount - Decimal(str(order.grand_total))
+            )
+
+            if order.customer_id is not None and order.loyalty_points_earned == 0:
+                customer = LoyaltyRepository.find_org_customer(
+                    db, organization_id, order.customer_id
+                )
+                if customer is None:
+                    raise NotFoundException(detail="Customer not found")
+                points = int(order.grand_total)
+                if points > 0:
+                    before = customer.loyalty_points_balance
+                    after = before + points
+                    LoyaltyRepository.add_transaction(
                         db,
-                        StockMovement(
-                            branch_id=order.branch_id,
-                            product_id=item.product_id,
-                            movement_type="sale",
-                            quantity_change=-item.quantity,
-                            quantity_before=on_hand_before or 0,
-                            quantity_after=(on_hand_before or 0) - item.quantity,
+                        LoyaltyTransaction(
+                            customer_id=customer.id,
+                            transaction_type="earn",
+                            points=points,
+                            points_before=before,
+                            points_after=after,
                             reference_type="slip_verification",
                             reference_id=verification.id,
+                            notes="Points earned from approved slip",
                             user_id=user_id,
                         ),
                     )
-                order.status = "paid"
-                order.amount_paid = payment_amount
-                order.change_amount = max(
-                    Decimal("0"), payment_amount - Decimal(str(order.grand_total))
-                )
-
-                if order.customer_id is not None and order.loyalty_points_earned == 0:
-                    customer = LoyaltyRepository.find_org_customer(
-                        db, organization_id, order.customer_id
-                    )
-                    if customer is None:
-                        raise NotFoundException(detail="Customer not found")
-                    points = int(order.grand_total)
-                    if points > 0:
-                        before = customer.loyalty_points_balance
-                        after = before + points
-                        LoyaltyRepository.add_transaction(
-                            db,
-                            LoyaltyTransaction(
-                                customer_id=customer.id,
-                                transaction_type="earn",
-                                points=points,
-                                points_before=before,
-                                points_after=after,
-                                reference_type="slip_verification",
-                                reference_id=verification.id,
-                                notes="Points earned from approved slip",
-                                user_id=user_id,
-                            ),
-                        )
-                        customer.loyalty_points_balance = after
-                        order.loyalty_points_earned = points
+                    customer.loyalty_points_balance = after
+                    order.loyalty_points_earned = points
 
             verification.status = "verified"
             verification.failure_reason = note
