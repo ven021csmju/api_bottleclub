@@ -1,6 +1,14 @@
 # The Bottle Club POS — API Contract for Frontend
 
 **Base URL:** `http://localhost:8000/api/v1`
+
+> **Legacy-compatible routes (unchanged, not being cut over):** Promotions are
+> mounted under `/api/promotions` (not `/api/v1/promotions`) and return
+> **raw** payloads without the `{"data", "meta", "request_id"}` envelope — see
+> `app/middleware/envelope.py:26-27` (`RAW_PREFIXES`) and
+> `tests/unit/test_promotions.py`. Existing integrations calling `/api/promotions`
+> continue to work. (See `PHASE_5_OUTPUT.md` for the legacy-consistency decision.)
+
 **Swagger:** `http://localhost:8000/docs`
 **Version:** 1.0.0
 
@@ -428,28 +436,26 @@ Query: `?page=&per_page=&source_branch_id=&dest_branch_id=&status=`
 
 ---
 
-## Promotions `/promotions`
+## Promotions — legacy-compatible carve-out (mounted under `/api`)
 
-### POST `/promotions/`
-```json
-{
-  "name": "string",
-  "description": "string" | null,
-  "promotion_type": "percentage_discount" | "fixed_discount" | "buy_x_get_y" | "bundle" | "loyalty_multiplier",
-  "discount_value": 10.0,
-  "minimum_purchase": 0,
-  "max_uses": 100 | null,
-  "branch_ids": [1, 2] | null,
-  "start_date": "2026-09-01T00:00:00",
-  "end_date": "2026-09-30T23:59:59",
-  "priority": 0
-}
-```
+Promotions are intentionally **not** under `/api/v1`. They were kept on the
+legacy `/api/promotions` path and return **raw** payloads (no envelope); see
+`app/middleware/envelope.py:26-27` (`RAW_PREFIXES`).
 
-### GET `/promotions/`  `?page=&per_page=&is_active=`
-### GET `/promotions/{promotion_id}`
-### PUT `/promotions/{promotion_id}`
-### DELETE `/promotions/{promotion_id}` → 204
+### GET `/api/promotions`  `?featured=&page=&per_page=&is_active=`
+### POST `/api/admin/promotions`
+#### Body: `{ "name": "...", "description": "...", "promotion_type": "...", ... }`
+### PUT `/api/admin/promotions`
+#### Body: `{ "name": "...", ... }` (full replacement)
+### PUT `/api/admin/promotions/bulk`
+#### Body: `[{...}, {...}]`
+### DELETE `/api/admin/promotions?id=` → `{"success": true, "message": "ลบโปรโมชั่นสำเร็จ"}`
+
+**Not available in this contract:** `GET /promotions/{promotion_id}`,
+`PUT /promotions/{promotion_id}`, `DELETE /promotions/{promotion_id}` → 404
+(the `{promotion_id}` paths documented here before did not exist; if client
+demand exists, add them explicitly under `/api/v1/promotions` and coordinate
+the envelope policy).
 
 ---
 
