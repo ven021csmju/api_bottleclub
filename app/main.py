@@ -16,6 +16,7 @@ from app.middleware.envelope import ResponseEnvelopeMiddleware
 from app.middleware.rate_limit import limiter
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
+from rabbitmq.publisher import close as close_rabbitmq_publisher
 from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
     # so a down SSH tunnel / MongoDB never blocks or delays app startup.
     yield
     close_connection()
+    # RabbitMQ publisher also connects lazily and caches the connection in
+    # module globals; close it on shutdown so SIGTERM does not leak it.
+    close_rabbitmq_publisher()
 
 
 def create_app() -> FastAPI:
