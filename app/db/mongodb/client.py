@@ -50,6 +50,7 @@ def _create_client() -> Optional[MongoClient]:
             connectTimeoutMS=settings.MONGODB_CONNECTION_TIMEOUT_MS,
             maxPoolSize=settings.MONGODB_MAX_POOL_SIZE,
             minPoolSize=settings.MONGODB_MIN_POOL_SIZE,
+            tz_aware=True,
         )
         _client_is_healthy(candidate)
         _ensure_indexes(candidate[settings.MONGODB_DATABASE])

@@ -9,6 +9,7 @@ must pass whether MongoDB is up or down.
 
 import asyncio
 import time
+import uuid
 from datetime import timedelta, timezone
 
 import pytest
@@ -131,10 +132,11 @@ async def test_ttl_indexes_exist(mongo_up):
 
 async def test_created_at_recorded():
     """Documents must carry a UTC created_at for the TTL index to work."""
-    doc = repositories.insert_user_log("ttl-check", "login")
+    user_id = f"ttl-check-{uuid.uuid4().hex[:8]}"
+    doc = repositories.insert_user_log(user_id, "login")
     if doc is None:
         pytest.skip("MongoDB unreachable (SSH tunnel not open)")
-    row = repositories.query_user_logs(user_id="ttl-check", limit=1, offset=0)[0]
+    row = repositories.query_user_logs(user_id=user_id, limit=1, offset=0)[0]
     assert row["created_at"].tzinfo is not None
     age = round((__import__("datetime").datetime.now(timezone.utc) - row["created_at"]).total_seconds())
     assert 0 <= age < 60
