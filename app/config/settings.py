@@ -5,13 +5,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_DIR = Path(__file__).resolve().parents[2]
 
+_LOCAL_DEV_DATABASE_URL = (
+    "postgresql+psycopg://postgres:postgres@localhost:5432/bottle_club_dev"
+)
+
+_UNSAFE_JWT_DEFAULTS = {
+    "change-me-in-production",
+    "change-me-to-a-long-random-string-at-least-32-characters",
+}
+
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
-    DATABASE_URL: str = (
-        "postgresql+psycopg://postgres:postgres@localhost:5432/bottle_club_dev"
-    )
+    DATABASE_URL: str = _LOCAL_DEV_DATABASE_URL
     REDIS_URL: str = "redis://localhost:6379/0"
 
     JWT_SECRET_KEY: str = "change-me-in-production"
@@ -84,12 +91,20 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def validate_production_secrets(self) -> "Settings":
+    def validate_security_settings(self) -> "Settings":
         if self.ENVIRONMENT.lower() in {"production", "staging"}:
-            if self.JWT_SECRET_KEY == "change-me-in-production":
-                raise ValueError("JWT_SECRET_KEY must be changed in production")
-            if not self.DATABASE_URL:
-                raise ValueError("DATABASE_URL is required in production")
+            if self.JWT_SECRET_KEY in _UNSAFE_JWT_DEFAULTS:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be changed from placeholder in production/staging"
+                )
+            if len(self.JWT_SECRET_KEY) < 32:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be at least 32 characters in production/staging"
+                )
+            if self.DATABASE_URL == _LOCAL_DEV_DATABASE_URL:
+                raise ValueError(
+                    "DATABASE_URL must not use local development default in production/staging"
+                )
         return self
 
 
