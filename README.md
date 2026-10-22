@@ -21,24 +21,34 @@
 ## โครงสร้างโปรเจกต์
 
 ```
-project/
-├── app/
-│   ├── __init__.py
-│   ├── main.py          ← FastAPI app + root endpoint
-│   ├── database.py      ← SQLAlchemy engine & session
-│   ├── models.py        ← ORM models (User)
-│   ├── schemas.py       ← Pydantic schemas
-│   └── routers/
-│       └── users.py     ← CRUD endpoints /users
-├── alembic/
-│   ├── env.py           ← Alembic migration environment
-│   ├── script.py.mako
-│   └── versions/        ← Migration files
-├── alembic.ini
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
+project/                          # parent project (docker-compose context: "..")
+├── api/                          # <-- THIS REPOSITORY (repo root == Backend/api)
+│   ├── app/                      # FastAPI app, domains, middleware, db layer
+│   ├── rabbitmq/                 # canonical RabbitMQ publisher (pika)
+│   ├── scripts/                  # run_dev.sh, fix_migrations.py, seed.py...
+│   ├── tests/                    # unit / integration / e2e
+│   ├── migrations/               # raw SQL migration scripts (001, 006, 007 + rollback)
+│   ├── Dockerfile                # expects PARENT context: COPY api/... -> builds FROM parent
+│   ├── docker-compose.yml        # context: .. ; mounts ../api/app ../database
+│   ├── requirements.txt
+│   ├── pytest.ini
+│   └── README.md
+├── database/                     # sibling (NOT in this repo) - Alembic + raw SQL
+│   ├── alembic.ini
+│   ├── alembic/                  # env.py, script.py.mako, versions/ 001..008(+009)
+│   ├── models.py                 # ORM models (single source of truth)
+│   └── thebottleclub_schema.sql  # historical 007-era snapshot (retired)
+└── .env                          # sibling-level env file (never committed)
+
+หมายเหตุการตรวจสอบ:
+- โครงสร้างจริงของ repo นี้คือคอมโพนต `api/` ของโปรเจกต์แม่ (parent):
+  รัน `docker build .` จาก root ของ repo นี้ **จะล้มเหลว** (Dockerfile:13
+  อ้างอิง `api/...` ซึ่งไม่มีอยู่ใน root ของ repo นี้)
+- เนื้อหาของ parent dir (`database/`, `alembic.ini`, `.env`, ฯลฯ) อยู่นอก
+  ขอบเขตของ repo นี้ จึงยังไม่สามารถยืนยันได้ในระดับไฟล์
+- `docker` / `docker-compose` ไม่มีติดตั้งในเครื่องนี้ → การตรวจสอบ
+  `docker build` / `docker compose config` ยังคงสถานะ NOT TESTED
+
 ```
 
 ---

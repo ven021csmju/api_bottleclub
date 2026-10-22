@@ -287,6 +287,13 @@ A dedicated FastAPI service is justified now because:
 
 ### 28.2 Domain-Oriented Structure
 
+> หมายเหตุการตรวจสอบ (เพิ่มเติม): โครงสร้างต้นไม้ด้านล่างนี้ถูกบันทึกไว้ในเฟสก่อนหน้า
+> ในฐานะโครงสร้างเป้าหมาย (aspirational) — **ไม่ตรงกับ** repo นี้ทั้งหมด:
+> repo นี้ไม่มี `alembic.ini`, `alembic/`, `database/` และ `migrations/versions/`
+> (migration ของ repo นี้เป็น raw SQL ใน `migrations/` เช่น 001, 006, 007 พร้อมไฟล์ rollback)
+> ส่วน `tests/conftest.py` และ `scripts/seed.py` มีอยู่จริง
+> โครงสร้างจริงอ่านได้ใน `README.md` ของ repo นี้
+
 ```
 project/
 ├── app/

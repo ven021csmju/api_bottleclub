@@ -292,6 +292,60 @@ Query: `?page=&per_page=&status=&date_from=&date_to=&customer_id=&user_id=`
 
 ### PUT `/orders/{order_id}/complete`
 
+### Order tracking (Tracking Token)
+
+#### Breaking changes
+
+- `GET /orders/track/{tracking_or_ref}` now requires a JWT with the
+  `orders.read` permission and only finds orders of the caller's
+  organization. Without the `Authorization` header the request is rejected
+  (`422 VALIDATION_ERROR`); an invalid/expired token returns
+  `401 UNAUTHORIZED`; a token without `orders.read` returns `403 FORBIDDEN`.
+  Customer-facing pages must use `GET /orders/track/public/{token}` instead.
+- The `POST /orders/` response gains `tracking_token` (see below).
+
+#### POST `/orders/` — response addition
+The order response gains one field:
+```json
+{ "...": "existing order fields", "tracking_token": "string" | null }
+```
+`tracking_token` is the plaintext public tracking token. It is returned
+**once**, only on a fresh creation; only its SHA-256 hash is stored. An
+idempotent replay (same `idempotency_key`) returns `"tracking_token": null`
+because the original token cannot be recovered — staff must then issue a new
+one with `POST /orders/{order_id}/tracking-token`. No other order endpoint
+returns the token.
+
+#### POST `/orders/{order_id}/tracking-token`
+Permission: `orders.update`. Organization scoped (another organization's
+order → `404 NOT_FOUND`). Issues a new token and invalidates the previous one
+immediately.
+```json
+{ "order_id": 1, "tracking_token": "string" }
+```
+
+#### GET `/orders/track/{tracking_or_ref}` — staff
+Permission: `orders.read`. Looks up by `tracking_number` or `order_number`
+within the caller's organization. Rate limited (`RATE_LIMIT_ORDER_TRACKING`,
+default `30/minute` per client IP).
+```json
+{
+  "order_number": "string",
+  "status": "string",
+  "fulfillment_status": "string",
+  "tracking_number": "string" | null,
+  "created_at": "datetime",
+  "completed_at": "datetime" | null
+}
+```
+Unknown or other-organization reference → `404 NOT_FOUND` (`"Order not found"`).
+
+#### GET `/orders/track/public/{token}` — customer, no auth
+Returns exactly the six fields shown above for the order whose token matches.
+Invalid, replaced or unknown token → `404 NOT_FOUND` (`"Order not found"`).
+Rate limited like the staff route; over the limit →
+`429` `{ "detail": "Rate limit exceeded", "code": "RATE_LIMIT_EXCEEDED", "request_id": "..." }`.
+
 ---
 
 ## Payments `/payments`
