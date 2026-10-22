@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+import hashlib
+import secrets
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -68,6 +70,16 @@ class OrderService:
             )
 
     @staticmethod
+    def generate_tracking_token() -> str:
+        """Cryptographically unpredictable public tracking capability token."""
+        return secrets.token_urlsafe(32)
+
+    @staticmethod
+    def hash_tracking_token(token: str) -> str:
+        """SHA-256 digest of a tracking token; never the plaintext."""
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def create_order(
         db: Session,
         org_id: int,
@@ -75,14 +87,14 @@ class OrderService:
         user_id: int,
         data: dict,
         request_id: str = "",
-    ) -> Order:
+    ) -> tuple[Order, str | None]:
         idempotency_key = data.get("idempotency_key")
         if idempotency_key:
             existing = OrderRepository.find_by_idempotency_key(
                 db, org_id, idempotency_key
             )
             if existing:
-                return existing
+                return existing, None
 
         branch = OrderRepository.get_branch(db, org_id, branch_id)
         if not branch:
@@ -129,6 +141,11 @@ class OrderService:
             order_source=order_source,
             idempotency_key=idempotency_key,
         )
+        # Issue a public-tracking capability token at order creation. Only the
+        # SHA-256 digest is stored; the plaintext is returned once in the
+        # create response and is never persisted.
+        tracking_token = OrderService.generate_tracking_token()
+        order.tracking_token_hash = OrderService.hash_tracking_token(tracking_token)
         OrderRepository.add_order(db, order)
 
         subtotal = Decimal("0")
@@ -213,7 +230,33 @@ class OrderService:
             request_id,
             {"order_id": order.id, "order_number": order.order_number},
         )
-        return order
+        return order, tracking_token
+
+    @staticmethod
+    def replace_tracking_token(
+        db: Session,
+        org_id: int,
+        order_id: int,
+    ) -> tuple[Order, str]:
+        """Replace an order's public tracking token.
+
+        Locks the target order row within the transaction (organization
+        scoped) so concurrent replacements serialize. The stored hash is
+        overwritten with the SHA-256 digest of a newly generated token, so
+        the previous plaintext token is invalidated (last write wins). The new
+        plaintext token is returned once and never persisted.
+        """
+        order = OrderRepository.get_org_order_for_update(db, org_id, order_id)
+        if not order:
+            raise NotFoundException(detail="Order not found")
+
+        tracking_token = OrderService.generate_tracking_token()
+        order.tracking_token_hash = OrderService.hash_tracking_token(tracking_token)
+
+        db.flush()
+        db.commit()
+        db.refresh(order)
+        return order, tracking_token
 
     @staticmethod
     def list_orders(

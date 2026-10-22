@@ -70,6 +70,23 @@ class OrderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrderCreationResponse(OrderResponse):
+    """Create-order response.
+
+    Extends :class:`OrderResponse`` with a single-use plaintext
+    ``tracking_token`` that is returned only on a successful fresh creation.
+    Idempotency replays return ``tracking_token=None`` (the original token is
+    unrecoverable because it is never stored).
+    """
+
+    tracking_token: Optional[str] = None
+
+
+class OrderTrackingTokenReplaceResponse(BaseModel):
+    order_id: int
+    tracking_token: str
+
+
 class OrderListResponse(BaseModel):
     orders: list[OrderResponse]
     total: int

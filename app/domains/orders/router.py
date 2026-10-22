@@ -10,16 +10,20 @@ from app.middleware.auth import (
     require_permission,
     require_station_item_permission,
 )
+from app.middleware.rate_limit import limiter
 from app.db.models import User
+from app.config.settings import settings
 
 from .schemas import (
     CheckoutRequest,
     CheckoutResponse,
     OrderCancel,
     OrderCreate,
+    OrderCreationResponse,
     OrderListResponse,
     OrderResponse,
     OrderStatusUpdate,
+    OrderTrackingTokenReplaceResponse,
     ReceiptResponse,
     OrderItemStatusUpdate,
     StationItemsListResponse,
@@ -31,15 +35,15 @@ from .service import OrderService
 router = APIRouter()
 
 
-@router.post("/", response_model=OrderResponse)
+@router.post("/", response_model=OrderCreationResponse)
 def create_order(
     request: Request,
     body: OrderCreate,
     user: User = Depends(require_permission("orders.create")),
     branch_id: int = Depends(get_current_branch),
     db: Session = Depends(get_db),
-) -> OrderResponse:
-    order = OrderService.create_order(
+) -> OrderCreationResponse:
+    order, tracking_token = OrderService.create_order(
         db=db,
         org_id=user.organization_id,
         branch_id=branch_id,
@@ -47,7 +51,36 @@ def create_order(
         data=body.model_dump(),
         request_id=getattr(request.state, "request_id", ""),
     )
-    return OrderResponse.model_validate(order)
+    order_response = OrderResponse.model_validate(order)
+    return OrderCreationResponse(
+        **order_response.model_dump(), tracking_token=tracking_token
+    )
+
+
+@router.post(
+    "/{order_id}/tracking-token",
+    response_model=OrderTrackingTokenReplaceResponse,
+)
+def replace_order_tracking_token(
+    order_id: int,
+    user: User = Depends(require_permission("orders.update")),
+    db: Session = Depends(get_db),
+) -> OrderTrackingTokenReplaceResponse:
+    """Replace an order's public tracking token (staff).
+
+    Requires the ``orders.update`` permission and is organization scoped.
+    The previous token hash is overwritten (last write wins); the new
+    plaintext token is returned once and never persisted.
+    """
+    order, tracking_token = OrderService.replace_tracking_token(
+        db=db,
+        org_id=user.organization_id,
+        order_id=order_id,
+    )
+    return OrderTrackingTokenReplaceResponse(
+        order_id=order.id,
+        tracking_token=tracking_token,
+    )
 
 
 @router.get("/", response_model=OrderListResponse)
@@ -180,16 +213,52 @@ def update_order_tracking(
 
 
 @router.get("/track/{tracking_or_ref}")
-def track_order(tracking_or_ref: str, db: Session = Depends(get_db)) -> dict:
+@limiter.limit(settings.RATE_LIMIT_ORDER_TRACKING)
+def track_order(
+    request: Request,
+    tracking_or_ref: str,
+    user: User = Depends(require_permission("orders.read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Staff tracking: authenticated, scoped to the caller's organization."""
     from sqlalchemy import select
 
     from app.db.models import Order
 
     order = db.scalar(
         select(Order).where(
+            Order.organization_id == user.organization_id,
             (Order.tracking_number == tracking_or_ref)
-            | (Order.order_number == tracking_or_ref)
+            | (Order.order_number == tracking_or_ref),
         )
+    )
+    if not order:
+        from app.shared.exceptions import NotFoundException
+        raise NotFoundException(detail="Order not found")
+
+    return {
+        "order_number": order.order_number,
+        "status": order.status,
+        "fulfillment_status": order.fulfillment_status,
+        "tracking_number": order.tracking_number,
+        "created_at": order.created_at,
+        "completed_at": order.completed_at,
+    }
+
+
+@router.get("/track/public/{token}")
+@limiter.limit(settings.RATE_LIMIT_ORDER_TRACKING)
+def track_order_public(
+    request: Request, token: str, db: Session = Depends(get_db)
+) -> dict:
+    """Public customer tracking by unguessable capability token. No auth."""
+    from sqlalchemy import select
+
+    from app.db.models import Order
+
+    token_hash = OrderService.hash_tracking_token(token)
+    order = db.scalar(
+        select(Order).where(Order.tracking_token_hash == token_hash)
     )
     if not order:
         from app.shared.exceptions import NotFoundException

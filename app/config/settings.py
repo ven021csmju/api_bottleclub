@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN: str = "30/minute"
     RATE_LIMIT_REFRESH: str = "60/minute"
+    RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
 
     # MongoDB (log service on the Ubuntu server, reached via SSH tunnel)
     # MONGODB_URI defaults to localhost because the SSH tunnel maps the

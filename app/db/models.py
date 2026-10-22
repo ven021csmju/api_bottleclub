@@ -830,6 +830,7 @@ class Order(Base):
         String(30), nullable=False, server_default="unfulfilled"
     )
     tracking_number: Mapped[str | None] = mapped_column(String(100))
+    tracking_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     amount_paid: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     change_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     loyalty_points_earned: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -870,6 +871,12 @@ class Order(Base):
             "idempotency_key",
             unique=True,
             postgresql_where="idempotency_key IS NOT NULL",
+        ),
+        Index(
+            "uq_orders_tracking_token_hash",
+            "tracking_token_hash",
+            unique=True,
+            postgresql_where="tracking_token_hash IS NOT NULL",
         ),
     )
 

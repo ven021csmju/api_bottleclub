@@ -180,6 +180,22 @@ class OrderRepository:
         ).unique().scalar_one_or_none()
 
     @staticmethod
+    def get_org_order_for_update(
+        db: Session, org_id: int, order_id: int
+    ) -> Order | None:
+        """Load an order row with a row lock, organization scoped.
+
+        Follows the existing ``with_for_update`` convention used by
+        :class:`SlipVerifyRepository.get_org_verification`.
+        """
+        stmt = (
+            select(Order)
+            .where(Order.id == order_id, Order.organization_id == org_id)
+            .with_for_update()
+        )
+        return db.scalar(stmt)
+
+    @staticmethod
     def get_org_order_by_number(db: Session, org_id: int, order_number: str) -> Order | None:
         return db.execute(
             select(Order)
