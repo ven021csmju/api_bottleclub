@@ -2,6 +2,9 @@
 
 These tests are deliberately skipped unless explicitly enabled. They must use
 dedicated test credentials and records; no secrets belong in the repository.
+
+Every test here is marked ``real_api``. There is no default target: the API
+under test must be named explicitly with ``REAL_API_BASE_URL``.
 """
 
 from __future__ import annotations
@@ -19,14 +22,15 @@ def _enabled(name: str) -> bool:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if _enabled("RUN_REAL_INTEGRATION_TESTS"):
-        return
-    marker = pytest.mark.skip(
+    enabled = _enabled("RUN_REAL_INTEGRATION_TESTS")
+    skip = pytest.mark.skip(
         reason="Set RUN_REAL_INTEGRATION_TESTS=true to call a real API"
     )
     for item in items:
         if "real_integration" in str(item.fspath):
-            item.add_marker(marker)
+            item.add_marker(pytest.mark.real_api)
+            if not enabled:
+                item.add_marker(skip)
 
 
 @dataclass(frozen=True)
@@ -62,7 +66,7 @@ def _required(name: str) -> str:
 @pytest.fixture(scope="session")
 def real_settings() -> RealApiSettings:
     return RealApiSettings(
-        base_url=os.getenv("REAL_API_BASE_URL", "https://api.wayneven.uk").rstrip("/"),
+        base_url=_required("REAL_API_BASE_URL").rstrip("/"),
         user_username=_required("TEST_USER_USERNAME"),
         user_password=_required("TEST_USER_PASSWORD"),
         admin_username=_required("TEST_ADMIN_USERNAME"),

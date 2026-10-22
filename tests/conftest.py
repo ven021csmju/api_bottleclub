@@ -1,183 +1,117 @@
+"""Shared, database-free test configuration.
+
+Database fixtures (engine, session, DB-backed client, seed data, auth
+headers) live in ``tests/integration/conftest.py`` behind a guard that
+refuses to run ``create_all()``/``drop_all()`` against anything but a local,
+explicitly opted-in ``*_test`` database.
+
+This module must never create a SQLAlchemy engine or open a connection to
+PostgreSQL, RabbitMQ or MongoDB.
+"""
 from __future__ import annotations
 
-import os
+from pathlib import Path
 from typing import Generator
 
-from dotenv import load_dotenv
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
 
-from app.config.settings import settings
-from app.db.session import get_db
-from app.main import create_app
-from app.db.models import Base
-from app.shared.security import create_access_token, hash_password
-
-# ---------------------------------------------------------------------------
-# Use a dedicated test database.  The env var TEST_DATABASE_URL can be set
-# in CI or locally (e.g. in .env); fall back to a PostgreSQL URL that points
-# at the docker postgres instance with a separate database name.
-# ---------------------------------------------------------------------------
-load_dotenv()
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+psycopg://postgres:postgres@localhost:5432/bottle_club_test",
-)
-
-engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_TESTS_DIR = Path(__file__).resolve().parent
 
 
-# ---------------------------------------------------------------------------
-# Session fixture – creates tables, yields a session, drops everything after.
-# ---------------------------------------------------------------------------
-@pytest.fixture()
-def session() -> Generator[Session, None, None]:
-    Base.metadata.create_all(bind=engine)
-    connection = engine.connect()
-    transaction = connection.begin()
-    db_session = TestSessionLocal(bind=connection)
-
-    yield db_session
-
-    db_session.close()
-    transaction.rollback()
-    connection.close()
-    Base.metadata.drop_all(bind=engine)
-
-
-# ---------------------------------------------------------------------------
-# Client fixture – FastAPI TestClient wired to the test session.
-# ---------------------------------------------------------------------------
-@pytest.fixture()
-def client(session: Session) -> Generator[TestClient, None, None]:
-    def _override_get_db():
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Tag tests by directory so ``-m unit`` / ``-m integration`` select them."""
+    for item in items:
         try:
-            yield session
-        finally:
-            pass
+            rel = Path(str(item.path)).resolve().relative_to(_TESTS_DIR)
+        except ValueError:
+            continue
+        top = rel.parts[0] if rel.parts else ""
+        if top == "unit":
+            item.add_marker(pytest.mark.unit)
+        elif top == "integration":
+            item.add_marker(pytest.mark.integration)
 
-    from app.middleware.rate_limit import limiter
 
+# ---------------------------------------------------------------------------
+# External services – blocked for every test unless marked ``external``.
+#
+# Patched at the lowest layer so every caller is covered regardless of how it
+# imported the higher-level helpers (``from ... import name`` bindings in
+# app.services.user_events and app.domains.auth.service would otherwise
+# bypass a patch on the defining module):
+#   * RabbitMQ: rabbitmq.connection.create_blocking_connection – the only
+#     place a pika connection is opened (rabbitmq/publisher.py).
+#   * MongoDB: the MongoClient name inside app.db.mongodb.client – the only
+#     place a client is constructed (_create_client).
+# Both fail the way a down broker / dead SSH tunnel does, so the production
+# fail-silent paths are what tests exercise.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _block_external_services(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.node.get_closest_marker("external") is not None:
+        return
+
+    import pika
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    import app.db.mongodb.client as mongo_client
+    import rabbitmq.connection as rabbit_connection
+    import rabbitmq.publisher as rabbit_publisher
+
+    def _no_rabbitmq(*args, **kwargs):
+        raise pika.exceptions.AMQPConnectionError(
+            "RabbitMQ is disabled in tests (mark with @pytest.mark.external to allow)"
+        )
+
+    def _no_mongodb(*args, **kwargs):
+        raise ServerSelectionTimeoutError(
+            "MongoDB is disabled in tests (mark with @pytest.mark.external to allow)"
+        )
+
+    monkeypatch.setattr(rabbit_connection, "create_blocking_connection", _no_rabbitmq)
+    monkeypatch.setattr(rabbit_publisher, "_CONNECTION", None)
+    monkeypatch.setattr(rabbit_publisher, "_CHANNEL", None)
+
+    monkeypatch.setattr(mongo_client, "MongoClient", _no_mongodb)
+    monkeypatch.setattr(mongo_client, "_client", None)
+    monkeypatch.setattr(mongo_client, "_next_retry_at", 0.0)
+
+
+@pytest.fixture()
+def rate_limit_disabled() -> Generator[None, None, None]:
     # Rate limits must not apply during tests unless a test explicitly
     # re-enables the limiter (see TestRateLimit in test_contract.py). The
     # in-memory counter would otherwise leak between tests and cause flaky 429s.
+    from app.middleware.rate_limit import limiter
+
     prev_enabled = limiter.enabled
     limiter.enabled = False
     try:
-        app = create_app()
-        app.dependency_overrides[get_db] = _override_get_db
-
-        with TestClient(app, raise_server_exceptions=False) as c:
-            yield c
+        yield
     finally:
         limiter.enabled = prev_enabled
 
 
-# ---------------------------------------------------------------------------
-# Seed data helpers
-# ---------------------------------------------------------------------------
-
 @pytest.fixture()
-def seed_org(session: Session) -> int:
-    from app.db.models import Organization
+def client(rate_limit_disabled: None) -> Generator[TestClient, None, None]:
+    """Database-free TestClient.
 
-    org = Organization(name="Test Org", slug="test-org")
-    session.add(org)
-    session.flush()
-    return org.id
+    Any endpoint that needs the database fails loudly instead of reaching the
+    application engine. ``tests/integration/conftest.py`` overrides this
+    fixture with a client bound to the guarded test database.
+    """
+    from app.db.session import get_db
+    from app.main import create_app
 
+    def _no_database():
+        raise RuntimeError(
+            "Database access is only available to tests under tests/integration"
+        )
+        yield  # pragma: no cover - makes this a generator dependency
 
-@pytest.fixture()
-def seed_branch(session: Session, seed_org: int) -> int:
-    from app.db.models import Branch
+    app = create_app()
+    app.dependency_overrides[get_db] = _no_database
 
-    branch = Branch(
-        organization_id=seed_org,
-        name="Main Branch",
-        code="MBR",
-    )
-    session.add(branch)
-    session.flush()
-    return branch.id
-
-
-@pytest.fixture()
-def seed_role_and_permission(session: Session, seed_org: int) -> dict:
-    from app.db.models import Permission, Role, RolePermission
-
-    role = Role(organization_id=seed_org, name="Admin", is_system=True)
-    session.add(role)
-    session.flush()
-
-    perm_codes = [
-        "orders.create",
-        "orders.read",
-        "orders.cancel",
-        "orders.complete",
-    ]
-    perm_map: dict[str, int] = {}
-    for code in perm_codes:
-        perm = Permission(code=code, module="orders")
-        session.add(perm)
-        session.flush()
-        perm_map[code] = perm.id
-        session.add(RolePermission(role_id=role.id, permission_id=perm.id))
-
-    session.flush()
-    return {"role_id": role.id, "permissions": perm_map}
-
-
-@pytest.fixture()
-def seed_user(
-    session: Session,
-    seed_org: int,
-    seed_branch: int,
-    seed_role_and_permission: dict,
-) -> dict:
-    from app.db.models import User, UserRole
-
-    user = User(
-        organization_id=seed_org,
-        username="testcashier",
-        email="cashier@test.com",
-        password_hash=hash_password("Test1234!"),
-        display_name="Test Cashier",
-        status="active",
-    )
-    session.add(user)
-    session.flush()
-
-    user_role = UserRole(
-        user_id=user.id,
-        role_id=seed_role_and_permission["role_id"],
-        branch_id=seed_branch,
-    )
-    session.add(user_role)
-    session.flush()
-
-    return {
-        "user_id": user.id,
-        "org_id": seed_org,
-        "branch_id": seed_branch,
-        "username": "testcashier",
-        "password": "Test1234!",
-    }
-
-
-@pytest.fixture()
-def auth_headers(seed_user: dict) -> dict[str, str]:
-    token = create_access_token(
-        user_id=seed_user["user_id"],
-        org_id=seed_user["org_id"],
-        permissions=[
-            "orders.create",
-            "orders.read",
-            "orders.cancel",
-            "orders.complete",
-        ],
-        branches=[seed_user["branch_id"]],
-    )
-    return {"Authorization": f"Bearer {token}", "X-Branch-Id": str(seed_user["branch_id"])}
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c

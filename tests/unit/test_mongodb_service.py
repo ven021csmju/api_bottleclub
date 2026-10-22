@@ -5,6 +5,10 @@ These do NOT require the PostgreSQL test database.
 Connection-dependent tests (insert/query/pagination/TTL) auto-skip when
 MongoDB is unreachable (no tunnel open). Fail-silence tests always run and
 must pass whether MongoDB is up or down.
+
+Marked ``external``: when MongoDB IS reachable these tests write real
+documents, so they are exempt from the autouse external-service block and
+must be deselected (``-m "not external"``) in offline runs.
 """
 
 import asyncio
@@ -25,7 +29,7 @@ from app.db.mongodb import (
 from app.db.mongodb import repositories
 from app.db.mongodb.client import get_client
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.external]
 
 
 @pytest.fixture(autouse=True)
