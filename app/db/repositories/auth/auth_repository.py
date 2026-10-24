@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -60,6 +60,20 @@ class AuthRepository:
         ).scalar_one_or_none()
 
     @staticmethod
+    def username_taken_in_org(db: Session, organization_id: int, username: str) -> bool:
+        """Any row, deleted ones included, holds ``username`` in the organization."""
+        return bool(
+            db.execute(
+                select(
+                    exists().where(
+                        User.organization_id == organization_id,
+                        User.username == username,
+                    )
+                )
+            ).scalar()
+        )
+
+    @staticmethod
     def find_registration_organization(
         db: Session, organization_id: int | None
     ) -> Organization | None:
@@ -74,6 +88,12 @@ class AuthRepository:
         return db.execute(
             select(User).where(User.id == user_id)
         ).scalar_one_or_none()
+
+    @staticmethod
+    def has_roles(db: Session, user_id: int) -> bool:
+        return bool(
+            db.execute(select(exists().where(UserRole.user_id == user_id))).scalar()
+        )
 
     @staticmethod
     def load_permission_codes(db: Session, user_id: int) -> list[str]:

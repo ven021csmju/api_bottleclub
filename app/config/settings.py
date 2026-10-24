@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
     GOOGLE_REDIRECT_URI: str | None = None
+    # Organization of a new account created at its first Google sign-in. The
+    # account gets no role; staff accounts cannot sign in with Google.
     GOOGLE_DEFAULT_ORGANIZATION_ID: int | None = None
-    GOOGLE_DEFAULT_ROLE_NAME: str | None = None
-    GOOGLE_DEFAULT_BRANCH_ID: int | None = None
 
     CORS_ORIGINS: list[str] = [
         "https://the-bottle-club-ai.vercel.app",

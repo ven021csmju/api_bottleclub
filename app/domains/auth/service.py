@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.mongodb import sync_log_user_activity
-from app.db.models import Branch, Role, User, UserRole
+from app.db.models import User
 from app.db.repositories.auth import AuthRepository
 from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
+    ForbiddenException,
     UnauthorizedException,
 )
 
@@ -246,16 +247,34 @@ class AuthService:
         email = claims["email"].strip().lower()
         matches = AuthRepository.find_by_email(db, email)
         if len(matches) > 1:
+            _record_attempt(db, email[:100], ip_address, success=False, user_id=None)
             raise BadRequestException(detail="Google email belongs to multiple accounts")
 
-        user = matches[0] if matches else cls._create_google_user(db, claims)
-        if user.status != "active" or user.deleted_at is not None:
-            raise UnauthorizedException(detail="User account is inactive")
+        if matches:
+            user = matches[0]
+            # Until Google accounts are linked by their subject (34c), the
+            # email is the only link: it must never open a staff account.
+            if user.is_superadmin or AuthRepository.has_roles(db, user.id):
+                _record_attempt(db, user.username, ip_address, success=False, user_id=user.id)
+                raise ForbiddenException(
+                    detail="Google sign-in is not available for staff accounts",
+                    code="GOOGLE_STAFF_ACCOUNT",
+                )
+        else:
+            user = cls._create_google_user(db, claims)
 
         now = datetime.now(timezone.utc)
+        if user.status != "active" or user.deleted_at is not None:
+            _record_attempt(db, user.username, ip_address, success=False, user_id=user.id)
+            raise UnauthorizedException(detail="User account is inactive")
+        if user.locked_until and user.locked_until > now:
+            _record_attempt(db, user.username, ip_address, success=False, user_id=user.id)
+            raise UnauthorizedException(detail="Account is locked. Please try again later.")
+
         user.last_login_at = now
         user.last_login_ip = ip_address
         db.commit()
+        _record_attempt(db, user.username, ip_address, success=True, user_id=user.id)
 
         permissions = cls._load_user_permissions(db, user)
         branches = cls._load_user_branches(db, user)
@@ -291,58 +310,44 @@ class AuthService:
 
     @staticmethod
     def _create_google_user(db: Session, claims: dict) -> User:
-        if settings.GOOGLE_DEFAULT_ORGANIZATION_ID is None or not settings.GOOGLE_DEFAULT_ROLE_NAME:
+        """A new account without any role (no staff permission)."""
+        organization = None
+        if settings.GOOGLE_DEFAULT_ORGANIZATION_ID is not None:
+            organization = AuthRepository.find_registration_organization(
+                db, settings.GOOGLE_DEFAULT_ORGANIZATION_ID
+            )
+        if organization is None:
             raise BadRequestException(
-                detail="Google account is new and default organization/role is not configured"
+                detail="Google account is new and the default organization is not configured"
             )
-
-        organization_id = settings.GOOGLE_DEFAULT_ORGANIZATION_ID
-        role = db.execute(
-            select(Role).where(
-                Role.organization_id == organization_id,
-                Role.name == settings.GOOGLE_DEFAULT_ROLE_NAME,
-            )
-        ).scalar_one_or_none()
-        if role is None:
-            raise BadRequestException(detail="Configured Google default role was not found")
-
-        if settings.GOOGLE_DEFAULT_BRANCH_ID is not None:
-            branch = db.execute(
-                select(Branch).where(
-                    Branch.id == settings.GOOGLE_DEFAULT_BRANCH_ID,
-                    Branch.organization_id == organization_id,
-                )
-            ).scalar_one_or_none()
-            if branch is None:
-                raise BadRequestException(
-                    detail="Configured Google default branch was not found"
-                )
 
         email = claims["email"].strip().lower()
         username = email.split("@", 1)[0][:80] or "google-user"
         base_username = username
         suffix = 1
-        while AuthRepository.find_by_username_in_org(db, organization_id, username):
+        # Deleted rows still hold their username (uq_user_org_username).
+        while AuthRepository.username_taken_in_org(db, organization.id, username):
             suffix += 1
             username = f"{base_username[:(100 - len(str(suffix)) - 1)]}-{suffix}"
 
         user = User(
-            organization_id=organization_id,
+            organization_id=organization.id,
             username=username,
             email=email,
             password_hash=hash_password(secrets.token_urlsafe(32)),
             display_name=claims.get("name") or email,
             status="active",
         )
-        db.add(user)
-        db.flush()
-        db.add(
-            UserRole(
-                user_id=user.id,
-                role_id=role.id,
-                branch_id=settings.GOOGLE_DEFAULT_BRANCH_ID,
+        try:
+            with db.begin_nested():
+                db.add(user)
+                db.flush()
+        except IntegrityError:
+            # uq_user_org_email: a deleted account of this organization still
+            # holds the address.
+            raise BadRequestException(
+                detail="Google email belongs to a deleted account", code="DUPLICATE_USER"
             )
-        )
         return user
 
     @staticmethod

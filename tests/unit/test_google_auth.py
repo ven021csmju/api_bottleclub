@@ -173,3 +173,107 @@ def test_verify_debug_log_identifies_jwt_header_failure_without_token(monkeypatc
     assert "JWTError" in caplog.text
     assert "invalid JWT header" in caplog.text
     assert "id-token-value" not in caplog.text
+
+
+# --- ID token checks with a locally generated key (no call to Google) -------
+
+def _rsa_key(kid: str):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jose import jwk
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = private.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+    public = jwk.construct(pem, "RS256").public_key().to_dict()
+    public.update(kid=kid, use="sig", alg="RS256")
+    return pem, public
+
+
+@pytest.fixture(scope="module")
+def google_key():
+    return _rsa_key("test-key")
+
+
+@pytest.fixture(scope="module")
+def other_key():
+    return _rsa_key("test-key")  # same kid, different key: forged signature
+
+
+def _claims(**overrides):
+    import time
+
+    now = int(time.time())
+    claims = {
+        "iss": "https://accounts.google.com",
+        "aud": "client-id",
+        "azp": "client-id",
+        "sub": "1234567890",
+        "email": "person@example.test",
+        "email_verified": True,
+        "nonce": "nonce-value",
+        "iat": now,
+        "exp": now + 600,
+    }
+    claims.update(overrides)
+    return {k: v for k, v in claims.items() if v is not None}
+
+
+def _verify(monkeypatch, google_key, token: str):
+    configure_google(monkeypatch)
+    _, public = google_key
+    responses = [
+        FakeResponse({"jwks_uri": "https://www.googleapis.com/oauth2/v3/certs"}),
+        FakeResponse({"keys": [public]}),
+    ]
+    monkeypatch.setattr(google.httpx, "Client", lambda timeout: FakeClient(responses))
+    return google.verify_id_token(token, "nonce-value")
+
+
+def _sign(key, claims):
+    from jose import jwt
+
+    pem, _ = key
+    return jwt.encode(claims, pem, algorithm="RS256", headers={"kid": "test-key"})
+
+
+@pytest.mark.parametrize("issuer", ["https://accounts.google.com", "accounts.google.com"])
+def test_id_token_accepts_both_google_issuers(monkeypatch, google_key, issuer):
+    claims = _verify(monkeypatch, google_key, _sign(google_key, _claims(iss=issuer)))
+    assert claims["sub"] == "1234567890"
+
+
+def test_id_token_without_azp_is_accepted(monkeypatch, google_key):
+    assert _verify(monkeypatch, google_key, _sign(google_key, _claims(azp=None)))["email"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"iss": "https://evil.example.test"},
+        {"aud": "another-client"},
+        {"azp": "another-client"},
+        {"exp": 1_000_000_000, "iat": 999_999_000},
+        {"nonce": "other-nonce"},
+        {"email_verified": False},
+        {"email_verified": "true"},
+        {"email": None},
+    ],
+)
+def test_id_token_claim_is_refused(monkeypatch, google_key, overrides):
+    with pytest.raises(google.UnauthorizedException):
+        _verify(monkeypatch, google_key, _sign(google_key, _claims(**overrides)))
+
+
+def test_id_token_signed_by_another_key_is_refused(monkeypatch, google_key, other_key):
+    with pytest.raises(google.UnauthorizedException):
+        _verify(monkeypatch, google_key, _sign(other_key, _claims()))
+
+
+def test_id_token_hs256_with_public_key_is_refused(monkeypatch, google_key):
+    from jose import jwt
+
+    forged = jwt.encode(_claims(), "client-id", algorithm="HS256", headers={"kid": "test-key"})
+    with pytest.raises(google.UnauthorizedException):
+        _verify(monkeypatch, google_key, forged)

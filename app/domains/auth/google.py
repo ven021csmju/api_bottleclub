@@ -10,6 +10,8 @@ from app.config.settings import settings
 from app.shared.exceptions import BadRequestException, UnauthorizedException
 
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+#: Google signs ID tokens with either form of its issuer.
+GOOGLE_ISSUERS = ("https://accounts.google.com", "accounts.google.com")
 logger = logging.getLogger(__name__)
 
 
@@ -177,12 +179,16 @@ def verify_id_token(id_token: str, expected_nonce: str) -> dict[str, Any]:
             jwk.construct(key_data),
             algorithms=["RS256"],
             audience=client_id,
-            issuer="https://accounts.google.com",
+            issuer=GOOGLE_ISSUERS,
         )
     except (JWTError, KeyError, TypeError, ValueError) as exc:
         _log_debug_failure("jwt_decode", exc, (id_token, expected_nonce))
         raise UnauthorizedException(detail="Unable to verify Google identity")
 
+    # azp: the client the token was issued to; when present it must be ours.
+    if "azp" in claims and claims["azp"] != client_id:
+        logger.debug("GOOGLE VERIFY ERROR stage=verify_id_token claim=azp")
+        raise UnauthorizedException(detail="Unable to verify Google identity")
     if claims.get("nonce") != expected_nonce:
         logger.debug("GOOGLE VERIFY ERROR stage=verify_id_token claim=nonce")
         raise UnauthorizedException(detail="Invalid Google OAuth nonce")

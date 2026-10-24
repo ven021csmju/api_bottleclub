@@ -26,6 +26,7 @@ Each line is a behaviour the frontend may have relied on.
 | Any route with `Authorization: Bearer`, `POST /auth/refresh` | a soft-deleted user's tokens kept working until they expired | 401 as soon as the user is deleted |
 | `POST /auth/login` | a deleted user could still log in; a username used in two organizations gave 500 | deleted → 401; a username in two organizations → 401 `Invalid username or password` (login has no organization field; rename one of the accounts) |
 | `POST /auth/login`, `/auth/refresh` | a second login of the same user from the same device and IP within one second → 500 | 200; every refresh token carries a random `jti` |
+| `GET /auth/google/callback` | the Google email signed in to **any** account with that email, staff and Superadmin included; new accounts got `GOOGLE_DEFAULT_ROLE_NAME` | an account with any role, or a Superadmin, → 403 `GOOGLE_STAFF_ACCOUNT`; new accounts get **no role** (`GOOGLE_DEFAULT_ROLE_NAME` / `GOOGLE_DEFAULT_BRANCH_ID` removed); inactive/locked → 401; every sign-in writes `login_attempts` |
 
 ---
 
@@ -46,6 +47,16 @@ Each line is a behaviour the frontend may have relied on.
   "refresh_token": "string"
 }
 ```
+
+### GET `/auth/google` → 302 to Google, then GET `/auth/google/callback`
+Temporary rules until Google accounts are linked by their subject:
+- The verified Google email is matched to a live user (any organization, case-insensitive).
+- That user has a role, or is a Superadmin → 403 `GOOGLE_STAFF_ACCOUNT`. Staff sign in with username and password.
+- No user has that email → a user without role is created in `GOOGLE_DEFAULT_ORGANIZATION_ID` (unset → 400). A deleted account of that organization still holding the email → 400 `DUPLICATE_USER`.
+- Two live users have that email → 400.
+- `status` not `active` or `locked_until` in the future → 401.
+- ID token: RS256 from Google's JWKS, `iss` `https://accounts.google.com` or `accounts.google.com`, `aud` = client id, `azp` (when present) = client id, `exp`, `nonce`, `email_verified` true.
+- Response 200 → same body as `/auth/login` (JSON from the callback).
 
 ### POST `/auth/register`
 ```json
