@@ -52,6 +52,10 @@ class TestJWT:
         assert payload["device"] == "Chrome"
         assert payload["ip"] == "127.0.0.1"
 
+    def test_refresh_tokens_of_the_same_second_differ(self):
+        tokens = {create_refresh_token(user_id=7, device_info="Chrome", ip="127.0.0.1") for _ in range(3)}
+        assert len(tokens) == 3
+
     def test_invalid_token_raises(self):
         try:
             decode_token("not-a-real-token")

@@ -243,3 +243,11 @@ class TestLookupSkipsDeletedAndDuplicates:
         self._user(session, seed_org, "old", "Same@Test.com", deleted=True)
         live = self._user(session, self._other_org(session), "new", "same@test.com")
         assert [u.id for u in AuthRepository.find_by_email(session, "SAME@test.com")] == [live.id]
+
+
+def test_two_logins_in_the_same_second_both_succeed(client: TestClient, seed_user: dict):
+    body = {"username": seed_user["username"], "password": seed_user["password"]}
+    first = client.post("/api/v1/auth/login", json=body)
+    second = client.post("/api/v1/auth/login", json=body)
+    assert first.status_code == second.status_code == 200, second.text
+    assert first.json()["data"]["refresh_token"] != second.json()["data"]["refresh_token"]

@@ -1,4 +1,5 @@
 import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -57,6 +58,9 @@ def create_refresh_token(user_id: int, device_info: str = "", ip: str = "") -> s
         "exp": expire,
         "iat": now,
         "nbf": now,
+        # Random id: two logins of one user in the same second must not get
+        # the same token (refresh_tokens.token_hash is unique).
+        "jti": secrets.token_urlsafe(16),
     }
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
