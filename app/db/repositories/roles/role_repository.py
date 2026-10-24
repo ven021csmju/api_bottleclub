@@ -61,10 +61,19 @@ class RoleRepository:
 
     @staticmethod
     def count_user_assignments(db: Session, role_id: int) -> int:
-        return db.query(UserRole).filter(UserRole.role_id == role_id).count()
+        """Assignments to users who are not deleted (a deleted user's go with the role)."""
+        return (
+            db.query(UserRole)
+            .join(User, User.id == UserRole.user_id)
+            .filter(UserRole.role_id == role_id, User.deleted_at.is_(None))
+            .count()
+        )
 
     @staticmethod
     def delete_role(db: Session, role: Role) -> None:
+        # Left only by deleted users (count_user_assignments). Deleted here: the
+        # ORM would otherwise set their role_id to NULL instead of removing them.
+        db.query(UserRole).filter(UserRole.role_id == role.id).delete(synchronize_session="fetch")
         db.delete(role)
 
     @staticmethod
