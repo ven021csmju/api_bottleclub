@@ -54,6 +54,65 @@ listed in the access token.
 | `PUT /shifts/{id}/close`, `POST /shifts/{id}/cash-movements`, `GET /shifts/{id}/x-report` | any shift id | shift of another organization → 404 |
 | `GET /shifts/` | shifts of every organization | only the caller's organization |
 
+### Branch scope (v0.1.6)
+
+**Apply migration 008 before deploying this version** (it gives
+`orders.read_branch` to the Superadmin and Manager system roles; without it
+Managers see only their own orders).
+
+**How permissions are counted now**
+
+- Read from the database on every request. The `permissions` and `branches`
+  claims of the access token are for display only and grant nothing; a role
+  change applies to the next request, without a new login.
+- A role assigned with `branch_id` = null applies at every branch of the
+  organization **and** to organization-level routes. A role assigned at branch X
+  applies at X only: someone who is Manager at A and Cashier at B has only the
+  Cashier permissions at B. The `Superadmin` system role applies everywhere.
+- `X-Branch-Id` names the branch being worked at. A branch of another
+  organization, or one where the user has no role (and no organization-wide
+  role), is **403 on every authenticated route** (`User does not have access to
+  branch N`). Without the header only organization-wide roles count.
+- A record of a branch where the caller lacks the permission is **404** (same
+  as a missing record): orders, payments, refunds, returns, slips, shifts,
+  transfers, users.
+
+**Where `X-Branch-Id` is needed**
+
+| Need | Routes |
+|---|---|
+| **required** (401 without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
+| **required unless `branch_id` is given** (401 with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
+| **not used** (the record's branch decides) | routes with an order, payment, refund, return, slip, shift, transfer or user id in the path; `GET/PUT /settings/...` (`?branch_id=`); `POST /inventory/adjust`, `GET /inventory/balances/{branch_id}/...`, `/lots`, `/movements`, `POST /shifts/open` (branch in the body/query) |
+| **ignored** (organization level only) | catalog, supplier and category changes (`catalog.create`), promotions and coupons changes, `/branches` changes, `/roles` changes, `/audit`, `GET /reports/ecommerce/dashboard`, `/reports/loyalty`, `DELETE /users/{id}/roles/{role_id}` |
+| **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...) |
+
+| Route | Before | Now |
+|---|---|---|
+| any route | permissions from the token, the union of every role at every branch | from the database, at the `X-Branch-Id` branch (see above) |
+| `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial` | `branch_id` unchecked; **omitted = every branch** | `branch_id` must be a branch where `reports.sales`/`reports.read` is held (404); **omitted = the `X-Branch-Id` branch**, neither → 401 |
+| `GET /reports/ecommerce/dashboard`, `/reports/loyalty` | `reports.read` anywhere | `reports.read` at organization level (403) |
+| `GET /orders/` | `?user_id=` optional, everyone saw the whole branch | without `orders.read_branch` at the branch: only the caller's orders; `?user_id=` of someone else → 403 |
+| `GET /orders/{ref}`, `/receipt`, `/track/{x}` | any order of the organization | the order's branch must hold `orders.read` (404); another user's order also needs `orders.read_branch` (404) |
+| `PUT /orders/{id}/status`, `/tracking`, `/complete`, `POST /cancel`, `/checkout`, `/tracking-token` | any order of the organization | the permission at the order's branch, else 404 |
+| `PATCH /orders/{id}/station-items/{run}/status` | `kds.<station>.update` anywhere | at the order's branch, else 404 |
+| `GET /inventory/balances`, `/low-stock` | every branch | `?branch_id=` (allowed, else 404) or the `X-Branch-Id` branch; `low-stock` gains `branch_id` |
+| `GET /inventory/balances/{b}/{p}`, `/lots`, `/movements`, `POST /inventory/adjust` | any branch of the organization | the permission at that branch, else 404 |
+| `POST /inventory/adjust` with a negative quantity | **always 500** | removes stock; more than on hand → **422 `INSUFFICIENT_STOCK`** |
+| `POST /shifts/open`, `PUT /shifts/{id}/close`, `POST /shifts/{id}/cash-movements` | any branch / shift of the organization | the permission at the branch, else 404 |
+| `GET /shifts/{id}/x-report`, `GET /shifts/` | anyone's shift, every branch | the branch must hold `shifts.read` (404); other people's shifts need `orders.read_branch`; the list without `branch_id` = the `X-Branch-Id` branch |
+| `GET/PUT /settings/...` | `branch_id` unchecked; Manager changed organization settings | `branch_id` must be allowed (404); `PUT` without `branch_id` (organization level) → **Superadmin only** (403) |
+| `GET /transfers/`, `/transfers/{id}` and actions | every transfer of the organization | the list holds transfers from or to the caller's branches; read/approve need either end, ship/cancel the source, receive the destination; else 404 |
+| `GET /users/`, `/users/{id}`, `PUT`, `DELETE`, `/roles` | every user of the organization | users with a role at a branch where the caller holds the permission (404); changing someone also working at another branch needs the permissions there too (403); a role at a branch needs `users.assign_roles` there (404), a role for every branch needs it organization-wide (403); `POST /users/` without `roles` needs organization-wide `users.create` (403) |
+| `DELETE /users/{id}/roles/{role_id}` | did not exist | **new**: removes the role given at every branch (`branch_id` null) |
+| `GET /slip-verify/list`, `/{id}`, `/order/{id}`, `/approve`, `/reject` | every slip of the organization | through the order's branch (list filtered, others 404) |
+| `POST /slip-verify/upload`, `/checkslip` | `payments.create` anywhere | `payments.create` at the order's branch, or the caller's own order (403) |
+| `POST /payments/`, `GET /payments/{order_id}`, `POST /payments/{order_id}/refund`, `POST /refunds/` | any order of the organization | the permission at the order's branch, else 404 |
+| `GET /refunds/`, `/refunds/{id}` | every branch; `{id}` of **any organization** | the caller's branches; else 404 |
+| `GET /returns/{id}`, `PUT /returns/{id}/process`, `POST /returns/` | `{id}` of **any organization**; an order of any branch | the permission at the return's / order's branch, else 404 |
+| `DELETE /roles/{id}` | blocked by assignments of deleted users | only live users count |
+| `POST /catalog/...`, promotions, coupons, branches, roles changes | the permission at any branch | organization-level (`branch_id` null) role or Superadmin, else 403 |
+
 ---
 
 ## Authentication
