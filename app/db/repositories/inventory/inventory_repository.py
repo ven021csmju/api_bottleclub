@@ -165,7 +165,7 @@ class InventoryRepository:
 
     @staticmethod
     def list_low_stock(
-        db: Session, org_id: int, threshold: int = 10
+        db: Session, org_id: int, branch_id: int, threshold: int = 10
     ) -> list[tuple]:
         stmt = (
             select(
@@ -178,6 +178,7 @@ class InventoryRepository:
             .join(Branch, Inventory.branch_id == Branch.id)
             .where(
                 Branch.organization_id == org_id,
+                Inventory.branch_id == branch_id,
                 Product.deleted_at.is_(None),
                 Product.is_active == True,  # noqa: E712
                 Inventory.on_hand <= threshold,

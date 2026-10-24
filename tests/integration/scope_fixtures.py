@@ -179,3 +179,28 @@ def sales(session: Session, world: World) -> str:
         ))
     session.commit()
     return now.date().isoformat()
+
+
+@pytest.fixture()
+def stock(session: Session, world: World) -> int:
+    """A product with 5 on hand at A and 7 at B, a lot and a movement at each. Returns its id."""
+    from decimal import Decimal
+
+    from app.db.models import Inventory, InventoryLot, Product, StockMovement
+
+    product = Product(organization_id=world.org, name="Scope wine", sku="SC-1", selling_price=Decimal("100"))
+    session.add(product)
+    session.flush()
+    for where, qty in (("A", 5), ("B", 7)):
+        branch = world.branch[where]
+        session.add(Inventory(branch_id=branch, product_id=product.id, on_hand=qty))
+        lot = InventoryLot(branch_id=branch, product_id=product.id, lot_number=f"L{where}", quantity=qty,
+                           cost_price=Decimal("50"))
+        session.add(lot)
+        session.add(StockMovement(branch_id=branch, product_id=product.id, movement_type="adjustment",
+                                  quantity_change=qty, quantity_before=0, quantity_after=qty,
+                                  user_id=world.users["sa"]))
+        session.flush()
+        world.data[f"lot_{where}"] = lot.id
+    session.commit()
+    return product.id

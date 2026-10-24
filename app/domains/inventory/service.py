@@ -207,9 +207,9 @@ class InventoryService:
     # ------------------------------------------------------------------
     @staticmethod
     def get_low_stock_items(
-        db: Session, org_id: int, threshold: int = 10
+        db: Session, org_id: int, branch_id: int, threshold: int = 10
     ) -> list[LowStockReportResponse]:
-        rows = InventoryRepository.list_low_stock(db, org_id, threshold)
+        rows = InventoryRepository.list_low_stock(db, org_id, branch_id, threshold)
 
         return [
             LowStockReportResponse(

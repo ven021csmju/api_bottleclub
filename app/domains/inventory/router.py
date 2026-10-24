@@ -13,7 +13,8 @@ from app.domains.inventory.schemas import (
     StockMovementResponse,
 )
 from app.domains.inventory.service import InventoryService
-from app.middleware.auth import require_permission
+from app.middleware.access import Access
+from app.middleware.auth import get_access, require_permission
 from app.db.models import User
 
 router = APIRouter()
@@ -27,8 +28,10 @@ def list_balances(
     search: Optional[str] = None,
     low_stock_only: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.read")),
+    user: User = Depends(require_permission("inventory.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    branch_id = access.target_branch("inventory.read", branch_id)
     result = InventoryService.list_balances(
         db, user.organization_id, branch_id, page, per_page, search, low_stock_only
     )
@@ -42,8 +45,10 @@ def get_balance(
     branch_id: int,
     product_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.read")),
+    user: User = Depends(require_permission("inventory.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    access.ensure_at("inventory.read", branch_id, "Branch")
     return InventoryService.get_balance(db, user.organization_id, branch_id, product_id)
 
 
@@ -51,8 +56,10 @@ def get_balance(
 def adjust_inventory(
     data: InventoryAdjustmentRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.adjust")),
+    user: User = Depends(require_permission("inventory.adjust", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    access.ensure_at("inventory.adjust", data.branch_id, "Branch")
     InventoryService.adjust_inventory(
         db=db,
         org_id=user.organization_id,
@@ -71,8 +78,10 @@ def list_lots(
     branch_id: int,
     product_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.read")),
+    user: User = Depends(require_permission("inventory.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    access.ensure_at("inventory.read", branch_id, "Branch")
     result = InventoryService.list_lots(db, user.organization_id, branch_id, product_id)
     return result.lots
 
@@ -87,8 +96,10 @@ def list_movements(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.read")),
+    user: User = Depends(require_permission("inventory.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    access.ensure_at("inventory.read", branch_id, "Branch")
     result = InventoryService.list_movements(
         db, user.organization_id, branch_id, product_id, page, per_page, movement_type, date_from, date_to
     )
@@ -98,7 +109,10 @@ def list_movements(
 @router.get("/low-stock", response_model=list[LowStockReportResponse])
 def get_low_stock_items(
     threshold: int = 10,
+    branch_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("inventory.read")),
+    user: User = Depends(require_permission("inventory.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
-    return InventoryService.get_low_stock_items(db, user.organization_id, threshold)
+    branch_id = access.target_branch("inventory.read", branch_id)
+    return InventoryService.get_low_stock_items(db, user.organization_id, branch_id, threshold)
