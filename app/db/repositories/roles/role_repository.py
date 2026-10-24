@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.models import Permission, Role, RolePermission, UserRole
+from app.db.models import Permission, Role, RolePermission, User, UserRole
 
 
 class RoleRepository:
@@ -105,3 +105,24 @@ class RoleRepository:
     def existing_permission_ids(db: Session, permission_ids: set[int]) -> set[int]:
         rows = db.query(Permission.id).filter(Permission.id.in_(permission_ids))
         return {r[0] for r in rows}
+
+    @staticmethod
+    def active_system_role_holders(
+        db: Session, org_id: int, name: str, exclude_user_role_id: int | None = None
+    ) -> set[int]:
+        """Active, not deleted users holding the system role ``name``."""
+        query = (
+            db.query(UserRole.user_id)
+            .join(Role, Role.id == UserRole.role_id)
+            .join(User, User.id == UserRole.user_id)
+            .filter(
+                Role.organization_id == org_id,
+                Role.name == name,
+                Role.is_system.is_(True),
+                User.status == "active",
+                User.deleted_at.is_(None),
+            )
+        )
+        if exclude_user_role_id is not None:
+            query = query.filter(UserRole.id != exclude_user_role_id)
+        return {r[0] for r in query}

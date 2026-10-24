@@ -5,7 +5,12 @@ from app.db.models import Role, User, UserRole
 from app.db.repositories.branches import BranchRepository
 from app.db.repositories.roles import RoleRepository
 from app.db.repositories.users import UserRepository
-from app.domains.roles.access import ensure_can_grant
+from app.domains.roles.access import (
+    ensure_can_grant,
+    ensure_can_manage,
+    ensure_not_self,
+    ensure_superadmin_remains,
+)
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import hash_password
@@ -65,8 +70,14 @@ class UserService:
         return user
 
     @staticmethod
-    def update_user(db: Session, org_id: int, user_id: int, data: UserUpdate) -> User:
+    def update_user(db: Session, actor: User, user_id: int, data: UserUpdate) -> User:
+        org_id = actor.organization_id
         user = UserService.get_user(db, org_id, user_id)
+        ensure_can_manage(db, actor, user)
+        if data.status is not None and data.status != user.status:
+            ensure_not_self(actor, user, "status")
+            if data.status != "active":
+                ensure_superadmin_remains(db, user, deactivating=True)
 
         if data.email is not None and data.email != user.email:
             conflict = UserRepository.find_email_conflict(db, org_id, user_id, data.email)
@@ -89,8 +100,11 @@ class UserService:
         return user
 
     @staticmethod
-    def delete_user(db: Session, org_id: int, user_id: int) -> None:
-        user = UserService.get_user(db, org_id, user_id)
+    def delete_user(db: Session, actor: User, user_id: int) -> None:
+        user = UserService.get_user(db, actor.organization_id, user_id)
+        ensure_not_self(actor, user, "account")
+        ensure_can_manage(db, actor, user)
+        ensure_superadmin_remains(db, user, deactivating=True)
         user.deleted_at = func.now()
         db.commit()
 
@@ -109,8 +123,10 @@ class UserService:
         db: Session, actor: User, user_id: int, role_id: int, branch_id: int | None = None
     ) -> UserRole:
         org_id = actor.organization_id
-        UserService.get_user(db, org_id, user_id)
+        user = UserService.get_user(db, org_id, user_id)
         UserService.resolve_assignment(db, org_id, role_id, branch_id)
+        ensure_not_self(actor, user, "roles")
+        ensure_can_manage(db, actor, user)
         ensure_can_grant(db, actor, RoleRepository.permission_ids_of_role(db, role_id))
 
         existing = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
@@ -124,11 +140,14 @@ class UserService:
 
     @staticmethod
     def remove_role(
-        db: Session, org_id: int, user_id: int, role_id: int, branch_id: int | None = None
+        db: Session, actor: User, user_id: int, role_id: int, branch_id: int | None = None
     ) -> None:
-        UserService.get_user(db, org_id, user_id)
+        user = UserService.get_user(db, actor.organization_id, user_id)
         user_role = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if not user_role:
             raise NotFoundException(detail="Role assignment not found")
+        ensure_not_self(actor, user, "roles")
+        ensure_can_manage(db, actor, user)
+        ensure_superadmin_remains(db, user, removing_user_role_id=user_role.id)
         UserRepository.delete_role_assignment(db, user_role)
         db.commit()

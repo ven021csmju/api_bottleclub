@@ -53,7 +53,7 @@ def update_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.update")),
 ) -> UserResponse:
-    user = UserService.update_user(db, current_user.organization_id, user_id, data)
+    user = UserService.update_user(db, current_user, user_id, data)
     return UserResponse.model_validate(user)
 
 
@@ -63,7 +63,7 @@ def delete_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.delete")),
 ) -> None:
-    UserService.delete_user(db, current_user.organization_id, user_id)
+    UserService.delete_user(db, current_user, user_id)
 
 
 @router.post("/{user_id}/roles", response_model=UserRoleAssign, status_code=201)
@@ -85,4 +85,4 @@ def remove_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.assign_roles")),
 ) -> None:
-    UserService.remove_role(db, current_user.organization_id, user_id, role_id, branch_id)
+    UserService.remove_role(db, current_user, user_id, role_id, branch_id)

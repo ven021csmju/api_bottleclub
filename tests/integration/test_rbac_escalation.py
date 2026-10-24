@@ -104,6 +104,12 @@ def org(session: Session, perms: dict[str, int]) -> Org:
     org.roles["Deputy"] = _role(session, org.id, "Deputy", ["roles.delete", "roles.read"], perms, system=False)
     _user(session, org, "deputy", "Deputy")
     org.roles["Kitchen"] = _role(session, org.id, "Kitchen", ["orders.read"], perms)
+    org.roles["HR"] = _role(
+        session, org.id, "HR",
+        ["users.read", "users.update", "users.delete", "users.assign_roles", "orders.read", "orders.create"],
+        perms, system=False,
+    )
+    _user(session, org, "hr", "HR")
     session.commit()
     return org
 
@@ -340,3 +346,115 @@ class TestSystemRoles:
         resp = client.delete(f"{API}/roles/{org.roles['Superadmin']}", headers=as_("admin"))
         assert resp.status_code == 403
         assert resp.json()["code"] == "SUPERADMIN_ROLE"
+
+
+# ---------------------------------------------------------------------------
+# ③ only users with no permission beyond the caller's; never oneself; a Superadmin remains
+# ---------------------------------------------------------------------------
+def _fresh(session: Session, user_id: int) -> User:
+    session.expire_all()
+    return session.get(User, user_id)
+
+
+class TestManageOnlyLesserUsers:
+    def test_manager_cannot_deactivate_a_superadmin_but_can_a_cashier(self, client: TestClient, session, org, as_):
+        resp = client.put(f"{API}/users/{org.users['admin']}", json={"status": "inactive"}, headers=as_("manager"))
+        assert resp.status_code == 403
+        assert _fresh(session, org.users["admin"]).status == "active"
+
+        resp = client.put(f"{API}/users/{org.users['cashier']}", json={"status": "inactive"}, headers=as_("manager"))
+        assert resp.status_code == 200
+        assert _fresh(session, org.users["cashier"]).status == "inactive"
+
+    def test_manager_cannot_edit_a_superadmin_but_can_an_equal(self, client: TestClient, session, org, as_):
+        resp = client.put(f"{API}/users/{org.users['admin']}", json={"email": "mine@example.com"}, headers=as_("manager"))
+        assert resp.status_code == 403
+        assert _fresh(session, org.users["admin"]).email != "mine@example.com"
+
+        resp = client.put(f"{API}/users/{org.users['manager2']}", json={"display_name": "M2"}, headers=as_("manager"))
+        assert resp.status_code == 200
+
+    def test_manager_cannot_remove_a_role_of_a_superadmin(self, client: TestClient, session, org, as_):
+        resp = client.delete(
+            f"{API}/users/{org.users['admin']}/roles/{org.roles['Superadmin']}/{org.branch}",
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        assert _role_ids(session, org.users["admin"]) == {(org.roles["Superadmin"], org.branch)}
+
+    def test_manager_cannot_add_a_role_to_a_superadmin(self, client: TestClient, session, org, as_):
+        resp = client.post(
+            f"{API}/users/{org.users['admin']}/roles",
+            json={"role_id": org.roles["Cashier"], "branch_id": org.branch},
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+
+    def test_cannot_delete_a_user_with_more_permissions(self, client: TestClient, session, org, as_):
+        assert client.delete(f"{API}/users/{org.users['manager']}", headers=as_("hr")).status_code == 403
+        assert _fresh(session, org.users["manager"]).deleted_at is None
+
+        assert client.delete(f"{API}/users/{org.users['cashier']}", headers=as_("hr")).status_code == 204
+        assert _fresh(session, org.users["cashier"]).deleted_at is not None
+
+
+class TestNotYourself:
+    def test_cannot_change_own_status_but_can_own_name(self, client: TestClient, session, org, as_):
+        url = f"{API}/users/{org.users['manager']}"
+        resp = client.put(url, json={"status": "suspended"}, headers=as_("manager"))
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "SELF_CHANGE"
+        assert _fresh(session, org.users["manager"]).status == "active"
+
+        resp = client.put(url, json={"display_name": "Me", "status": "active"}, headers=as_("manager"))
+        assert resp.status_code == 200
+
+    def test_superadmin_cannot_give_themselves_a_role(self, client: TestClient, session, org, as_):
+        resp = client.post(
+            f"{API}/users/{org.users['admin']}/roles",
+            json={"role_id": org.roles["Cashier"], "branch_id": org.branch},
+            headers=as_("admin"),
+        )
+        assert resp.status_code == 403
+        assert _role_ids(session, org.users["admin"]) == {(org.roles["Superadmin"], org.branch)}
+
+    def test_cannot_remove_own_role(self, client: TestClient, session, org, as_):
+        resp = client.delete(
+            f"{API}/users/{org.users['manager']}/roles/{org.roles['Manager']}/{org.branch}",
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        assert _role_ids(session, org.users["manager"]) == {(org.roles["Manager"], org.branch)}
+
+    def test_superadmin_cannot_delete_themselves(self, client: TestClient, session, org, as_):
+        assert client.delete(f"{API}/users/{org.users['admin']}", headers=as_("admin")).status_code == 403
+        assert _fresh(session, org.users["admin"]).deleted_at is None
+
+
+class TestLastSuperadmin:
+    """Unreachable through the API while the caller is an active Superadmin who may not
+    change themselves; the guard is checked at the service, as a second line."""
+
+    def test_deactivating_the_last_active_superadmin_is_409(self, session, org):
+        from app.domains.users.schemas import UserUpdate
+        from app.domains.users.service import UserService
+        from app.shared.exceptions import ConflictException
+
+        _fresh(session, org.users["admin2"]).status = "inactive"
+        session.commit()
+        actor = _fresh(session, org.users["admin2"])
+
+        with pytest.raises(ConflictException):
+            UserService.update_user(session, actor, org.users["admin"], UserUpdate(status="inactive"))
+        with pytest.raises(ConflictException):
+            UserService.delete_user(session, actor, org.users["admin"])
+        with pytest.raises(ConflictException):
+            UserService.remove_role(session, actor, org.users["admin"], org.roles["Superadmin"], org.branch)
+        assert _fresh(session, org.users["admin"]).status == "active"
+
+    def test_superadmin_may_deactivate_another_while_one_remains(self, client: TestClient, session, org, as_):
+        resp = client.put(f"{API}/users/{org.users['admin2']}", json={"status": "inactive"}, headers=as_("manager"))
+        assert resp.status_code == 403
+
+        resp = client.put(f"{API}/users/{org.users['admin2']}", json={"status": "inactive"}, headers=as_("admin"))
+        assert resp.status_code == 200
