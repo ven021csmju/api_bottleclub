@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+
+#: Bank apps print the slip time in Thai local time.
+SLIP_TIMEZONE = timezone(timedelta(hours=7), "Asia/Bangkok")
+#: Slip times have minute precision and phone clocks drift a little.
+FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
 @dataclass
@@ -72,8 +77,8 @@ class FraudDetectionService:
         receiver_name: str | None = None,
         sender_account: str | None = None,
         receiver_account: str | None = None,
-        ocr_date: datetime | None = None,
-        ocr_time: datetime | None = None,
+        ocr_date: date | datetime | None = None,
+        ocr_time: time | datetime | None = None,
         failed_attempts: int = 0,
         expected_receiver_name: str | None = None,
     ) -> FraudAssessment:
@@ -148,14 +153,12 @@ class FraudDetectionService:
         # Timestamp signals
         now = datetime.now(timezone.utc)
         if ocr_date:
-            tx_datetime = datetime.combine(ocr_date, ocr_time or datetime.min.time())
-            tx_datetime = tx_datetime.replace(tzinfo=timezone.utc)
-            delta = now - tx_datetime
+            delta = now - _slip_datetime(ocr_date, ocr_time)
             if delta.days > 7:
                 sig = cls.SIGNAL_VALUES["old_transaction"]
                 signals.append(RiskSignal("old_transaction", sig, f"Transaction is {delta.days} days old"))
                 total += sig
-            if delta.days < 0:
+            if delta < -FUTURE_TOLERANCE:
                 sig = cls.SIGNAL_VALUES["future_transaction"]
                 signals.append(RiskSignal("future_transaction", sig, "Transaction date is in the future"))
                 total += sig
@@ -191,6 +194,13 @@ class FraudDetectionService:
         total = min(total, 1.0)
 
         return FraudAssessment(total_score=round(total, 2), signals=signals)
+
+
+def _slip_datetime(ocr_date: date | datetime, ocr_time: time | datetime | None) -> datetime:
+    """Slip date and time (date/time, or the datetimes verify_slip passes) as Thai local time."""
+    day = ocr_date.date() if isinstance(ocr_date, datetime) else ocr_date
+    clock = ocr_time.time() if isinstance(ocr_time, datetime) else (ocr_time or time.min)
+    return datetime.combine(day, clock, tzinfo=SLIP_TIMEZONE)
 
 
 def _name_matches(expected: str, actual: str) -> bool:

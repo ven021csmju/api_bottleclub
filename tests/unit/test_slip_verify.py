@@ -409,3 +409,41 @@ class TestDuplicateCheck:
         mock_db.execute.return_value = mock_result
         result = DuplicateCheckService.check_image_hash(mock_db, "abc123", 1)
         assert result is None
+
+
+class TestSlipDateTime:
+    """verify_slip passes the slip date and time as datetimes (date + 00:00,
+    0001-01-01 + time); the slip shows Thai local time."""
+
+    def _assess(self, slip_local: "datetime"):
+        from datetime import datetime
+        from app.services.fraud_detection import FraudDetectionService
+
+        return FraudDetectionService.assess(
+            ocr_amount=Decimal("200.00"), expected_amount=Decimal("200.00"), ocr_reference="ABC123",
+            sender_name="John", receiver_name="Jane",
+            ocr_date=datetime.combine(slip_local.date(), datetime.min.time()),
+            ocr_time=datetime.combine(datetime.min.date(), slip_local.time()),
+        )
+
+    def test_date_and_time_together_do_not_crash(self):
+        from datetime import datetime, timedelta
+        from app.services.fraud_detection import SLIP_TIMEZONE
+
+        just_now = datetime.now(SLIP_TIMEZONE).replace(tzinfo=None, second=0, microsecond=0)
+        assessment = self._assess(just_now - timedelta(minutes=2))
+        names = [s.name for s in assessment.signals]
+        # A slip from two minutes ago, Thai time, is neither old nor in the future.
+        assert "future_transaction" not in names
+        assert "old_transaction" not in names
+        assert assessment.level == "verified"
+
+    def test_future_and_old_slips_are_flagged(self):
+        from datetime import datetime, timedelta
+        from app.services.fraud_detection import SLIP_TIMEZONE
+
+        local_now = datetime.now(SLIP_TIMEZONE).replace(tzinfo=None)
+        future = [s.name for s in self._assess(local_now + timedelta(hours=1)).signals]
+        old = [s.name for s in self._assess(local_now - timedelta(days=9)).signals]
+        assert "future_transaction" in future
+        assert "old_transaction" in old
