@@ -200,7 +200,7 @@ class TestAutoVerify:
     def test_amount_with_thousands_separator_is_not_a_mismatch(self, client, session, headers, seed_user, slip):
         order_id, total = _order(client, headers, session, seed_user, "SLIP-16", price="1250.00")
         assert total >= 1000
-        slip.amount, slip.reference = total, "REFTHOUSAND"
+        slip.amount, slip.reference = total, "REFTHOUS016"
 
         resp = _upload(client, headers, order_id, _image(25))
 
@@ -209,6 +209,20 @@ class TestAutoVerify:
         verification = session.get(PaymentVerification, _verification_id(session, order_id, "verified"))
         assert Decimal(str(verification.ocr_amount)) == total
         assert Decimal(str(session.get(Order, order_id).amount_paid)) == total
+
+
+    def test_slip_without_reference_skips_reference_check_not_image_check(self, client, session, headers, seed_user, slip):
+        first_id, total = _order(client, headers, session, seed_user, "SLIP-17A")
+        second_id, _ = _order(client, headers, session, seed_user, "SLIP-17B")
+        slip.amount, slip.reference = total, None
+
+        # No reference read: never settled automatically, never a duplicate_reference.
+        assert _status(_upload(client, headers, first_id, _image(26))) == "review"
+        assert _status(_upload(client, headers, second_id, _image(27))) == "review"
+        assert _status(_upload(client, headers, second_id, _image(27))) == "duplicate_image"
+        session.expire_all()
+        assert session.get(PaymentVerification, _verification_id(session, first_id, "review")).ocr_reference is None
+        assert _payments(session, first_id) == 0
 
 
 class TestApproveConflict:

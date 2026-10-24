@@ -731,6 +731,14 @@ Paotang layouts):
   else on the slip is used as the reference.
 - dates with a two-digit Buddhist year (`3 ม.ค. 70`) are read as 2027.
 
+A slip whose amount or reference could not be read is never settled
+automatically: it is `review` (`pending_reason: "risk_review"`) for staff.
+Without a reference there is no duplicate-reference check (the duplicate
+image check still applies). Fields the OCR could not read (reference,
+names, date, low confidence) never make a slip `rejected` on their own;
+`rejected` needs evidence such as sender = receiver account or repeated
+failed attempts adding up to the reject threshold.
+
 `review` is not an error for the customer: the slip was received. A `review`
 caused by the risk score has `pending_reason: "risk_review"`. Failure results
 (`amount_mismatch`, `duplicate_reference`, `duplicate_image`, `ocr_failed`,

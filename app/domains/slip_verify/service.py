@@ -9,7 +9,7 @@ from app.config.settings import settings
 from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
-from app.services.fraud_detection import FraudDetectionService
+from app.services.fraud_detection import FraudAssessment, FraudDetectionService
 from app.services.image_service import MIME_EXTENSIONS, ImageService, UnsupportedImageType
 from app.services.ocr_service import OCRService
 from app.services import user_events
@@ -49,6 +49,33 @@ def _order_is_paid(order: Order) -> bool:
         return True
     grand_total = Decimal(str(order.grand_total))
     return grand_total > 0 and Decimal(str(order.amount_paid)) >= grand_total
+
+
+def decide_status(
+    assessment: FraudAssessment,
+    *,
+    amount: Decimal | None,
+    reference_found: bool,
+    grand_total: Decimal,
+    reference_duplicate: bool,
+) -> str:
+    """Verification status from the parsed slip and its fraud assessment.
+
+    A field the OCR could not read is not evidence of fraud: such a slip
+    goes to staff ``review`` and is ``rejected`` only when the other signals
+    alone reach the reject threshold.
+    """
+    if reference_duplicate:
+        return "duplicate_reference"
+    if amount is not None and grand_total > 0 and amount != grand_total:
+        return "amount_mismatch"
+    status = assessment.level
+    if status == "rejected" and assessment.evidence_score < FraudDetectionService.THRESHOLDS["review"]:
+        status = "review"
+    # Never settle an order on an amount or reference the OCR did not read.
+    if status == "verified" and (amount is None or not reference_found):
+        status = "review"
+    return status
 
 
 def _slip_payment(amount: Decimal, reference: str | None, bank: str | None, notes: str) -> dict:
@@ -220,27 +247,13 @@ class SlipVerifyService:
         )
 
         # 11. Determine final status
-        final_status = assessment.level
-
-        if ref_duplicate:
-            final_status = "duplicate_reference"
-
-        if parsed.amount and Decimal(str(order.grand_total)) > 0:
-            if parsed.amount.value != Decimal(str(order.grand_total)):
-                if final_status not in ("duplicate_reference",):
-                    final_status = "amount_mismatch"
-
-        if final_status == "pending":
-            if assessment.level == "verified":
-                final_status = "verified"
-            elif assessment.level == "review":
-                final_status = "review"
-            else:
-                final_status = "rejected"
-
-        # Never settle an order on an amount the OCR did not read.
-        if final_status == "verified" and not parsed.amount:
-            final_status = "review"
+        final_status = decide_status(
+            assessment,
+            amount=parsed.amount.value if parsed.amount else None,
+            reference_found=parsed.reference is not None,
+            grand_total=Decimal(str(order.grand_total)),
+            reference_duplicate=ref_duplicate,
+        )
 
         # Auto-verify off: a slip that passed every check still waits for a
         # staff member to confirm the transfer in the bank app.

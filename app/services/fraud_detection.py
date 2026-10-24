@@ -7,6 +7,20 @@ SLIP_TIMEZONE = timezone(timedelta(hours=7), "Asia/Bangkok")
 #: Slip times have minute precision and phone clocks drift a little.
 FUTURE_TOLERANCE = timedelta(minutes=5)
 
+#: Signals that only say the OCR could not read the slip well. On their own
+#: they send a slip to staff review, never to ``rejected``.
+READ_QUALITY_SIGNALS = frozenset({
+    "low_ocr_confidence",
+    "very_low_ocr_confidence",
+    "low_confidence_amount",
+    "low_confidence_reference",
+    "reference_not_found",
+    "missing_sender",
+    "missing_receiver",
+    "missing_date",
+    "missing_time",
+})
+
 
 @dataclass
 class RiskSignal:
@@ -28,6 +42,14 @@ class FraudAssessment:
             self.level = "review"
         else:
             self.level = "verified"
+
+    @property
+    def evidence_score(self) -> float:
+        """Score of the signals that point at a bad slip, not at a bad read."""
+        return round(sum(s.score for s in self.signals if s.name not in READ_QUALITY_SIGNALS), 2)
+
+    def has_signal(self, name: str) -> bool:
+        return any(s.name == name for s in self.signals)
 
 
 class FraudDetectionService:
