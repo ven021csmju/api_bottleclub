@@ -9,7 +9,7 @@
 > `tests/unit/test_promotions.py`. Existing integrations calling `/api/promotions`
 > continue to work. (See `PHASE_5_OUTPUT.md` for the legacy-consistency decision.)
 
-**Swagger:** `http://localhost:8000/docs`
+**Swagger:** `http://localhost:8000/docs` (development/test only; `/docs`, `/redoc` and `/openapi.json` return 404 when `ENVIRONMENT` is `production` or `staging`)
 **Version:** 1.0.0
 
 ---

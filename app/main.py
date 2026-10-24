@@ -36,12 +36,20 @@ async def lifespan(app: FastAPI):
     close_rabbitmq_publisher()
 
 
+#: Environments that never publish Swagger/ReDoc or the OpenAPI schema.
+DOCS_DISABLED_ENVIRONMENTS = {"production", "staging"}
+
+
 def create_app() -> FastAPI:
+    docs = settings.ENVIRONMENT.strip().lower() not in DOCS_DISABLED_ENVIRONMENTS
     app = FastAPI(
         title="The Bottle Club",
         description="POS System API for The Bottle Club",
         version="1.0.0",
         lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
     )
     app.state.limiter = limiter
 

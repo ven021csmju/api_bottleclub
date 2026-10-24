@@ -136,7 +136,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 &
 
 ### 9. ทดสอบ API
 
-เปิด Swagger UI ที่:
+เปิด Swagger UI ที่ (เฉพาะ development/test — ปิดเมื่อ `ENVIRONMENT` เป็น `production` หรือ `staging`):
 
 ```
 http://<your-server-ip>:8000/docs
