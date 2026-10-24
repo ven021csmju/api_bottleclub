@@ -25,6 +25,9 @@ from sqlalchemy.orm import Session
 from app.shared.security import create_access_token, hash_password
 
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+#: Ports of disposable test clusters only (comma separated). The default is
+#: the dedicated 14/phase22test cluster; 5432/5433 hold dev and production.
+_DEFAULT_ALLOWED_PORTS = "55432"
 _FORBIDDEN_ENVIRONMENTS = {"production", "staging"}
 
 
@@ -51,6 +54,14 @@ def _same_database(a: URL, b: URL) -> bool:
     )
 
 
+def _allowed_ports() -> set[int]:
+    raw = os.environ.get("TEST_DB_ALLOWED_PORTS", "").strip() or _DEFAULT_ALLOWED_PORTS
+    try:
+        return {int(p) for p in raw.split(",") if p.strip()}
+    except ValueError:
+        _abort("TEST_DB_ALLOWED_PORTS must be a comma-separated list of port numbers")
+
+
 def _validated_test_database_url() -> URL:
     from app.config.settings import settings
 
@@ -65,6 +76,9 @@ def _validated_test_database_url() -> URL:
         _abort(f"dialect must be postgresql ({safe})")
     if (url.host or "").lower() not in _ALLOWED_HOSTS:
         _abort(f"host must be one of {sorted(_ALLOWED_HOSTS)} ({safe})")
+    allowed_ports = _allowed_ports()
+    if (url.port or 5432) not in allowed_ports:
+        _abort(f"port must be one of {sorted(allowed_ports)} (TEST_DB_ALLOWED_PORTS) ({safe})")
     if not (url.database or "").endswith("_test"):
         _abort(f"database name must end with '_test' ({safe})")
 
