@@ -1,4 +1,4 @@
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
@@ -39,6 +39,7 @@ class TransferRepository:
         page: int = 1,
         per_page: int = 20,
         status: str | None = None,
+        branches: frozenset[int] | None = None,
     ) -> tuple[list[StockTransfer], int]:
         query = (
             select(StockTransfer)
@@ -46,6 +47,10 @@ class TransferRepository:
             .where(StockTransfer.organization_id == org_id)
         )
 
+        if branches is not None:
+            query = query.where(
+                or_(StockTransfer.source_branch_id.in_(branches), StockTransfer.dest_branch_id.in_(branches))
+            )
         if source_branch_id is not None:
             query = query.where(StockTransfer.source_branch_id == source_branch_id)
         if dest_branch_id is not None:

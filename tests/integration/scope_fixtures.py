@@ -82,7 +82,7 @@ def world(session: Session) -> World:
     session.add(org)
     session.flush()
     branches = {}
-    for code in ("A", "B"):
+    for code in ("A", "B", "C"):  # nobody below has a role at C
         branch = Branch(organization_id=org.id, name=f"Branch {code}", code=f"BR{code}")
         session.add(branch)
         session.flush()
@@ -229,5 +229,23 @@ def shifts(session: Session, world: World) -> dict[str, int]:
     session.flush()
     world.data["free_register_A"] = free.id
     world.data["register_B"] = session.get(Shift, out["b1"]).register_id
+    session.commit()
+    return out
+
+
+@pytest.fixture()
+def transfers(session: Session, world: World) -> dict[str, int]:
+    """Approved transfers ``ab`` (A → B) and ``cb`` (C → B)."""
+    from app.db.models import StockTransfer
+
+    out = {}
+    for name, (src, dst) in {"ab": ("A", "B"), "cb": ("C", "B")}.items():
+        transfer = StockTransfer(
+            organization_id=world.org, source_branch_id=world.branch[src], dest_branch_id=world.branch[dst],
+            transfer_number=f"TR-{name.upper()}", status="approved", requested_by=world.users["sa"],
+        )
+        session.add(transfer)
+        session.flush()
+        out[name] = transfer.id
     session.commit()
     return out

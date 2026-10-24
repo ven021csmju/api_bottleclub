@@ -72,9 +72,10 @@ class TransferService:
         page: int = 1,
         per_page: int = 20,
         status: str | None = None,
+        branches: frozenset[int] | None = None,
     ) -> dict:
         items, total = TransferRepository.list_transfers(
-            db, org_id, source_branch_id, dest_branch_id, page, per_page, status
+            db, org_id, source_branch_id, dest_branch_id, page, per_page, status, branches
         )
 
         return {

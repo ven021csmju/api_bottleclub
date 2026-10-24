@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_current_branch, require_permission
+from app.middleware.access import Access
+from app.middleware.auth import get_access, get_current_branch, require_permission
+from app.shared.exceptions import NotFoundException
 from app.db.models import User
 
 from .schemas import (
@@ -16,6 +18,17 @@ from .schemas import (
 from .service import TransferService
 
 router = APIRouter()
+
+
+def _scoped_transfer(db: Session, access: Access, transfer_id: int, code: str, side: str = "either") -> None:
+    """404 unless ``code`` is held at the transfer's source or destination branch
+    (``side``: "either", "source" or "dest")."""
+    transfer = TransferService.get_transfer(db=db, org_id=access.org_id, transfer_id=transfer_id)
+    ends = {"source": [transfer.source_branch_id], "dest": [transfer.dest_branch_id]}.get(
+        side, [transfer.source_branch_id, transfer.dest_branch_id]
+    )
+    if not any(access.can_at(code, branch) for branch in ends):
+        raise NotFoundException(detail="Transfer not found")
 
 
 @router.post("/", response_model=StockTransferResponse)
@@ -37,7 +50,8 @@ def create_transfer(
 
 @router.get("/", response_model=StockTransferListResponse)
 def list_transfers(
-    user: User = Depends(require_permission("transfers.read")),
+    user: User = Depends(require_permission("transfers.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -53,6 +67,7 @@ def list_transfers(
         page=page,
         per_page=per_page,
         status=status,
+        branches=access.branches("transfers.read"),
     )
     return StockTransferListResponse(
         transfers=[StockTransferResponse.model_validate(t) for t in result["transfers"]],
@@ -65,9 +80,11 @@ def list_transfers(
 @router.get("/{transfer_id}", response_model=StockTransferResponse)
 def get_transfer(
     transfer_id: int,
-    user: User = Depends(require_permission("transfers.read")),
+    user: User = Depends(require_permission("transfers.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> StockTransferResponse:
+    _scoped_transfer(db, access, transfer_id, "transfers.read", "either")
     transfer = TransferService.get_transfer(
         db=db,
         org_id=user.organization_id,
@@ -79,9 +96,11 @@ def get_transfer(
 @router.put("/{transfer_id}/approve", response_model=StockTransferResponse)
 def approve_transfer(
     transfer_id: int,
-    user: User = Depends(require_permission("transfers.approve")),
+    user: User = Depends(require_permission("transfers.approve", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> StockTransferResponse:
+    _scoped_transfer(db, access, transfer_id, "transfers.approve", "either")
     transfer = TransferService.approve_transfer(
         db=db,
         org_id=user.organization_id,
@@ -95,9 +114,11 @@ def approve_transfer(
 def ship_transfer(
     transfer_id: int,
     body: TransferShipItems,
-    user: User = Depends(require_permission("transfers.ship")),
+    user: User = Depends(require_permission("transfers.ship", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> StockTransferResponse:
+    _scoped_transfer(db, access, transfer_id, "transfers.ship", "source")
     transfer = TransferService.ship_transfer(
         db=db,
         org_id=user.organization_id,
@@ -112,9 +133,11 @@ def ship_transfer(
 def receive_transfer(
     transfer_id: int,
     body: TransferReceiveItems,
-    user: User = Depends(require_permission("transfers.receive")),
+    user: User = Depends(require_permission("transfers.receive", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> StockTransferResponse:
+    _scoped_transfer(db, access, transfer_id, "transfers.receive", "dest")
     transfer = TransferService.receive_transfer(
         db=db,
         org_id=user.organization_id,
@@ -128,9 +151,11 @@ def receive_transfer(
 @router.put("/{transfer_id}/cancel", response_model=StockTransferResponse)
 def cancel_transfer(
     transfer_id: int,
-    user: User = Depends(require_permission("transfers.create")),
+    user: User = Depends(require_permission("transfers.create", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> StockTransferResponse:
+    _scoped_transfer(db, access, transfer_id, "transfers.create", "source")
     transfer = TransferService.cancel_transfer(
         db=db,
         org_id=user.organization_id,
