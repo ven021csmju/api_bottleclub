@@ -1,7 +1,9 @@
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.models import User, UserRole
+from app.db.models import Role, User, UserRole
+from app.db.repositories.branches import BranchRepository
+from app.db.repositories.roles import RoleRepository
 from app.db.repositories.users import UserRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
@@ -92,7 +94,22 @@ class UserService:
         db.commit()
 
     @staticmethod
-    def assign_role(db: Session, user_id: int, role_id: int, branch_id: int | None = None) -> UserRole:
+    def resolve_assignment(db: Session, org_id: int, role_id: int, branch_id: int | None) -> Role:
+        """The role and branch of an assignment, both in ``org_id`` (else 404)."""
+        role = RoleRepository.get_org_role(db, org_id, role_id)
+        if not role:
+            raise NotFoundException(detail="Role not found")
+        if branch_id is not None and not BranchRepository.get_org_branch(db, org_id, branch_id):
+            raise NotFoundException(detail="Branch not found")
+        return role
+
+    @staticmethod
+    def assign_role(
+        db: Session, org_id: int, user_id: int, role_id: int, branch_id: int | None = None
+    ) -> UserRole:
+        UserService.get_user(db, org_id, user_id)
+        UserService.resolve_assignment(db, org_id, role_id, branch_id)
+
         existing = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if existing:
             raise ConflictException(detail="Role already assigned")
@@ -103,7 +120,10 @@ class UserService:
         return user_role
 
     @staticmethod
-    def remove_role(db: Session, user_id: int, role_id: int, branch_id: int | None = None) -> None:
+    def remove_role(
+        db: Session, org_id: int, user_id: int, role_id: int, branch_id: int | None = None
+    ) -> None:
+        UserService.get_user(db, org_id, user_id)
         user_role = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if not user_role:
             raise NotFoundException(detail="Role assignment not found")
