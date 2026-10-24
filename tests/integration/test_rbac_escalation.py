@@ -103,6 +103,7 @@ def org(session: Session, perms: dict[str, int]) -> Org:
     org.roles["Auditor"] = _role(session, org.id, "Auditor", ["audit.read", "orders.read"], perms, system=False)
     org.roles["Deputy"] = _role(session, org.id, "Deputy", ["roles.delete", "roles.read"], perms, system=False)
     _user(session, org, "deputy", "Deputy")
+    org.roles["Kitchen"] = _role(session, org.id, "Kitchen", ["orders.read"], perms)
     session.commit()
     return org
 
@@ -296,3 +297,46 @@ class TestPermissionIdsExist:
         resp = client.post(f"{API}/roles/", json={"name": "Twice", "permission_ids": [read, read]}, headers=as_("admin"))
         assert resp.status_code == 201
         assert [p["id"] for p in resp.json()["data"]["permissions"]] == [read]
+
+
+# ---------------------------------------------------------------------------
+# ④ system roles: permissions and deletion only by a Superadmin; Superadmin role fixed
+# ---------------------------------------------------------------------------
+def _perm_codes(session: Session, role_id: int) -> set[str]:
+    session.expire_all()
+    return {p.code for p in session.get(Role, role_id).permissions}
+
+
+class TestSystemRoles:
+    def test_only_a_superadmin_changes_the_permissions_of_a_system_role(
+        self, client: TestClient, session, org, as_
+    ):
+        url = f"{API}/roles/{org.roles['Manager']}"
+        fewer = {"permission_ids": [org.perms[c] for c in MANAGER if c != "orders.create"]}
+        assert client.put(url, json=fewer, headers=as_("manager")).status_code == 403
+        assert _perm_codes(session, org.roles["Manager"]) == set(MANAGER)
+
+        assert client.put(url, json={"description": "Runs a branch"}, headers=as_("manager")).status_code == 200
+        assert client.put(url, json=fewer, headers=as_("admin")).status_code == 200
+        assert _perm_codes(session, org.roles["Manager"]) == set(MANAGER) - {"orders.create"}
+
+    @pytest.mark.parametrize("body", [{"permission_ids": []}, {"description": "x"}])
+    @pytest.mark.parametrize("who", ["manager", "admin"])
+    def test_nobody_changes_the_superadmin_role(self, client: TestClient, session, org, as_, who, body):
+        resp = client.put(f"{API}/roles/{org.roles['Superadmin']}", json=body, headers=as_(who))
+        assert resp.status_code == 403
+        assert _perm_codes(session, org.roles["Superadmin"]) == set(PERMISSIONS)
+
+    def test_only_a_superadmin_deletes_a_system_role(self, client: TestClient, session, org, as_):
+        url = f"{API}/roles/{org.roles['Kitchen']}"
+        resp = client.delete(url, headers=as_("deputy"))
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "SYSTEM_ROLE"
+
+        assert client.delete(url, headers=as_("admin")).status_code == 204
+        assert _roles_named(session, org, "Kitchen") == []
+
+    def test_nobody_deletes_the_superadmin_role(self, client: TestClient, session, org, as_):
+        resp = client.delete(f"{API}/roles/{org.roles['Superadmin']}", headers=as_("admin"))
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "SUPERADMIN_ROLE"
