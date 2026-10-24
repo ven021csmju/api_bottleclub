@@ -109,3 +109,37 @@ class TestPayments:
         resp = client.get(f"{API}/payments/{home.order}", headers=headers)
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 1
+
+
+def _on_hand(session: Session, branch: int, product: int) -> int:
+    session.expire_all()
+    return session.query(Inventory).filter_by(branch_id=branch, product_id=product).one().on_hand
+
+
+class TestInventory:
+    @pytest.mark.parametrize("route", ["balances/{branch}/{product}", "lots?branch_id={branch}&product_id={product}",
+                                       "movements?branch_id={branch}&product_id={product}"])
+    def test_reads_with_a_branch_or_product_of_another_organization_are_404(
+        self, client: TestClient, home, other, headers, route
+    ):
+        for branch, product in ((other.branch, other.product), (other.branch, home.product), (home.branch, other.product)):
+            url = f"{API}/inventory/" + route.format(branch=branch, product=product)
+            assert client.get(url, headers=headers).status_code == 404, url
+
+        resp = client.get(f"{API}/inventory/" + route.format(branch=home.branch, product=home.product), headers=headers)
+        assert resp.status_code == 200
+
+    def test_adjusting_stock_of_another_organization_is_404(self, client: TestClient, session, home, other, headers):
+        def adjust(branch: int, product: int, lot: int | None = None) -> int:
+            body = {"branch_id": branch, "product_id": product, "quantity_adjustment": 1, "reason": "x", "lot_id": lot}
+            return client.post(f"{API}/inventory/adjust", json=body, headers=headers).status_code
+
+        assert adjust(other.branch, other.product) == 404
+        assert adjust(home.branch, other.product) == 404
+        assert adjust(other.branch, home.product) == 404
+        assert adjust(home.branch, home.product, lot=other.lot) == 404
+        assert _on_hand(session, other.branch, other.product) == 5
+        assert _on_hand(session, home.branch, home.product) == 5
+
+        assert adjust(home.branch, home.product, lot=home.lot) == 200
+        assert _on_hand(session, home.branch, home.product) == 6

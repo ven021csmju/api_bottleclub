@@ -13,8 +13,14 @@ from app.db.models import (
 
 class InventoryRepository:
     @staticmethod
-    def get_product(db: Session, product_id: int) -> Product | None:
-        return db.get(Product, product_id)
+    def get_org_product(db: Session, org_id: int, product_id: int) -> Product | None:
+        return db.scalar(
+            select(Product).where(Product.id == product_id, Product.organization_id == org_id)
+        )
+
+    @staticmethod
+    def get_lot(db: Session, lot_id: int) -> InventoryLot | None:
+        return db.get(InventoryLot, lot_id)
 
     @staticmethod
     def upsert_inventory(

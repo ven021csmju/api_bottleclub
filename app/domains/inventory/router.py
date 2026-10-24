@@ -44,7 +44,7 @@ def get_balance(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("inventory.read")),
 ):
-    return InventoryService.get_balance(db, branch_id, product_id)
+    return InventoryService.get_balance(db, user.organization_id, branch_id, product_id)
 
 
 @router.post("/adjust", status_code=200)
@@ -55,6 +55,7 @@ def adjust_inventory(
 ):
     InventoryService.adjust_inventory(
         db=db,
+        org_id=user.organization_id,
         branch_id=data.branch_id,
         product_id=data.product_id,
         adjustment=data.quantity_adjustment,
@@ -72,7 +73,7 @@ def list_lots(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("inventory.read")),
 ):
-    result = InventoryService.list_lots(db, branch_id, product_id)
+    result = InventoryService.list_lots(db, user.organization_id, branch_id, product_id)
     return result.lots
 
 
@@ -89,7 +90,7 @@ def list_movements(
     user: User = Depends(require_permission("inventory.read")),
 ):
     result = InventoryService.list_movements(
-        db, branch_id, product_id, page, per_page, movement_type, date_from, date_to
+        db, user.organization_id, branch_id, product_id, page, per_page, movement_type, date_from, date_to
     )
     return result.movements
 

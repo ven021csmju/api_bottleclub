@@ -12,6 +12,7 @@ from app.domains.inventory.schemas import (
     StockMovementListResponse,
     StockMovementResponse,
 )
+from app.db.repositories.branches import BranchRepository
 from app.db.repositories.inventory import InventoryRepository
 from app.shared.exceptions import (
     BadRequestException,
@@ -19,7 +20,17 @@ from app.shared.exceptions import (
     NotFoundException,
 )
 from app.shared.enums import StockMovementType
-from app.db.models import StockMovement, Inventory
+from app.db.models import Product, StockMovement, Inventory
+
+
+def _org_branch_product(db: Session, org_id: int, branch_id: int, product_id: int) -> Product:
+    """404 unless both the branch and the product are of ``org_id``."""
+    if not BranchRepository.get_org_branch(db, org_id, branch_id):
+        raise NotFoundException(detail="Branch not found")
+    product = InventoryRepository.get_org_product(db, org_id, product_id)
+    if not product:
+        raise NotFoundException(detail="Product not found")
+    return product
 
 
 class InventoryService:
@@ -60,8 +71,9 @@ class InventoryService:
 
     @staticmethod
     def get_balance(
-        db: Session, branch_id: int, product_id: int
+        db: Session, org_id: int, branch_id: int, product_id: int
     ) -> dict:
+        _org_branch_product(db, org_id, branch_id, product_id)
         inv = InventoryRepository.get_inventory(db, branch_id, product_id)
         if not inv:
             return {"on_hand": 0, "reserved": 0, "available": 0}
@@ -78,6 +90,7 @@ class InventoryService:
     @staticmethod
     def adjust_inventory(
         db: Session,
+        org_id: int,
         branch_id: int,
         product_id: int,
         adjustment: int,
@@ -90,9 +103,13 @@ class InventoryService:
                 detail="Adjustment quantity cannot be zero"
             )
 
-        product = InventoryRepository.get_product(db, product_id)
-        if not product or product.deleted_at is not None:
+        product = _org_branch_product(db, org_id, branch_id, product_id)
+        if product.deleted_at is not None:
             raise NotFoundException(detail="Product not found")
+        if lot_id is not None:
+            lot = InventoryRepository.get_lot(db, lot_id)
+            if not lot or (lot.branch_id, lot.product_id) != (branch_id, product_id):
+                raise NotFoundException(detail="Lot not found")
 
         if not product.is_active:
             raise BadRequestException(detail="Product is not active")
@@ -135,8 +152,9 @@ class InventoryService:
     # ------------------------------------------------------------------
     @staticmethod
     def list_lots(
-        db: Session, branch_id: int, product_id: int
+        db: Session, org_id: int, branch_id: int, product_id: int
     ) -> InventoryLotListResponse:
+        _org_branch_product(db, org_id, branch_id, product_id)
         lots = InventoryRepository.list_lots(db, branch_id, product_id)
 
         return InventoryLotListResponse(
@@ -150,6 +168,7 @@ class InventoryService:
     @staticmethod
     def list_movements(
         db: Session,
+        org_id: int,
         branch_id: int,
         product_id: int,
         page: int = 1,
@@ -158,6 +177,7 @@ class InventoryService:
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
     ) -> StockMovementListResponse:
+        _org_branch_product(db, org_id, branch_id, product_id)
         rows, total = InventoryRepository.list_movements(
             db, branch_id, product_id, page, per_page, movement_type, date_from, date_to
         )
