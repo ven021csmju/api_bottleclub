@@ -128,4 +128,4 @@ def test_organization_level_permissions_are_checked_at_organization_level():
     }
     wrong = {key: check for key, check in checks.items() if check[0] in ORG_LEVEL_PERMISSIONS and check[1] != "org"}
     assert wrong == {}
-    assert {code for code, scope in checks.values() if scope == "org"} <= ORG_LEVEL_PERMISSIONS | {"reports.read"}
+    assert {code for code, scope in checks.values() if scope == "org"} <= ORG_LEVEL_PERMISSIONS | {"reports.read", "users.assign_roles"}

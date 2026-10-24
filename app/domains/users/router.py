@@ -94,3 +94,15 @@ def remove_role(
     access: Access = Depends(get_access),
 ) -> None:
     UserService.remove_role(db, access, user_id, role_id, branch_id)
+
+
+@router.delete("/{user_id}/roles/{role_id}", status_code=204)
+def remove_organization_role(
+    user_id: int,
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users.assign_roles", scope="org")),
+    access: Access = Depends(get_access),
+) -> None:
+    """Remove a role given at every branch (branch_id NULL)."""
+    UserService.remove_role(db, access, user_id, role_id, None)
