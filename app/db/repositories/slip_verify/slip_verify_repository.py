@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select, func
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -14,13 +14,16 @@ from app.db.models import (
 
 class SlipVerifyRepository:
     @staticmethod
-    def find_pending_order(db: Session, order_id: int, org_id: int) -> Order | None:
-        return db.execute(
-            select(Order).where(
-                Order.id == order_id,
-                Order.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
+    def find_pending_order(
+        db: Session, order_id: int, org_id: int, *, for_update: bool = False
+    ) -> Order | None:
+        stmt = select(Order).where(
+            Order.id == order_id,
+            Order.organization_id == org_id,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
     def create_verification(db: Session, **kwargs) -> PaymentVerification:
@@ -40,26 +43,42 @@ class SlipVerifyRepository:
 
     @staticmethod
     def find_existing_verification_by_reference(
-        db: Session, reference: str
+        db: Session, reference: str, *, exclude_id: int | None = None
     ) -> PaymentVerification | None:
-        return db.execute(
-            select(PaymentVerification).where(
-                PaymentVerification.ocr_reference == reference,
-                PaymentVerification.status != "rejected",
-            )
-        ).scalar_one_or_none()
+        """Oldest non-rejected verification carrying ``reference``.
+
+        Several rows can share a reference (the original plus every
+        ``duplicate_reference`` attempt), so this returns the first match
+        instead of asserting there is only one.
+        """
+        stmt = select(PaymentVerification).where(
+            PaymentVerification.ocr_reference == reference,
+            PaymentVerification.status != "rejected",
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(PaymentVerification.id != exclude_id)
+        return db.scalars(stmt.order_by(PaymentVerification.id).limit(1)).first()
+
+    @staticmethod
+    def payment_reference_exists(db: Session, reference: str) -> bool:
+        return bool(
+            db.scalar(select(exists().where(Payment.external_reference == reference)))
+        )
 
     @staticmethod
     def find_existing_verification_by_image_hash(
         db: Session, sha256: str, order_id: int
     ) -> PaymentVerification | None:
-        return db.execute(
-            select(PaymentVerification).where(
+        return db.scalars(
+            select(PaymentVerification)
+            .where(
                 PaymentVerification.image_sha256 == sha256,
                 PaymentVerification.order_id == order_id,
                 PaymentVerification.status != "rejected",
             )
-        ).scalar_one_or_none()
+            .order_by(PaymentVerification.id)
+            .limit(1)
+        ).first()
 
     @staticmethod
     def update_verification_status(
@@ -128,39 +147,6 @@ class SlipVerifyRepository:
         db.add(attempt)
         db.flush()
         return attempt
-
-    @staticmethod
-    def create_payment_for_order(
-        db: Session,
-        order_id: int,
-        user_id: int,
-        amount: Decimal,
-        external_reference: str | None = None,
-        provider: str | None = None,
-        notes: str | None = None,
-    ) -> Payment:
-        payment = Payment(
-            order_id=order_id,
-            payment_method="bank_transfer",
-            amount=amount,
-            status="completed",
-            external_reference=external_reference,
-            provider=provider,
-            notes=notes,
-            received_by=user_id,
-        )
-        db.add(payment)
-        db.flush()
-
-        order = db.get(Order, order_id)
-        if order:
-            order.amount_paid = Decimal(str(order.amount_paid)) + amount
-            if order.amount_paid > order.grand_total:
-                order.change_amount = order.amount_paid - order.grand_total
-            db.flush()
-
-        db.refresh(payment)
-        return payment
 
     @staticmethod
     def get_failed_attempts_count(db: Session, order_id: int) -> int:

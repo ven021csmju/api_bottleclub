@@ -90,6 +90,14 @@ async def _process_slip(
                 "status": status,
             },
         )
+    if status == "verified":
+        # The slip settled the order: same event as POS checkout.
+        await user_events.publish_user_event(
+            "purchase_completed",
+            user.id,
+            getattr(request.state, "request_id", ""),
+            {"order_id": order_id, "amount_paid": str(result["data"]["amount"])},
+        )
 
     return JSONResponse(status_code=status_code, content=result)
 

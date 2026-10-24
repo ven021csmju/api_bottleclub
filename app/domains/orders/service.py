@@ -482,11 +482,43 @@ class OrderService:
         if idempotency_key and order.status in ("paid", "completed", "refunded"):
             return order
 
+        OrderService.settle_order(
+            db,
+            order,
+            user_id,
+            payments=data.get("payments") or [],
+            redeem_points=int(data.get("redeem_points") or 0),
+        )
+
+        db.commit()
+        db.refresh(order)
+        user_events.publish_user_event_sync(
+            "purchase_completed",
+            user_id,
+            request_id,
+            {"order_id": order.id, "amount_paid": str(order.amount_paid)},
+        )
+        return order
+
+    @staticmethod
+    def settle_order(
+        db: Session,
+        order: Order,
+        user_id: int,
+        payments: list[dict],
+        redeem_points: int = 0,
+    ) -> list[Payment]:
+        """Record payments, apply/earn loyalty points and mark the order ``paid``.
+
+        Shared by POS checkout and slip verification. Only flushes: the caller
+        owns the transaction (commit) and any post-commit events.
+        """
         if order.status not in OrderService.CHECKOUTABLE_STATUSES:
             raise InvalidOrderStateException(
                 detail=f"Cannot checkout order in '{order.status}' status"
             )
 
+        org_id = order.organization_id
         customer = None
         if order.customer_id is not None:
             customer = LoyaltyRepository.find_org_customer(db, org_id, order.customer_id)
@@ -494,7 +526,6 @@ class OrderService:
                 raise NotFoundException(detail="Customer not found")
 
         # ---- Loyalty redemption (points as discount) ----
-        redeem_points = int(data.get("redeem_points") or 0)
         redeemed = 0
         if redeem_points > 0:
             if customer is None:
@@ -535,10 +566,10 @@ class OrderService:
         due = order.grand_total - Decimal(redeemed)
 
         # ---- Payments ----
-        payments = data.get("payments") or []
         if not payments:
             raise BadRequestException(detail="At least one payment is required")
 
+        recorded: list[Payment] = []
         paid_total = Decimal("0")
         for pay in payments:
             amount = Decimal(str(pay["amount"]))
@@ -550,10 +581,12 @@ class OrderService:
                 amount=amount,
                 status="completed",
                 external_reference=pay.get("external_reference"),
+                provider=pay.get("provider"),
                 notes=pay.get("notes"),
                 received_by=user_id,
             )
             PaymentRepository.add_payment(db, payment)
+            recorded.append(payment)
             paid_total += amount
 
         if paid_total < due:
@@ -596,15 +629,7 @@ class OrderService:
         order.status = "paid"
 
         db.flush()
-        db.commit()
-        db.refresh(order)
-        user_events.publish_user_event_sync(
-            "purchase_completed",
-            user_id,
-            request_id,
-            {"order_id": order.id, "amount_paid": str(order.amount_paid)},
-        )
-        return order
+        return recorded
 
     @staticmethod
     def complete_order(db: Session, org_id: int, order_id: int) -> Order:

@@ -5,19 +5,42 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import LoyaltyTransaction, Order, PaymentVerification, User
-from app.db.repositories.loyalty import LoyaltyRepository
+from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
+from app.domains.orders.service import OrderService
 from app.services.fraud_detection import FraudDetectionService
 from app.services.image_service import ImageService
 from app.services.ocr_service import OCRService
 from app.services.slip_parser import parse_slip
 from app.shared.exceptions import (
     BadRequestException,
+    ConflictException,
     NotFoundException,
 )
 
 logger = logging.getLogger(__name__)
+
+#: Order statuses that mean the order has already been settled.
+_SETTLED_ORDER_STATUSES = {"paid", "completed", "refunded"}
+
+
+def _order_is_paid(order: Order) -> bool:
+    """True once the order is settled or its recorded payments cover the total."""
+    if order.status in _SETTLED_ORDER_STATUSES:
+        return True
+    grand_total = Decimal(str(order.grand_total))
+    return grand_total > 0 and Decimal(str(order.amount_paid)) >= grand_total
+
+
+def _slip_payment(amount: Decimal, reference: str | None, bank: str | None, notes: str) -> dict:
+    """One bank-transfer entry in the shape ``OrderService.settle_order`` takes."""
+    return {
+        "payment_method": "bank_transfer",
+        "amount": amount,
+        "external_reference": reference,
+        "provider": bank,
+        "notes": notes,
+    }
 
 
 class SlipVerifyService:
@@ -34,12 +57,15 @@ class SlipVerifyService:
         user_agent: str | None = None,
     ) -> dict:
         # 1. Validate order exists
-        order = SlipVerifyRepository.find_pending_order(db, order_id, user.organization_id)
+        # Row lock: concurrent uploads / approvals for one order are serialized.
+        order = SlipVerifyRepository.find_pending_order(
+            db, order_id, user.organization_id, for_update=True
+        )
         if not order:
             _log_attempt(db, user, order_id, None, None, None, 404, "order_not_found", None, "Order not found", ip_address, user_agent)
             raise NotFoundException(detail="Order not found")
 
-        if order.status == "completed":
+        if _order_is_paid(order):
             _log_attempt(db, user, order_id, None, None, None, 200, "order_already_paid", None, "Order already paid", ip_address, user_agent)
             return _error_response("order_already_paid", "รายการคำสั่งซื้อได้รับการชำระเงินแล้ว", 200)
 
@@ -97,7 +123,18 @@ class SlipVerifyService:
         # 6. Parse slip data
         parsed = parse_slip(ocr_result.texts, ocr_result.confidences)
 
-        # 7. Build OCR field confidences
+        # 7. Check reference duplicate (before this attempt's own row exists)
+        existing_ref = None
+        ref_duplicate = False
+        if parsed.reference:
+            existing_ref = SlipVerifyRepository.find_existing_verification_by_reference(
+                db, parsed.reference.value
+            )
+            ref_duplicate = existing_ref is not None or SlipVerifyRepository.payment_reference_exists(
+                db, parsed.reference.value
+            )
+
+        # 8. Build OCR field confidences
         field_confidences = {}
         if parsed.bank:
             field_confidences["bank"] = parsed.bank.confidence
@@ -114,7 +151,7 @@ class SlipVerifyService:
         if parsed.receiver_name:
             field_confidences["receiver_name"] = parsed.receiver_name.confidence
 
-        # 8. Create verification record
+        # 9. Create verification record
         verification = SlipVerifyRepository.create_verification(
             db,
             order_id=order_id,
@@ -138,15 +175,6 @@ class SlipVerifyService:
             risk_score=Decimal("0.00"),
             created_by=user.id,
         )
-
-        # 9. Check reference duplicate
-        ref_duplicate = False
-        if parsed.reference:
-            existing_ref = SlipVerifyRepository.find_existing_verification_by_reference(
-                db, parsed.reference.value
-            )
-            if existing_ref:
-                ref_duplicate = True
 
         # 10. Fraud assessment
         failed_attempts = SlipVerifyRepository.get_failed_attempts_count(db, order_id)
@@ -187,19 +215,27 @@ class SlipVerifyService:
             else:
                 final_status = "rejected"
 
-        # 12. Update verification record
+        # Never settle an order on an amount the OCR did not read.
+        if final_status == "verified" and not parsed.amount:
+            final_status = "review"
+
+        # 12. Update verification record; a verified slip settles the order
         payment_id = None
         if final_status == "verified":
-            payment = SlipVerifyRepository.create_payment_for_order(
+            payments = OrderService.settle_order(
                 db,
-                order_id=order_id,
-                user_id=user.id,
-                amount=parsed.amount.value if parsed.amount else Decimal(str(order.grand_total)),
-                external_reference=parsed.reference.value if parsed.reference else None,
-                provider=parsed.bank.value if parsed.bank else None,
-                notes=f"Verified via slip OCR - {parsed.date.value}" if parsed.date else "Verified via slip OCR",
+                order,
+                user.id,
+                payments=[
+                    _slip_payment(
+                        parsed.amount.value,
+                        parsed.reference.value if parsed.reference else None,
+                        parsed.bank.value if parsed.bank else None,
+                        f"Verified via slip OCR - {parsed.date.value}" if parsed.date else "Verified via slip OCR",
+                    )
+                ],
             )
-            payment_id = payment.id
+            payment_id = payments[0].id
 
         SlipVerifyRepository.update_verification_status(
             db,
@@ -230,7 +266,7 @@ class SlipVerifyService:
                 "data": {
                     "verification_id": verification.id,
                     "order_id": order_id,
-                    "amount": float(parsed.amount.value) if parsed.amount else float(order.grand_total),
+                    "amount": float(parsed.amount.value),
                     "reference": parsed.reference.value if parsed.reference else None,
                     "bank": parsed.bank.value if parsed.bank else None,
                     "date": str(parsed.date.value) if parsed.date else None,
@@ -358,9 +394,14 @@ class SlipVerifyService:
             db.refresh(verification)
             return verification
 
-        if verification.status == "verified" and order.status == "paid":
+        # Re-approving the slip that already settled this order is a no-op.
+        if verification.status == "verified" and verification.payment_id is not None and _order_is_paid(order):
             return verification
-        if verification.status not in {"pending", "review", "verified"}:
+        # The order row is locked above, so a second approval waits here and
+        # then sees the first one's payment instead of adding another.
+        if _order_is_paid(order):
+            raise ConflictException(detail="Order is already paid", code="ORDER_ALREADY_PAID")
+        if verification.status not in {"pending", "review"}:
             raise BadRequestException(detail="This verification cannot be approved")
 
         try:
@@ -369,50 +410,20 @@ class SlipVerifyService:
             if payment_amount < Decimal(str(order.grand_total)):
                 raise BadRequestException(detail="Slip amount is less than order total")
 
-            if verification.payment_id is None:
-                payment = SlipVerifyRepository.create_payment_for_order(
-                    db,
-                    order_id=order.id,
-                    user_id=user_id,
-                    amount=payment_amount,
-                    external_reference=verification.ocr_reference,
-                    provider=verification.ocr_bank,
-                    notes=note or "Approved by administrator",
-                )
-                verification.payment_id = payment.id
-
-            order.status = "paid"
-            order.amount_paid = payment_amount
-            order.change_amount = max(
-                Decimal("0"), payment_amount - Decimal(str(order.grand_total))
-            )
-
-            if order.customer_id is not None and order.loyalty_points_earned == 0:
-                customer = LoyaltyRepository.find_org_customer(
-                    db, organization_id, order.customer_id
-                )
-                if customer is None:
-                    raise NotFoundException(detail="Customer not found")
-                points = int(order.grand_total)
-                if points > 0:
-                    before = customer.loyalty_points_balance
-                    after = before + points
-                    LoyaltyRepository.add_transaction(
-                        db,
-                        LoyaltyTransaction(
-                            customer_id=customer.id,
-                            transaction_type="earn",
-                            points=points,
-                            points_before=before,
-                            points_after=after,
-                            reference_type="slip_verification",
-                            reference_id=verification.id,
-                            notes="Points earned from approved slip",
-                            user_id=user_id,
-                        ),
+            payments = OrderService.settle_order(
+                db,
+                order,
+                user_id,
+                payments=[
+                    _slip_payment(
+                        payment_amount,
+                        verification.ocr_reference,
+                        verification.ocr_bank,
+                        note or "Approved by administrator",
                     )
-                    customer.loyalty_points_balance = after
-                    order.loyalty_points_earned = points
+                ],
+            )
+            verification.payment_id = payments[0].id
 
             verification.status = "verified"
             verification.failure_reason = note
