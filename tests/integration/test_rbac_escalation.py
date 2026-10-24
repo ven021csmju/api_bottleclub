@@ -512,3 +512,30 @@ class TestRoleAssignmentsReplaceBranchIds:
     def test_user_response_lists_role_assignments(self, client: TestClient, session, org, as_):
         resp = client.get(f"{API}/users/{org.users['manager']}", headers=as_("admin"))
         assert resp.json()["data"]["roles"] == [{"role_id": org.roles["Manager"], "branch_id": org.branch}]
+
+
+# ---------------------------------------------------------------------------
+# ⑧ users.is_superadmin is display only: never checked, never writable
+# ---------------------------------------------------------------------------
+class TestIsSuperadminFlag:
+    def test_flag_cannot_be_set_through_the_api(self, client: TestClient, session, org, as_):
+        resp = client.put(f"{API}/users/{org.users['cashier']}", json={"is_superadmin": True}, headers=as_("admin"))
+        assert resp.status_code == 422
+        resp = client.post(f"{API}/users/", json=_new_user(is_superadmin=True), headers=as_("admin"))
+        assert resp.status_code == 422
+        assert _fresh(session, org.users["cashier"]).is_superadmin is False
+        assert _user_named(session, org, "fresh") is None
+
+    def test_flag_grants_nothing(self, client: TestClient, session, org, as_):
+        _fresh(session, org.users["manager"]).is_superadmin = True
+        session.commit()
+
+        resp = client.post(
+            f"{API}/users/{org.users['newbie']}/roles",
+            json={"role_id": org.roles["Superadmin"], "branch_id": org.branch},
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        assert client.put(
+            f"{API}/users/{org.users['admin']}", json={"status": "inactive"}, headers=as_("manager")
+        ).status_code == 403

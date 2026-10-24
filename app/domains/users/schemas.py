@@ -4,19 +4,22 @@ from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
-#: Fields clients used to send that now mean nothing; 422 instead of silently ignoring them.
-REMOVED_FIELDS = {
+#: Fields a client may send but must not set; 422 instead of silently ignoring them.
+REJECTED_FIELDS = {
     "branch_ids": "branch_ids was removed: a branch is part of a role assignment, "
     "give roles: [{role_id, branch_id}] on POST /users/ or use POST/DELETE /users/{id}/roles",
+    # Display only; no permission check reads it (app/domains/roles/access.py).
+    "is_superadmin": "is_superadmin is read-only: Superadmin authority is the Superadmin role, "
+    "assigned with POST /users/{id}/roles",
 }
 
 
-class _RejectRemovedFields(BaseModel):
+class _RejectFields(BaseModel):
     @model_validator(mode="before")
     @classmethod
-    def _reject_removed_fields(cls, data: Any) -> Any:
+    def _reject_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            for name, message in REMOVED_FIELDS.items():
+            for name, message in REJECTED_FIELDS.items():
                 if name in data:
                     raise ValueError(message)
         return data
@@ -29,7 +32,7 @@ class UserRoleAssign(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class UserCreate(_RejectRemovedFields):
+class UserCreate(_RejectFields):
     username: str
     email: EmailStr
     password: str
@@ -38,7 +41,7 @@ class UserCreate(_RejectRemovedFields):
     roles: list[UserRoleAssign] = []
 
 
-class UserUpdate(_RejectRemovedFields):
+class UserUpdate(_RejectFields):
     email: EmailStr | None = None
     display_name: str | None = None
     phone: str | None = None
