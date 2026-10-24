@@ -51,7 +51,9 @@ class PaymentService:
         return payment
 
     @staticmethod
-    def list_payments(db: Session, order_id: int) -> list[Payment]:
+    def list_payments(db: Session, org_id: int, order_id: int) -> list[Payment]:
+        if not PaymentRepository.get_org_order(db, org_id, order_id):
+            raise NotFoundException(detail="Order not found")
         return PaymentRepository.list_payments(db, order_id)
 
     @staticmethod

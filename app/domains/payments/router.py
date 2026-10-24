@@ -34,7 +34,7 @@ def list_payments(
     user: User = Depends(require_permission("payments.read")),
     db: Session = Depends(get_db),
 ) -> list[PaymentResponse]:
-    payments = PaymentService.list_payments(db=db, order_id=order_id)
+    payments = PaymentService.list_payments(db=db, org_id=user.organization_id, order_id=order_id)
     return [PaymentResponse.model_validate(p) for p in payments]
 
 
