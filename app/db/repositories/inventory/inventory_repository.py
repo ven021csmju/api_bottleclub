@@ -23,22 +23,44 @@ class InventoryRepository:
         return db.get(InventoryLot, lot_id)
 
     @staticmethod
-    def upsert_inventory(
+    def apply_adjustment(
         db: Session, branch_id: int, product_id: int, quantity: int
-    ) -> None:
-        db.execute(
+    ) -> int | None:
+        """Add ``quantity`` (negative: remove) to on_hand; the new on_hand, or None
+        when it would go below zero (nothing is changed then).
+
+        An INSERT ... ON CONFLICT cannot remove stock: PostgreSQL checks
+        ck_inventory_on_hand_non_negative on the row proposed for INSERT
+        (on_hand = quantity < 0) before it looks for the conflict.
+        """
+        params = {"bid": branch_id, "pid": product_id, "qty": quantity}
+        on_hand = db.execute(
+            text(
+                """
+                UPDATE inventory SET on_hand = on_hand + :qty, updated_at = NOW()
+                WHERE branch_id = :bid AND product_id = :pid AND on_hand + :qty >= 0
+                RETURNING on_hand
+                """
+            ),
+            params,
+        ).scalar()
+        if on_hand is not None:
+            return on_hand
+        if quantity < 0:
+            # No row (nothing on hand), or not enough on hand.
+            return None
+        return db.execute(
             text(
                 """
                 INSERT INTO inventory (branch_id, product_id, on_hand, reserved, updated_at)
                 VALUES (:bid, :pid, :qty, 0, NOW())
                 ON CONFLICT (branch_id, product_id)
-                DO UPDATE SET
-                    on_hand = inventory.on_hand + :qty,
-                    updated_at = NOW()
+                DO UPDATE SET on_hand = inventory.on_hand + :qty, updated_at = NOW()
+                RETURNING on_hand
                 """
             ),
-            {"bid": branch_id, "pid": product_id, "qty": quantity},
-        )
+            params,
+        ).scalar()
 
     @staticmethod
     def get_inventory(

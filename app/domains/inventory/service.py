@@ -16,8 +16,8 @@ from app.db.repositories.branches import BranchRepository
 from app.db.repositories.inventory import InventoryRepository
 from app.shared.exceptions import (
     BadRequestException,
-    InsufficientStockException,
     NotFoundException,
+    UnprocessableException,
 )
 from app.shared.enums import StockMovementType
 from app.db.models import Product, StockMovement, Inventory
@@ -119,18 +119,16 @@ class InventoryService:
                 detail="Product does not track inventory"
             )
 
-        # Atomic upsert of inventory balance
-        InventoryRepository.upsert_inventory(db, branch_id, product_id, adjustment)
-
-        # Verify on_hand >= 0
-        inv = InventoryRepository.get_inventory(db, branch_id, product_id)
-        if inv and inv.on_hand < 0:
-            raise InsufficientStockException(
-                detail=f"Insufficient stock. Current on_hand would be {inv.on_hand}"
+        on_hand_after = InventoryRepository.apply_adjustment(db, branch_id, product_id, adjustment)
+        if on_hand_after is None:
+            inv = InventoryRepository.get_inventory(db, branch_id, product_id)
+            on_hand = inv.on_hand if inv else 0
+            raise UnprocessableException(
+                detail=f"Insufficient stock: {on_hand} on hand, cannot remove {-adjustment}",
+                code="INSUFFICIENT_STOCK",
             )
 
         # Create stock movement
-        on_hand_after = inv.on_hand if inv else adjustment
         movement = StockMovement(
             branch_id=branch_id,
             product_id=product_id,
