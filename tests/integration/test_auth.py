@@ -154,3 +154,36 @@ class TestRegister:
             limiter.reset()
         assert statuses[:5] == [201] * 5
         assert statuses[5] == 429
+
+
+class TestDeletedUser:
+    @staticmethod
+    def _delete(session, user_id: int) -> None:
+        from app.db.models import User
+
+        session.get(User, user_id).deleted_at = datetime.now(timezone.utc)
+        session.commit()
+
+    def test_access_token_of_deleted_user_is_401(
+        self, client: TestClient, seed_user: dict, auth_headers: dict, session
+    ):
+        assert client.get("/api/v1/auth/me", headers=auth_headers).status_code == 200
+        self._delete(session, seed_user["user_id"])
+
+        assert client.get("/api/v1/auth/me", headers=auth_headers).status_code == 401
+        assert client.get("/api/v1/orders/", headers=auth_headers).status_code == 401
+
+    def test_refresh_of_deleted_user_is_401(self, client: TestClient, seed_user: dict, session):
+        raw = create_refresh_token(user_id=seed_user["user_id"])
+        session.add(
+            RefreshToken(
+                user_id=seed_user["user_id"],
+                token_hash=hash_token(raw),
+                is_revoked=False,
+                expires_at=_EXPIRES,
+            )
+        )
+        self._delete(session, seed_user["user_id"])
+
+        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": raw})
+        assert resp.status_code == 401

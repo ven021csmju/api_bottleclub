@@ -23,6 +23,7 @@ Each line is a behaviour the frontend may have relied on.
 | `GET /slip-verify/{verification_id}`, `GET /slip-verify/order/{order_id}` | any logged-in user of the organization | permission `slip_verification.read`, else 403 |
 | `POST /slip-verify/upload`, `POST /slip-verify/checkslip` | any logged-in user, any order of the organization | permission `payments.create`, or the caller created the order (`orders.user_id`); else 403 (also for an order id that does not exist) |
 | `POST /auth/register` | open, no limit | `REGISTRATION_ENABLED` (unset: closed in production/staging) → 403 `REGISTRATION_DISABLED`; 5 per hour per IP (`RATE_LIMIT_REGISTER`) → 429 `RATE_LIMIT_EXCEEDED` |
+| Any route with `Authorization: Bearer`, `POST /auth/refresh` | a soft-deleted user's tokens kept working until they expired | 401 as soon as the user is deleted |
 
 ---
 

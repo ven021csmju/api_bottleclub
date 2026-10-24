@@ -35,7 +35,8 @@ async def get_current_user(
 
     user_id = int(payload["sub"])
     user = UserRepository.get_by_id(db, user_id)
-    if user is None:
+    # A deleted account's tokens stop working at once, not when they expire.
+    if user is None or user.deleted_at is not None:
         raise UnauthorizedException(detail="User not found")
 
     if user.status != "active":

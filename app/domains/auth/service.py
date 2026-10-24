@@ -192,7 +192,7 @@ class AuthService:
 
         user = AuthRepository.find_by_id(db, record.user_id)
 
-        if user is None or user.status != "active":
+        if user is None or user.status != "active" or user.deleted_at is not None:
             raise UnauthorizedException(detail="User not found or inactive")
 
         record.is_revoked = True
