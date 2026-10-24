@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import require_permission
+from app.middleware.access import Access, order_branch
+from app.middleware.auth import get_access, require_permission
 from app.db.models import User
 
 from .schemas import PaymentCreate, PaymentRefundRequest, PaymentResponse
@@ -15,9 +16,11 @@ router = APIRouter()
 @router.post("/", response_model=PaymentResponse)
 def create_payment(
     body: PaymentCreate,
-    user: User = Depends(require_permission("payments.create")),
+    user: User = Depends(require_permission("payments.create", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> PaymentResponse:
+    access.ensure_at("payments.create", order_branch(db, access.org_id, body.order_id), "Order")
     payment = PaymentService.create_payment(
         db=db,
         org_id=user.organization_id,
@@ -31,9 +34,11 @@ def create_payment(
 @router.get("/{order_id}", response_model=list[PaymentResponse])
 def list_payments(
     order_id: int,
-    user: User = Depends(require_permission("payments.read")),
+    user: User = Depends(require_permission("payments.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> list[PaymentResponse]:
+    access.ensure_at("payments.read", order_branch(db, access.org_id, order_id), "Order")
     payments = PaymentService.list_payments(db=db, org_id=user.organization_id, order_id=order_id)
     return [PaymentResponse.model_validate(p) for p in payments]
 
@@ -43,9 +48,11 @@ def process_refund(
     request: Request,
     order_id: int,
     body: PaymentRefundRequest,
-    user: User = Depends(require_permission("payments.refund")),
+    user: User = Depends(require_permission("payments.refund", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> RefundResponse:
+    access.ensure_at("payments.refund", order_branch(db, access.org_id, order_id), "Order")
     refund = PaymentService.process_refund(
         db=db,
         org_id=user.organization_id,

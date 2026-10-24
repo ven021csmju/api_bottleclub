@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_audit_context, require_permission
+from app.middleware.access import Access, order_branch
+from app.middleware.auth import get_access, get_audit_context, require_permission
 from app.db.models import User
 from app.shared.audit import AuditContext
 
@@ -18,10 +19,12 @@ router = APIRouter()
 @router.post("/", response_model=RefundResponse, status_code=201)
 def create_refund(
     body: RefundCreate,
-    user: User = Depends(require_permission("payments.refund")),
+    user: User = Depends(require_permission("payments.refund", scope="any")),
+    access: Access = Depends(get_access),
     audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> RefundResponse:
+    access.ensure_at("payments.refund", order_branch(db, access.org_id, body.order_id), "Order")
     refund = RefundService.create_refund(
         db=db,
         org_id=user.organization_id,
@@ -34,7 +37,8 @@ def create_refund(
 
 @router.get("/", response_model=RefundListResponse)
 def list_refunds(
-    user: User = Depends(require_permission("refunds.read")),
+    user: User = Depends(require_permission("refunds.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -52,6 +56,7 @@ def list_refunds(
         date_to=date_to,
         order_id=order_id,
         status=status,
+        branches=access.branches("refunds.read"),
     )
     return RefundListResponse(
         refunds=[RefundResponse.model_validate(r) for r in result["refunds"]],
@@ -64,8 +69,11 @@ def list_refunds(
 @router.get("/{refund_id}", response_model=RefundResponse)
 def get_refund(
     refund_id: int,
-    user: User = Depends(require_permission("refunds.read")),
+    user: User = Depends(require_permission("refunds.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> RefundResponse:
     refund = RefundService.get_refund(db=db, refund_id=refund_id)
+    # Also the organization check: the refund's order must be of the caller's.
+    access.ensure_at("refunds.read", order_branch(db, access.org_id, refund.order_id), "Refund")
     return RefundResponse.model_validate(refund)

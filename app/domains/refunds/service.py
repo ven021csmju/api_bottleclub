@@ -26,9 +26,10 @@ class RefundService:
         date_to: Optional[datetime] = None,
         order_id: Optional[int] = None,
         status: Optional[str] = None,
+        branches: frozenset[int] | None = None,
     ) -> dict:
         items, total = RefundRepository.list_refunds(
-            db, org_id, page, per_page, date_from, date_to, order_id, status
+            db, org_id, page, per_page, date_from, date_to, order_id, status, branches
         )
 
         return {

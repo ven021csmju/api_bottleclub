@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Branch, Permission, Role, RolePermission, UserRole
+from app.db.models import Branch, Order, Permission, Role, RolePermission, UserRole
 from app.shared.exceptions import ForbiddenException, NotFoundException, UnauthorizedException
 from app.shared.permissions import normalize_permission
 
@@ -97,6 +97,11 @@ class Access:
                 raise UnauthorizedException(detail="X-Branch-Id header is required")
         self.ensure_at(code, branch_id, "Branch")
         return branch_id
+
+
+def order_branch(db: Session, org_id: int, order_id: int) -> int | None:
+    """Branch of an order of ``org_id``; None if there is no such order."""
+    return db.scalar(select(Order.branch_id).where(Order.id == order_id, Order.organization_id == org_id))
 
 
 def load_access(db: Session, user_id: int, org_id: int, branch_header: int | None) -> Access:

@@ -15,12 +15,15 @@ class RefundRepository:
         date_to=None,
         order_id: int | None = None,
         status: str | None = None,
+        branches: frozenset[int] | None = None,
     ) -> tuple[list[Refund], int]:
         query = (
             select(Refund)
             .join(Order, Order.id == Refund.order_id)
             .where(Order.organization_id == org_id)
         )
+        if branches is not None:
+            query = query.where(Order.branch_id.in_(branches))
 
         if date_from:
             query = query.where(Refund.created_at >= date_from)
