@@ -137,3 +137,26 @@ def as_(world: World):
         return out
 
     return headers
+
+
+@pytest.fixture()
+def orders(session: Session, world: World) -> dict[str, int]:
+    """name → order id: ``a1`` (pos_a at A), ``a2`` (pos_a2 at A), ``b1`` (pos_b at B)."""
+    from decimal import Decimal
+
+    from app.db.models import Order, Payment
+
+    out = {}
+    for name, (user, where) in {"a1": ("pos_a", "A"), "a2": ("pos_a2", "A"), "b1": ("pos_b", "B")}.items():
+        order = Order(
+            organization_id=world.org, branch_id=world.branch[where], order_number=f"SC-{name.upper()}",
+            user_id=world.users[user], status="pending", grand_total=Decimal("100"), subtotal=Decimal("100"),
+            tracking_number=f"TRK-{name.upper()}",
+        )
+        session.add(order)
+        session.flush()
+        session.add(Payment(order_id=order.id, payment_method="cash", amount=Decimal("10"),
+                            status="completed", received_by=world.users[user]))
+        out[name] = order.id
+    session.commit()
+    return out

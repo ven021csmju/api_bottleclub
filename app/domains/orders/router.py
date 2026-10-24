@@ -5,13 +5,15 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.middleware.access import Access
 from app.middleware.auth import (
+    get_access,
     get_current_branch,
     require_permission,
     require_station_item_permission,
 )
 from app.middleware.rate_limit import limiter
-from app.db.models import User
+from app.db.models import Order, User
 from app.config.settings import settings
 
 from .schemas import (
@@ -33,6 +35,13 @@ from .schemas import (
 from .service import OrderService
 
 router = APIRouter()
+
+
+def _scoped_order(db: Session, access: Access, reference: str | int, code: str) -> Order:
+    """The order of the caller's organization, if ``code`` is held at its branch; else 404."""
+    order = OrderService.get_order_by_reference(db=db, org_id=access.org_id, reference=str(reference))
+    access.ensure_at(code, order.branch_id, "Order")
+    return order
 
 
 @router.post("/", response_model=OrderCreationResponse)
@@ -63,7 +72,8 @@ def create_order(
 )
 def replace_order_tracking_token(
     order_id: int,
-    user: User = Depends(require_permission("orders.update")),
+    user: User = Depends(require_permission("orders.update", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderTrackingTokenReplaceResponse:
     """Replace an order's public tracking token (staff).
@@ -72,6 +82,7 @@ def replace_order_tracking_token(
     The previous token hash is overwritten (last write wins); the new
     plaintext token is returned once and never persisted.
     """
+    _scoped_order(db, access, order_id, "orders.update")
     order, tracking_token = OrderService.replace_tracking_token(
         db=db,
         org_id=user.organization_id,
@@ -119,29 +130,23 @@ def list_orders(
 @router.get("/{reference}", response_model=OrderResponse)
 def get_order(
     reference: str,
-    user: User = Depends(require_permission("orders.read")),
+    user: User = Depends(require_permission("orders.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
     """Get an order by its integer id or its alphanumeric order number."""
-    order = OrderService.get_order_by_reference(
-        db=db,
-        org_id=user.organization_id,
-        reference=reference,
-    )
+    order = _scoped_order(db, access, reference, "orders.read")
     return OrderResponse.model_validate(order)
 
 
 @router.get("/{reference}/receipt", response_model=ReceiptResponse)
 def get_order_receipt(
     reference: str,
-    user: User = Depends(require_permission("orders.read")),
+    user: User = Depends(require_permission("orders.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> ReceiptResponse:
-    order = OrderService.get_order_by_reference(
-        db=db,
-        org_id=user.organization_id,
-        reference=reference,
-    )
+    order = _scoped_order(db, access, reference, "orders.read")
     receipt = OrderService.get_receipt(db=db, org_id=user.organization_id, order_id=order.id)
     return ReceiptResponse(**receipt)
 
@@ -150,9 +155,11 @@ def get_order_receipt(
 def update_order_status(
     order_id: int,
     body: OrderStatusUpdate,
-    user: User = Depends(require_permission("orders.update")),
+    user: User = Depends(require_permission("orders.update", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
+    _scoped_order(db, access, order_id, "orders.update")
     order = OrderService.update_status(
         db=db,
         org_id=user.organization_id,
@@ -168,9 +175,11 @@ def cancel_order(
     request: Request,
     order_id: int,
     body: OrderCancel,
-    user: User = Depends(require_permission("orders.cancel")),
+    user: User = Depends(require_permission("orders.cancel", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
+    _scoped_order(db, access, order_id, "orders.cancel")
     order = OrderService.cancel_order(
         db=db,
         org_id=user.organization_id,
@@ -184,9 +193,11 @@ def cancel_order(
 @router.put("/{order_id}/complete", response_model=OrderResponse)
 def complete_order(
     order_id: int,
-    user: User = Depends(require_permission("orders.complete")),
+    user: User = Depends(require_permission("orders.complete", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
+    _scoped_order(db, access, order_id, "orders.complete")
     order = OrderService.complete_order(
         db=db,
         org_id=user.organization_id,
@@ -199,9 +210,11 @@ def complete_order(
 def update_order_tracking(
     order_id: int,
     body: OrderTrackingUpdate,
-    user: User = Depends(require_permission("orders.update")),
+    user: User = Depends(require_permission("orders.update", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
+    _scoped_order(db, access, order_id, "orders.update")
     order = OrderService.update_tracking(
         db=db,
         org_id=user.organization_id,
@@ -217,7 +230,8 @@ def update_order_tracking(
 def track_order(
     request: Request,
     tracking_or_ref: str,
-    user: User = Depends(require_permission("orders.read")),
+    user: User = Depends(require_permission("orders.read", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> dict:
     """Staff tracking: authenticated, scoped to the caller's organization."""
@@ -235,6 +249,7 @@ def track_order(
     if not order:
         from app.shared.exceptions import NotFoundException
         raise NotFoundException(detail="Order not found")
+    access.ensure_at("orders.read", order.branch_id, "Order")
 
     return {
         "order_number": order.order_number,
@@ -279,9 +294,11 @@ def checkout_order(
     request: Request,
     order_id: int,
     body: CheckoutRequest,
-    user: User = Depends(require_permission("payments.create")),
+    user: User = Depends(require_permission("payments.create", scope="any")),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> CheckoutResponse:
+    _scoped_order(db, access, order_id, "payments.create")
     order = OrderService.checkout_order(
         db=db,
         org_id=user.organization_id,
