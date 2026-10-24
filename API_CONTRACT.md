@@ -22,6 +22,7 @@ Each line is a behaviour the frontend may have relied on.
 |---|---|---|
 | `GET /slip-verify/{verification_id}`, `GET /slip-verify/order/{order_id}` | any logged-in user of the organization | permission `slip_verification.read`, else 403 |
 | `POST /slip-verify/upload`, `POST /slip-verify/checkslip` | any logged-in user, any order of the organization | permission `payments.create`, or the caller created the order (`orders.user_id`); else 403 (also for an order id that does not exist) |
+| `POST /auth/register` | open, no limit | `REGISTRATION_ENABLED` (unset: closed in production/staging) → 403 `REGISTRATION_DISABLED`; 5 per hour per IP (`RATE_LIMIT_REGISTER`) → 429 `RATE_LIMIT_EXCEEDED` |
 
 ---
 
@@ -42,6 +43,17 @@ Each line is a behaviour the frontend may have relied on.
   "refresh_token": "string"
 }
 ```
+
+### POST `/auth/register`
+```json
+// Request
+{ "username": "string", "email": "user@example.com", "password": "min 8", "display_name": "string", "phone": null, "organization_id": null }
+
+// Response 201 → { "id", "username", "email", "display_name", "phone", "status", "created_at" }
+```
+Creates a user with no role. 403 `REGISTRATION_DISABLED` when
+`REGISTRATION_ENABLED` is false (unset: false in production/staging, true
+elsewhere). 5 requests per hour per client IP (`RATE_LIMIT_REGISTER`), then 429.
 
 ### POST `/auth/refresh`
 ```json

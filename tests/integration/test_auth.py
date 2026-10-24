@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from app.config.settings import settings
 from app.shared.security import create_access_token, create_refresh_token, hash_token
 from app.db.models import RefreshToken
 
@@ -92,3 +93,64 @@ class TestGetProfile:
         assert body["code"] == "VALIDATION_ERROR"
         assert body["detail"]
         assert body["request_id"]
+
+
+REGISTER_BODY = {
+    "username": "newcustomer",
+    "email": "newcustomer@test.com",
+    "password": "Str0ngPass!",
+    "display_name": "New Customer",
+}
+
+
+class TestRegister:
+    def test_open_registration_creates_user(self, client: TestClient, seed_org: int, monkeypatch):
+        monkeypatch.setattr(settings, "REGISTRATION_ENABLED", True)
+        resp = client.post("/api/v1/auth/register", json={**REGISTER_BODY, "organization_id": seed_org})
+        assert resp.status_code == 201, resp.text
+
+    def test_closed_registration_is_403_and_creates_nothing(
+        self, client: TestClient, seed_org: int, session, monkeypatch
+    ):
+        from sqlalchemy import func, select
+
+        from app.db.models import User
+
+        monkeypatch.setattr(settings, "REGISTRATION_ENABLED", False)
+        resp = client.post("/api/v1/auth/register", json={**REGISTER_BODY, "organization_id": seed_org})
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "REGISTRATION_DISABLED"
+        assert session.scalar(
+            select(func.count()).select_from(User).where(User.username == REGISTER_BODY["username"])
+        ) == 0
+
+    def test_production_default_is_closed(self, client: TestClient, seed_org: int, monkeypatch):
+        monkeypatch.setattr(settings, "REGISTRATION_ENABLED", None)
+        monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+        resp = client.post("/api/v1/auth/register", json={**REGISTER_BODY, "organization_id": seed_org})
+        assert resp.status_code == 403
+
+    def test_register_is_rate_limited_per_ip(self, client: TestClient, seed_org: int, monkeypatch):
+        from app.middleware.rate_limit import limiter
+
+        monkeypatch.setattr(settings, "REGISTRATION_ENABLED", True)
+        limiter.reset()
+        limiter.enabled = True
+        try:
+            statuses = [
+                client.post(
+                    "/api/v1/auth/register",
+                    json={
+                        **REGISTER_BODY,
+                        "username": f"rl{i}",
+                        "email": f"rl{i}@test.com",
+                        "organization_id": seed_org,
+                    },
+                ).status_code
+                for i in range(6)
+            ]
+        finally:
+            limiter.enabled = False
+            limiter.reset()
+        assert statuses[:5] == [201] * 5
+        assert statuses[5] == 429

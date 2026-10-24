@@ -42,6 +42,9 @@ class Settings(BaseSettings):
         "http://localhost:5174",
     ]
 
+    # POST /auth/register. Unset: open outside production/staging, closed in
+    # production/staging (403 REGISTRATION_DISABLED).
+    REGISTRATION_ENABLED: bool | None = None
     # Used only when a deployment has more than one active organization. When
     # unset, registration may use the sole active organization in PostgreSQL.
     REGISTRATION_ORGANIZATION_ID: int | None = None
@@ -64,6 +67,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN: str = "30/minute"
     RATE_LIMIT_REFRESH: str = "60/minute"
+    RATE_LIMIT_REGISTER: str = "5/hour"
     RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
 
     # MongoDB (log service on the Ubuntu server, reached via SSH tunnel)
@@ -106,6 +110,12 @@ class Settings(BaseSettings):
     @property
     def shop_receiver_names(self) -> list[str]:
         return [name.strip() for name in self.SHOP_RECEIVER_NAMES.split(",") if name.strip()]
+
+    @property
+    def registration_enabled(self) -> bool:
+        if self.REGISTRATION_ENABLED is not None:
+            return self.REGISTRATION_ENABLED
+        return self.ENVIRONMENT.lower() not in {"production", "staging"}
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":

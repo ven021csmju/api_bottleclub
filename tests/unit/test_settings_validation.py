@@ -125,3 +125,21 @@ def test_case_insensitive_environment():
             DATABASE_URL=_LOCAL_DEV_DATABASE_URL,
             JWT_SECRET_KEY=_SECURE_JWT,
         )
+
+
+@pytest.mark.parametrize(
+    "environment, value, expected",
+    [
+        ("production", None, False),
+        ("staging", None, False),
+        ("development", None, True),
+        ("test", None, True),
+        ("production", True, True),
+        ("development", False, False),
+    ],
+)
+def test_registration_default_is_closed_in_production(environment, value, expected):
+    overrides = {"ENVIRONMENT": environment, "REGISTRATION_ENABLED": value}
+    if environment in {"production", "staging"}:
+        overrides.update(JWT_SECRET_KEY=_SECURE_JWT, DATABASE_URL=_PROD_DB_URL)
+    assert _make_settings(**overrides).registration_enabled is expected

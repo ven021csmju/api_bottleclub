@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.middleware.auth import get_current_user
 from app.middleware.rate_limit import limiter
 from app.db.models import User
-from app.shared.exceptions import UnauthorizedException
+from app.shared.exceptions import ForbiddenException, UnauthorizedException
 
 from .schemas import (
     LoginRequest,
@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)) -> RegisterResponse:
+@limiter.limit(settings.RATE_LIMIT_REGISTER)
+def register(
+    request: Request,
+    body: RegisterRequest,
+    db: Session = Depends(get_db),
+) -> RegisterResponse:
+    if not settings.registration_enabled:
+        raise ForbiddenException(detail="Registration is disabled", code="REGISTRATION_DISABLED")
     return AuthService.register(db, body)
 
 GOOGLE_STATE_COOKIE = "google_oauth_state"
