@@ -30,6 +30,13 @@ class SlipVerifyRepository:
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
+    def get_org_order_branch(db: Session, order_id: int, org_id: int) -> int | None:
+        """Branch of order ``order_id`` of ``org_id``; None if there is none."""
+        return db.scalar(
+            select(Order.branch_id).where(Order.id == order_id, Order.organization_id == org_id)
+        )
+
+    @staticmethod
     def is_order_owner(db: Session, order_id: int, org_id: int, user_id: int) -> bool:
         """``user_id`` created order ``order_id`` in ``org_id``."""
         return bool(
@@ -200,7 +207,11 @@ class SlipVerifyRepository:
 
     @staticmethod
     def list_org_verifications(
-        db: Session, organization_id: int, status: str | None = None, limit: int = 100
+        db: Session,
+        organization_id: int,
+        status: str | None = None,
+        limit: int = 100,
+        branches: frozenset[int] | None = None,
     ) -> list[PaymentVerification]:
         stmt = (
             select(PaymentVerification)
@@ -209,6 +220,8 @@ class SlipVerifyRepository:
             .order_by(PaymentVerification.created_at.desc())
             .limit(limit)
         )
+        if branches is not None:
+            stmt = stmt.where(Order.branch_id.in_(branches))
         if status:
             stmt = stmt.where(PaymentVerification.status == status)
         return list(db.scalars(stmt).all())

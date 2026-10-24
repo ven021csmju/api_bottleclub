@@ -406,9 +406,13 @@ class SlipVerifyService:
 
     @staticmethod
     def list_verifications(
-        db: Session, organization_id: int, status: str | None = None, limit: int = 100
+        db: Session,
+        organization_id: int,
+        status: str | None = None,
+        limit: int = 100,
+        branches: frozenset[int] | None = None,
     ) -> list[PaymentVerification]:
-        return SlipVerifyRepository.list_org_verifications(db, organization_id, status, limit)
+        return SlipVerifyRepository.list_org_verifications(db, organization_id, status, limit, branches)
 
     @staticmethod
     def _lock_for_moderation(
