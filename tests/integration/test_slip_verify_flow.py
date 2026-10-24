@@ -564,3 +564,79 @@ class TestAutoVerifyDisabled:
         assert _upload(client, headers, other_id, _image(20)).status_code == 422
         assert _payments(session, held_id) == 0
         assert _payments(session, other_id) == 0
+
+
+def _bare_headers(user_id: int, seed_user: dict) -> dict[str, str]:
+    """Logged in, no staff permission at all (a registered or Google user)."""
+    token = create_access_token(
+        user_id=user_id, org_id=seed_user["org_id"], permissions=[], branches=[]
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def outsider(session, seed_user) -> dict[str, str]:
+    """Another active user of the same organization, without any role."""
+    from app.db.models import User
+
+    user = User(
+        organization_id=seed_user["org_id"],
+        username="outsider",
+        email="outsider@test.com",
+        password_hash="x",
+        display_name="Outsider",
+        status="active",
+    )
+    session.add(user)
+    session.commit()
+    return _bare_headers(user.id, seed_user)
+
+
+class TestSlipOwnership:
+    def test_user_without_role_cannot_read_slips(self, client, session, headers, seed_user, slip, outsider):
+        order_id, total = _order(client, headers, session, seed_user, "OWN-1")
+        slip.amount, slip.reference = total, "REFOWNER001"
+        assert _status(_upload(client, headers, order_id, _image(60))) == "verified"
+        verification_id = _verification_id(session, order_id, "verified")
+
+        assert client.get(f"/api/v1/slip-verify/{verification_id}", headers=outsider).status_code == 403
+        assert client.get(f"/api/v1/slip-verify/order/{order_id}", headers=outsider).status_code == 403
+        assert client.get("/api/v1/slip-verify/list", headers=outsider).status_code == 403
+        # Staff with slip_verification.read still can.
+        assert client.get(f"/api/v1/slip-verify/{verification_id}", headers=headers).status_code == 200
+        assert client.get(f"/api/v1/slip-verify/order/{order_id}", headers=headers).status_code == 200
+
+    def test_probing_ids_gives_403_not_existence(self, client, session, headers, seed_user, outsider):
+        order_id, _ = _order(client, headers, session, seed_user, "OWN-2")
+        for path in ("/api/v1/slip-verify/{}", "/api/v1/slip-verify/order/{}"):
+            existing = client.get(path.format(order_id), headers=outsider)
+            missing = client.get(path.format(order_id + 100000), headers=outsider)
+            assert existing.status_code == missing.status_code == 403
+        assert _upload(client, outsider, order_id, _image(61)).status_code == 403
+        assert _upload(client, outsider, order_id + 100000, _image(62)).status_code == 403
+
+    def test_user_without_role_cannot_submit_for_someone_elses_order(
+        self, client, session, headers, seed_user, slip, outsider
+    ):
+        order_id, total = _order(client, headers, session, seed_user, "OWN-3")
+        slip.amount, slip.reference = total, "REFOWNER003"
+
+        for path in ("/api/v1/slip-verify/upload", "/api/v1/slip-verify/checkslip"):
+            resp = client.post(
+                path, headers=outsider, data={"order_id": str(order_id)}, files={"file": ("s.png", _image(63), "image/png")}
+            )
+            assert resp.status_code == 403, resp.text
+        session.expire_all()
+        assert session.scalar(
+            select(func.count()).select_from(PaymentVerification).where(PaymentVerification.order_id == order_id)
+        ) == 0
+        assert session.get(Order, order_id).status != "paid"
+
+    def test_owner_without_permission_may_submit_for_own_order(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "OWN-4")
+        slip.amount, slip.reference = total, "REFOWNER004"
+
+        resp = _upload(client, _bare_headers(seed_user["user_id"], seed_user), order_id, _image(64))
+
+        assert resp.status_code == 200, resp.text
+        assert _status(resp) == "verified"

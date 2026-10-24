@@ -14,6 +14,17 @@
 
 ---
 
+## Access changes — breaking for the frontend
+
+Each line is a behaviour the frontend may have relied on.
+
+| Route | Before | Now |
+|---|---|---|
+| `GET /slip-verify/{verification_id}`, `GET /slip-verify/order/{order_id}` | any logged-in user of the organization | permission `slip_verification.read`, else 403 |
+| `POST /slip-verify/upload`, `POST /slip-verify/checkslip` | any logged-in user, any order of the organization | permission `payments.create`, or the caller created the order (`orders.user_id`); else 403 (also for an order id that does not exist) |
+
+---
+
 ## Authentication
 
 **Header:** `Authorization: Bearer <access_token>`
@@ -683,6 +694,9 @@ Query: `?page=&per_page=&user_id=&action=&entity_type=&date_from=&date_to=`
 ## Slip Verify `/slip-verify`
 
 ### POST `/slip-verify/upload`
+Permission `payments.create`, or the caller created the order. Otherwise
+403 `FORBIDDEN`, whether the order exists or not. `POST /slip-verify/checkslip`
+is the same route under another name.
 ```
 Content-Type: multipart/form-data
   file: (image file)
@@ -807,6 +821,7 @@ slip lets the customer upload that image again.
 
 ### GET `/slip-verify/{verification_id}`
 ### GET `/slip-verify/order/{order_id}`
+Permission `slip_verification.read` (403 without it, before the id is looked up).
 
 ---
 

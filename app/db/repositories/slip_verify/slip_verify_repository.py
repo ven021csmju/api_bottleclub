@@ -30,6 +30,21 @@ class SlipVerifyRepository:
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
+    def is_order_owner(db: Session, order_id: int, org_id: int, user_id: int) -> bool:
+        """``user_id`` created order ``order_id`` in ``org_id``."""
+        return bool(
+            db.execute(
+                select(
+                    exists().where(
+                        Order.id == order_id,
+                        Order.organization_id == org_id,
+                        Order.user_id == user_id,
+                    )
+                )
+            ).scalar()
+        )
+
+    @staticmethod
     def create_verification(db: Session, **kwargs) -> PaymentVerification:
         # risk_score is JSONB (stored as a JSON number); Decimal is not
         # JSON-serializable, so store a JSON-serializable primitive.

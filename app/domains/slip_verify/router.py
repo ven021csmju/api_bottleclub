@@ -5,10 +5,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_audit_context, get_current_user
+from app.db.repositories.slip_verify.slip_verify_repository import SlipVerifyRepository
+from app.middleware.auth import get_audit_context, get_current_user, has_permission
 from app.db.models import User
 from app.services import user_events
 from app.shared.audit import AuditContext
+from app.shared.exceptions import ForbiddenException
 
 from .schemas import (
     ErrorResponse,
@@ -39,6 +41,11 @@ _UPLOAD_ACCEPTED_STATUSES = {
 }
 
 
+#: Staff permission that may submit a slip for any order of the organization.
+#: Without it a user may only submit for an order they own (``orders.user_id``).
+UPLOAD_PERMISSION = "payments.create"
+
+
 #: HTTP status per result status; everything else is 200.
 _HTTP_STATUS = {
     "order_not_found": 404,
@@ -57,6 +64,13 @@ def _process_slip(
     user: User,
     db: Session,
 ) -> JSONResponse:
+    # Same 403 whether the order is someone else's or does not exist, so
+    # order ids cannot be probed.
+    if not has_permission(request, UPLOAD_PERMISSION) and not SlipVerifyRepository.is_order_owner(
+        db, order_id, user.organization_id, user.id
+    ):
+        raise ForbiddenException(detail="Not allowed to submit a slip for this order")
+
     file_bytes = file.file.read()
 
     result = SlipVerifyService.verify_slip(
@@ -208,7 +222,7 @@ def reject_verification(
 @router.get("/{verification_id}")
 def get_verification(
     verification_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("slip_verification.read")),
     db: Session = Depends(get_db),
 ):
     verification = SlipVerifyService.get_org_verification(
@@ -224,7 +238,7 @@ def get_verification(
 @router.get("/order/{order_id}")
 def list_verifications_by_order(
     order_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("slip_verification.read")),
     db: Session = Depends(get_db),
 ):
     verifications = SlipVerifyService.list_org_verifications_by_order(

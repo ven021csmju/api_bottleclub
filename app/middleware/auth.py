@@ -62,16 +62,19 @@ async def get_current_branch(
     return x_branch_id
 
 
+def has_permission(request: Request, permission_code: str) -> bool:
+    """Whether the access token of this request carries ``permission_code``."""
+    payload = getattr(request.state, "token_payload", {})
+    permissions: list[str] = payload.get("permissions", [])
+    return normalize_permission(permission_code) in permissions or permission_code in permissions
+
+
 def require_permission(permission_code: str) -> Callable:
     async def permission_checker(
         request: Request,
         user: User = Depends(get_current_user),
     ) -> User:
-        payload = getattr(request.state, "token_payload", {})
-        permissions: list[str] = payload.get("permissions", [])
-
-        required = normalize_permission(permission_code)
-        if required not in permissions and permission_code not in permissions:
+        if not has_permission(request, permission_code):
             raise ForbiddenException(
                 detail=f"Missing required permission: {permission_code}"
             )
