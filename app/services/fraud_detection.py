@@ -1,3 +1,5 @@
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -103,6 +105,7 @@ class FraudDetectionService:
         ocr_time: time | datetime | None = None,
         failed_attempts: int = 0,
         expected_receiver_name: str | None = None,
+        expected_receiver_names: Sequence[str] = (),
     ) -> FraudAssessment:
         signals: list[RiskSignal] = []
         total = 0.0
@@ -160,11 +163,12 @@ class FraudDetectionService:
             signals.append(RiskSignal("image_hash_duplicate", sig, "Image hash already exists"))
             total += sig
 
-        # Receiver mismatch
-        if expected_receiver_name and receiver_name:
-            if not _name_matches(expected_receiver_name, receiver_name):
+        # Receiver mismatch: the slip must name one of the shop's accounts.
+        expected_names = [n for n in (*expected_receiver_names, expected_receiver_name) if n and n.strip()]
+        if expected_names and receiver_name:
+            if not any(_name_matches(name, receiver_name) for name in expected_names):
                 sig = cls.SIGNAL_VALUES["receiver_mismatch"]
-                signals.append(RiskSignal("receiver_mismatch", sig, f"Receiver mismatch: expected '{expected_receiver_name}', got '{receiver_name}'"))
+                signals.append(RiskSignal("receiver_mismatch", sig, f"Receiver mismatch: got '{receiver_name}'"))
                 total += sig
 
         if sender_account and receiver_account and sender_account == receiver_account:
@@ -225,11 +229,40 @@ def _slip_datetime(ocr_date: date | datetime, ocr_time: time | datetime | None) 
     return datetime.combine(day, clock, tzinfo=SLIP_TIMEZONE)
 
 
+#: Titles and company forms the bank app may or may not print.
+_NAME_PREFIXES = re.compile(
+    r"^(?:นางสาว|นาง|นาย|น\.ส\.|ด\.ช\.|ด\.ญ\.|บจก\.|บมจ\.|หจก\.|บริษัท|mrs\.?|mr\.?|ms\.?|miss)\s*",
+    re.IGNORECASE,
+)
+_NAME_NOISE = re.compile(r"[\s.,()\-*…]+|จำกัด|\(?มหาชน\)?|co\.?,?\s*ltd\.?", re.IGNORECASE)
+#: A shortened name ("สมชาย ใ", "สมหญิง ก***") must keep at least this many
+#: characters to count as a match.
+_MIN_PREFIX = 4
+
+
+def normalize_name(name: str) -> str:
+    """Comparable form of an account name: no title, spaces, punctuation or
+    masking stars; case-folded."""
+    name = name.strip().casefold()
+    previous = None
+    while previous != name:
+        previous, name = name, _NAME_PREFIXES.sub("", name, count=1).strip()
+    return _NAME_NOISE.sub("", name)
+
+
 def _name_matches(expected: str, actual: str) -> bool:
-    expected_norm = expected.lower().strip()
-    actual_norm = actual.lower().strip()
+    """True when ``actual`` (from the slip) names the ``expected`` account.
+
+    Bank apps shorten names: "สมชาย ใ" (surname initial), "สมหญิง ก***",
+    or add a branch: "ร้านทดสอบ (สาขา 01)". So after normalizing, the
+    slip name may be a prefix of the expected one, or contain it.
+    """
+    expected_norm = normalize_name(expected)
+    actual_norm = normalize_name(actual)
+    if not expected_norm or not actual_norm:
+        return False
     if expected_norm == actual_norm:
         return True
-    if expected_norm in actual_norm or actual_norm in expected_norm:
+    if len(actual_norm) >= _MIN_PREFIX and expected_norm.startswith(actual_norm):
         return True
-    return False
+    return len(expected_norm) >= _MIN_PREFIX and expected_norm in actual_norm

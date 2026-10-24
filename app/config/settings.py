@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # until staff confirm it in the bank app. True: such a slip settles the
     # order immediately (v0.1.1 behaviour).
     SLIP_AUTO_VERIFY: bool = False
+    # Comma-separated account names the shop receives transfers on, as the
+    # bank account is named (e.g. "บจก. เดอะ บอทเทิล คลับ,สมมติ ทดสอบ").
+    # Set: a slip paid to anyone else is ``receiver_mismatch``.
+    # Empty (default): the receiver is not checked.
+    SHOP_RECEIVER_NAMES: str = ""
 
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN: str = "30/minute"
@@ -97,6 +102,10 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
         extra="ignore",
     )
+
+    @property
+    def shop_receiver_names(self) -> list[str]:
+        return [name.strip() for name in self.SHOP_RECEIVER_NAMES.split(",") if name.strip()]
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":

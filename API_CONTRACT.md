@@ -731,6 +731,18 @@ Paotang layouts):
   else on the slip is used as the reference.
 - dates with a two-digit Buddhist year (`3 ม.ค. 70`) are read as 2027.
 
+**`SHOP_RECEIVER_NAMES`** (setting, comma separated, default empty): the
+shop's receiving account names. When set, a slip whose receiver name
+matches none of them is `receiver_mismatch` (`success: false`, "ข้อมูลผู้รับไม่ตรงกับระบบ");
+staff may approve it after checking. Names are compared after removing
+titles and company forms (นาย, นาง, นางสาว, น.ส., ด.ช., ด.ญ., Mr/Mrs/Ms/Miss,
+บจก., บมจ., หจก., บริษัท, จำกัด, มหาชน, Co., Ltd.), spaces, punctuation and
+`*`, ignoring case. They match when equal, when the slip shows a
+shortened name of at least 4 characters (`สมชาย ใ`, `สมชาย ใ***`) that the
+configured name starts with, or when the slip name contains the
+configured name (`ร้านทดสอบ (สาขา 01)`). A receiver the OCR could not read
+gives `review`, not `receiver_mismatch`. Empty: the receiver is not checked.
+
 A slip whose amount or reference could not be read is never settled
 automatically: it is `review` (`pending_reason: "risk_review"`) for staff.
 Without a reference there is no duplicate-reference check (the duplicate

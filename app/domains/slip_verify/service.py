@@ -69,6 +69,8 @@ def decide_status(
         return "duplicate_reference"
     if amount is not None and grand_total > 0 and amount != grand_total:
         return "amount_mismatch"
+    if assessment.has_signal("receiver_mismatch"):
+        return "receiver_mismatch"
     status = assessment.level
     if status == "rejected" and assessment.evidence_score < FraudDetectionService.THRESHOLDS["review"]:
         status = "review"
@@ -244,6 +246,7 @@ class SlipVerifyService:
             ocr_date=datetime.combine(parsed.date.value, datetime.min.time()) if parsed.date else None,
             ocr_time=datetime.combine(datetime.min.date(), parsed.time.value) if parsed.time else None,
             failed_attempts=failed_attempts,
+            expected_receiver_names=settings.shop_receiver_names,
         )
 
         # 11. Determine final status

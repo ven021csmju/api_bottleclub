@@ -35,6 +35,7 @@ _UPLOAD_ACCEPTED_STATUSES = {
     "rejected",
     "amount_mismatch",
     "duplicate_reference",
+    "receiver_mismatch",
 }
 
 

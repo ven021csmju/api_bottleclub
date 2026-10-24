@@ -65,6 +65,8 @@ class FakeSlip:
         self.reference: str | None = None
         self.fail = False
         self.risk = 0.05  # < 0.20 -> verified, 0.20..0.50 -> review
+        self.receiver: str | None = None
+        self.real_assess = False  # True: FraudDetectionService.assess runs for real
 
         def fake_extract_text(image_bytes, **kwargs):
             if self.fail:
@@ -72,11 +74,17 @@ class FakeSlip:
             texts = ["Krungthai", "กรุงไทย", "โอนเงินสำเร็จ"]
             if self.reference:
                 texts.append(f"รหัสอ้างอิง {self.reference}")
+            if self.receiver:
+                texts += ["ไปยัง", self.receiver]
             if self.amount is not None:
                 texts += [f"{self.amount:,.2f}", "บาท", "จำนวนเงิน"]  # 1,250.00 as on the slip
             return OCRResult(texts=texts, confidences=[0.99] * len(texts))
 
+        real_assess = slip_svc.FraudDetectionService.assess
+
         def fake_assess(**kwargs):
+            if self.real_assess:
+                return real_assess(**kwargs)
             return FraudAssessment(total_score=self.risk)
 
         monkeypatch.setattr(slip_svc.OCRService, "extract_text", staticmethod(fake_extract_text))
@@ -377,6 +385,39 @@ class TestManualApproval:
         assert rows[0].before_data["ocr_amount"] == str(total + Decimal("5.00"))
         assert rows[0].after_data["amount"] == str(total)
         assert rows[0].after_data["note"] == "customer paid the rest"
+
+
+class TestReceiverCheck:
+    def test_other_receiver_is_receiver_mismatch_then_approved(self, client, session, headers, seed_user, slip, monkeypatch):
+        monkeypatch.setattr(slip_svc.settings, "SHOP_RECEIVER_NAMES", "บจก. ร้านทดสอบ สมมติ, สมมติ ทดสอบ")
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-18")
+        slip.amount, slip.reference, slip.real_assess = total, "REFRECV0018", True
+
+        slip.receiver = "นาย คนอื่น ตัวอย่าง"
+        resp = _upload(client, headers, order_id, _image(28))
+        assert _status(resp) == "receiver_mismatch", resp.text
+        vid = _verification_id(session, order_id, "receiver_mismatch")
+
+        # A shortened shop name on the slip is not a mismatch.
+        other_id, other_total = _order(client, headers, session, seed_user, "SLIP-18B")
+        slip.amount, slip.reference, slip.receiver = other_total, "REFRECV0019", "บริษัท ร้านทดสอบ ส"
+        assert _status(_upload(client, headers, other_id, _image(29))) != "receiver_mismatch"
+
+        ok = client.post(
+            f"/api/v1/slip-verify/{vid}/approve", headers=headers,
+            json=APPROVE_BODY(total, "REFRECV0018", "owner's second account, checked in bank app"),
+        )
+        assert ok.status_code == 200, ok.text
+        rows = _audit_rows(session, vid, "slip_verification.approve_manual")
+        assert [r.before_data["status"] for r in rows] == ["receiver_mismatch"]
+
+    def test_receiver_not_checked_when_names_are_unset(self, client, session, headers, seed_user, slip, monkeypatch):
+        monkeypatch.setattr(slip_svc.settings, "SHOP_RECEIVER_NAMES", "")
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-19")
+        slip.amount, slip.reference, slip.real_assess = total, "REFRECV0020", True
+        slip.receiver = "นาย คนอื่น ตัวอย่าง"
+
+        assert _status(_upload(client, headers, order_id, _image(30))) != "receiver_mismatch"
 
 
 class TestStuckStatuses:
