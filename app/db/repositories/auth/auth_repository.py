@@ -16,17 +16,25 @@ from app.db.models import (
 
 class AuthRepository:
     @staticmethod
-    def find_by_username(db: Session, username: str) -> User | None:
-        return db.execute(
-            select(User).where(User.username == username)
-        ).scalar_one_or_none()
+    def find_by_username(db: Session, username: str) -> list[User]:
+        """Live users with ``username`` in any organization (unique only per
+        organization, so there can be several)."""
+        return list(
+            db.execute(
+                select(User).where(User.username == username, User.deleted_at.is_(None))
+            ).scalars()
+        )
 
     @staticmethod
     def find_by_email(db: Session, email: str) -> list[User]:
+        """Live users with ``email`` (case-insensitive) in any organization."""
         return list(
             db.execute(
-                select(User).where(func.lower(User.email) == email.lower())
-        ).scalars()
+                select(User).where(
+                    func.lower(User.email) == email.lower(),
+                    User.deleted_at.is_(None),
+                )
+            ).scalars()
         )
 
     @staticmethod

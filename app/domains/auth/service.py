@@ -81,13 +81,17 @@ class AuthService:
         user_agent: str,
         request_id: str = "",
     ) -> TokenResponse:
-        user = AuthRepository.find_by_username(db, username)
+        matches = AuthRepository.find_by_username(db, username)
 
         now = datetime.now(timezone.utc)
 
-        if user is None:
+        # Login has no organization field: a username used in two
+        # organizations cannot tell which account is meant, so it is refused
+        # like an unknown one (same message; the accounts are not revealed).
+        if len(matches) != 1:
             _record_attempt(db, username, ip_address, success=False, user_id=None)
             raise UnauthorizedException(detail="Invalid username or password")
+        user = matches[0]
 
         if user.locked_until and user.locked_until > now:
             _record_attempt(db, username, ip_address, success=False, user_id=user.id)

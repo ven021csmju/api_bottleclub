@@ -187,3 +187,59 @@ class TestDeletedUser:
 
         resp = client.post("/api/v1/auth/refresh", json={"refresh_token": raw})
         assert resp.status_code == 401
+
+
+class TestLookupSkipsDeletedAndDuplicates:
+    @staticmethod
+    def _user(session, org_id: int, username: str, email: str, deleted: bool = False):
+        from app.db.models import User
+        from app.shared.security import hash_password
+
+        user = User(
+            organization_id=org_id,
+            username=username,
+            email=email,
+            password_hash=hash_password("Test1234!"),
+            display_name=username,
+            status="active",
+            deleted_at=datetime.now(timezone.utc) if deleted else None,
+        )
+        session.add(user)
+        session.commit()
+        return user
+
+    @staticmethod
+    def _other_org(session) -> int:
+        from app.db.models import Organization
+
+        org = Organization(name="Other Org", slug="other-org")
+        session.add(org)
+        session.flush()
+        return org.id
+
+    def test_deleted_user_cannot_log_in(self, client: TestClient, seed_org: int, session):
+        self._user(session, seed_org, "gone", "gone@test.com", deleted=True)
+        resp = client.post("/api/v1/auth/login", json={"username": "gone", "password": "Test1234!"})
+        assert resp.status_code == 401
+
+    def test_deleted_twin_does_not_block_the_live_account(self, client: TestClient, seed_org: int, session):
+        self._user(session, self._other_org(session), "twin", "twin-old@test.com", deleted=True)
+        self._user(session, seed_org, "twin", "twin@test.com")
+        resp = client.post("/api/v1/auth/login", json={"username": "twin", "password": "Test1234!"})
+        assert resp.status_code == 200, resp.text
+
+    def test_same_username_in_two_organizations_is_401_not_500(
+        self, client: TestClient, seed_org: int, session
+    ):
+        self._user(session, seed_org, "shared", "shared-a@test.com")
+        self._user(session, self._other_org(session), "shared", "shared-b@test.com")
+        resp = client.post("/api/v1/auth/login", json={"username": "shared", "password": "Test1234!"})
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Invalid username or password"
+
+    def test_find_by_email_ignores_deleted_accounts(self, seed_org: int, session):
+        from app.db.repositories.auth import AuthRepository
+
+        self._user(session, seed_org, "old", "Same@Test.com", deleted=True)
+        live = self._user(session, self._other_org(session), "new", "same@test.com")
+        assert [u.id for u in AuthRepository.find_by_email(session, "SAME@test.com")] == [live.id]

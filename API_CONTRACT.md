@@ -24,6 +24,7 @@ Each line is a behaviour the frontend may have relied on.
 | `POST /slip-verify/upload`, `POST /slip-verify/checkslip` | any logged-in user, any order of the organization | permission `payments.create`, or the caller created the order (`orders.user_id`); else 403 (also for an order id that does not exist) |
 | `POST /auth/register` | open, no limit | `REGISTRATION_ENABLED` (unset: closed in production/staging) → 403 `REGISTRATION_DISABLED`; 5 per hour per IP (`RATE_LIMIT_REGISTER`) → 429 `RATE_LIMIT_EXCEEDED` |
 | Any route with `Authorization: Bearer`, `POST /auth/refresh` | a soft-deleted user's tokens kept working until they expired | 401 as soon as the user is deleted |
+| `POST /auth/login` | a deleted user could still log in; a username used in two organizations gave 500 | deleted → 401; a username in two organizations → 401 `Invalid username or password` (login has no organization field; rename one of the accounts) |
 
 ---
 
