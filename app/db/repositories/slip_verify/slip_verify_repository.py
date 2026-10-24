@@ -12,6 +12,10 @@ from app.db.models import (
 )
 
 
+#: Verification statuses whose image the customer may upload again.
+RESENDABLE_STATUSES = ("rejected", "ocr_failed")
+
+
 class SlipVerifyRepository:
     @staticmethod
     def find_pending_order(
@@ -75,7 +79,7 @@ class SlipVerifyRepository:
                 PaymentVerification.image_sha256 == sha256,
                 PaymentVerification.order_id == order_id,
                 # A rejected or unreadable slip may be sent again.
-                PaymentVerification.status.notin_(("rejected", "ocr_failed")),
+                PaymentVerification.status.notin_(RESENDABLE_STATUSES),
             )
             .order_by(PaymentVerification.id)
             .limit(1)

@@ -27,8 +27,16 @@ logger = logging.getLogger(__name__)
 #: Order statuses that mean the order has already been settled.
 _SETTLED_ORDER_STATUSES = {"paid", "completed", "refunded"}
 
-#: Verifications staff may approve by hand. amount_mismatch stays excluded.
-_APPROVABLE_STATUSES = {"pending", "review", "ocr_failed"}
+#: Verifications staff may approve by hand, after checking the transfer in
+#: the bank app (confirmed_amount must still equal the order total).
+APPROVABLE_STATUSES = frozenset({"pending", "review", "ocr_failed", "amount_mismatch", "receiver_mismatch"})
+
+#: Verifications staff may reject. Rejecting a duplicate lets the customer
+#: send that image again; a duplicate is never approvable.
+REJECTABLE_STATUSES = frozenset({
+    "pending", "review", "ocr_failed", "amount_mismatch", "receiver_mismatch",
+    "duplicate_reference", "duplicate_image", "order_not_found", "order_already_paid",
+})
 
 #: failure_reason of a slip that passed every check but is held because
 #: SLIP_AUTO_VERIFY is off.
@@ -432,7 +440,7 @@ class SlipVerifyService:
         # then sees the first one's payment instead of adding another.
         if _order_is_paid(order):
             raise ConflictException(detail="Order is already paid", code="ORDER_ALREADY_PAID")
-        if verification.status not in _APPROVABLE_STATUSES:
+        if verification.status not in APPROVABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be approved")
 
         if confirmed_amount != Decimal(str(order.grand_total)):
@@ -509,7 +517,7 @@ class SlipVerifyService:
         )
         if verification.status == "rejected":
             return verification
-        if verification.status in {"verified", "duplicate_reference", "duplicate_image"}:
+        if verification.status not in REJECTABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be rejected")
 
         before_status = verification.status

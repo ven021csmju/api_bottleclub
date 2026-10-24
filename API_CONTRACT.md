@@ -728,8 +728,24 @@ caused by the risk score has `pending_reason: "risk_review"`. Failure results
 uploaded again.
 
 ### GET `/slip-verify/list?status=review`
-Staff queue (`slip_verification.read`). Statuses staff can approve:
-`pending`, `review`, `ocr_failed`.
+Staff queue (`slip_verification.read`).
+
+Way out of each verification status (every status except `verified` has one):
+
+| status | customer sends the same image again | staff approve | staff reject |
+|---|---|---|---|
+| `pending` | no (`duplicate_image`) | yes | yes |
+| `review` | no (`duplicate_image`) | yes | yes |
+| `ocr_failed` | yes | yes | yes |
+| `amount_mismatch` | no (`duplicate_image`) | yes (`confirmed_amount` = order total) | yes |
+| `receiver_mismatch` | no (`duplicate_image`) | yes, after checking the receiver | yes |
+| `duplicate_reference` | after a reject | no | yes |
+| `duplicate_image` | after a reject | no | yes |
+| `order_not_found`, `order_already_paid` | — (upload refused before a verification exists) | no | yes |
+| `rejected` | yes | no | — (already) |
+| `verified` | — (order paid) | — (no-op) | no |
+
+A different slip image can always be uploaded while the order is unpaid.
 
 ### POST `/slip-verify/{verification_id}/approve`
 Permission `slip_verification.approve`. Staff check the transfer in the bank
@@ -746,7 +762,7 @@ app first; every field is required (missing or blank → 422).
 | `confirmed_amount` ≠ order total | 422 `AMOUNT_MISMATCH` |
 | `bank_reference` already used by another slip or payment | 409 `DUPLICATE_REFERENCE` |
 | order already paid | 409 `ORDER_ALREADY_PAID` |
-| status not approvable (e.g. `amount_mismatch`) | 400 |
+| status not approvable (`duplicate_reference`, `duplicate_image`, `rejected`, ...) | 400 |
 
 Writes an `audit_logs` row `slip_verification.approve_manual`
 (before/after status, amount, bank_reference, note).
@@ -754,7 +770,9 @@ Writes an `audit_logs` row `slip_verification.approve_manual`
 ### POST `/slip-verify/{verification_id}/reject`
 Permission `slip_verification.reject`. Body optional: `{"note": "..."}`.
 Keeps the original `failure_reason`; the note goes to the audit row
-`slip_verification.reject`.
+`slip_verification.reject` (before/after status). Not allowed for
+`verified` (400). Rejecting a `duplicate_reference`/`duplicate_image`
+slip lets the customer upload that image again.
 
 ### GET `/slip-verify/{verification_id}`
 ### GET `/slip-verify/order/{order_id}`

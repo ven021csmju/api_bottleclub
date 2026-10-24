@@ -324,16 +324,99 @@ class TestManualApproval:
         assert len(rows) == 1
         assert rows[0].after_data == {"status": "rejected", "note": "blurry photo"}
 
-    def test_amount_mismatch_still_cannot_be_approved(self, client, session, headers, seed_user, slip):
+    def test_amount_mismatch_is_approved_with_the_order_total(self, client, session, headers, seed_user, slip):
         order_id, total = _order(client, headers, session, seed_user, "SLIP-8")
         slip.amount, slip.reference = total + Decimal("5.00"), "REFMISMATCH"
         assert _status(_upload(client, headers, order_id, _image(13))) == "amount_mismatch"
         vid = _verification_id(session, order_id, "amount_mismatch")
+        url = f"/api/v1/slip-verify/{vid}/approve"
 
-        resp = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFMISMATCH"))
-
-        assert resp.status_code == 400, resp.text
+        # The slip's amount is not accepted: staff confirm the order total.
+        wrong = client.post(url, headers=headers, json=APPROVE_BODY(total + Decimal("5.00"), "REFMISMATCH"))
+        assert wrong.status_code == 422, wrong.text
+        assert wrong.json()["code"] == "AMOUNT_MISMATCH"
         assert _payments(session, order_id) == 0
+
+        ok = client.post(url, headers=headers, json=APPROVE_BODY(total, "REFMISMATCH", "customer paid the rest"))
+
+        assert ok.status_code == 200, ok.text
+        session.expire_all()
+        assert session.get(Order, order_id).status == "paid"
+        assert _payments(session, order_id) == 1
+        rows = _audit_rows(session, vid, "slip_verification.approve_manual")
+        assert len(rows) == 1
+        assert rows[0].before_data["status"] == "amount_mismatch"
+        assert rows[0].before_data["ocr_amount"] == str(total + Decimal("5.00"))
+        assert rows[0].after_data["amount"] == str(total)
+        assert rows[0].after_data["note"] == "customer paid the rest"
+
+
+class TestStuckStatuses:
+    """Every status other than verified has a way out (approve, reject or resend)."""
+
+    def test_duplicate_reference_is_rejected_then_resent(self, client, session, headers, seed_user, slip):
+        paid_id, total = _order(client, headers, session, seed_user, "SLIP-13A")
+        slip.amount, slip.reference = total, "REFUSED0013"
+        assert _status(_upload(client, headers, paid_id, _image(21))) == "verified"
+
+        order_id, _ = _order(client, headers, session, seed_user, "SLIP-13B")
+        image = _image(22)
+        assert _status(_upload(client, headers, order_id, image)) == "duplicate_reference"
+        vid = _verification_id(session, order_id, "duplicate_reference")
+        # Stuck before: the same image is refused and staff could do nothing.
+        assert _status(_upload(client, headers, order_id, image)) == "duplicate_image"
+
+        approve = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFOTHER013"))
+        assert approve.status_code == 400, approve.text
+        reject = client.post(f"/api/v1/slip-verify/{vid}/reject", headers=headers, json={"note": "slip of another order"})
+
+        assert reject.status_code == 200, reject.text
+        session.expire_all()
+        assert session.get(PaymentVerification, vid).status == "rejected"
+        rows = _audit_rows(session, vid, "slip_verification.reject")
+        assert len(rows) == 1
+        assert rows[0].before_data["status"] == "duplicate_reference"
+        assert rows[0].after_data == {"status": "rejected", "note": "slip of another order"}
+
+        # The same image is no longer refused as a duplicate image ...
+        assert _status(_upload(client, headers, order_id, image)) == "duplicate_reference"
+        # ... and the customer's own slip goes through.
+        slip.reference = "REFOWN00013"
+        assert _status(_upload(client, headers, order_id, _image(23))) == "verified"
+        assert _payments(session, order_id) == 1
+        assert _payments(session, paid_id) == 1
+
+    def test_duplicate_image_can_be_rejected_not_approved(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-14")
+        verification = PaymentVerification(
+            order_id=order_id, image_sha256="d" * 64, status="duplicate_image",
+            risk_score={}, created_by=seed_user["user_id"],
+        )
+        session.add(verification)
+        session.commit()
+        vid = verification.id
+
+        approve = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFDUPIMG14"))
+        assert approve.status_code == 400, approve.text
+        reject = client.post(f"/api/v1/slip-verify/{vid}/reject", headers=headers, json={"note": "resend"})
+
+        assert reject.status_code == 200, reject.text
+        assert _payments(session, order_id) == 0
+        rows = _audit_rows(session, vid, "slip_verification.reject")
+        assert [r.before_data["status"] for r in rows] == ["duplicate_image"]
+
+    def test_rejected_is_resent_not_approved(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-15")
+        slip.fail = True
+        image = _image(24)
+        assert _upload(client, headers, order_id, image).status_code == 422
+        vid = _verification_id(session, order_id, "ocr_failed")
+        assert client.post(f"/api/v1/slip-verify/{vid}/reject", headers=headers, json={}).status_code == 200
+
+        approve = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFREJ00015"))
+        assert approve.status_code == 400, approve.text
+        slip.fail, slip.amount, slip.reference = False, total, "REFREJ00015"
+        assert _status(_upload(client, headers, order_id, image)) == "verified"
 
 
 class TestImageType:
