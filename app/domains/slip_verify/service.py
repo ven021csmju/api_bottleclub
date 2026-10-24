@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
@@ -28,6 +29,10 @@ _SETTLED_ORDER_STATUSES = {"paid", "completed", "refunded"}
 
 #: Verifications staff may approve by hand. amount_mismatch stays excluded.
 _APPROVABLE_STATUSES = {"pending", "review", "ocr_failed"}
+
+#: failure_reason of a slip that passed every check but is held because
+#: SLIP_AUTO_VERIFY is off.
+HELD_FOR_BANK_CHECK_REASON = "รอตรวจกับธนาคาร (auto-verify ปิด)"
 
 
 def _order_is_paid(order: Order) -> bool:
@@ -171,6 +176,8 @@ class SlipVerifyService:
             ocr_time=parsed.time.value if parsed.time else None,
             ocr_sender_name=parsed.sender_name.value if parsed.sender_name else None,
             ocr_receiver_name=parsed.receiver_name.value if parsed.receiver_name else None,
+            ocr_sender_account=parsed.sender_account.value if parsed.sender_account else None,
+            ocr_receiver_account=parsed.receiver_account.value if parsed.receiver_account else None,
             ocr_fee=parsed.fee.value if parsed.fee else None,
             ocr_status_text=parsed.status_text.value if parsed.status_text else None,
             ocr_field_confidences=field_confidences,
@@ -227,6 +234,15 @@ class SlipVerifyService:
         if final_status == "verified" and not parsed.amount:
             final_status = "review"
 
+        # Auto-verify off: a slip that passed every check still waits for a
+        # staff member to confirm the transfer in the bank app.
+        held_for_bank_check = final_status == "verified" and not settings.SLIP_AUTO_VERIFY
+        if held_for_bank_check:
+            final_status = "review"
+        failure_reason = (
+            HELD_FOR_BANK_CHECK_REASON if held_for_bank_check else _get_failure_reason(final_status)
+        )
+
         # 12. Update verification record; a verified slip settles the order
         payment_id = None
         if final_status == "verified":
@@ -251,7 +267,7 @@ class SlipVerifyService:
             status=final_status,
             risk_score=Decimal(str(assessment.total_score)),
             risk_signals={"signals": [{"name": s.name, "score": s.score, "description": s.description} for s in assessment.signals]},
-            failure_reason=_get_failure_reason(final_status),
+            failure_reason=failure_reason,
             payment_id=payment_id,
             verified_by_user_id=user.id if final_status == "verified" else None,
         )
@@ -261,7 +277,7 @@ class SlipVerifyService:
             db, user, order_id, verification.id, image_sha256,
             parsed.reference.value if parsed.reference else None,
             200, final_status, Decimal(str(assessment.total_score)),
-            _get_failure_reason(final_status),
+            failure_reason,
             ip_address, user_agent,
         )
 
@@ -309,16 +325,22 @@ class SlipVerifyService:
             }
 
         elif final_status == "review":
+            # Not an error: the slip was received and waits for a staff check.
             return {
                 "success": True,
                 "status": "review",
-                "message": "สลิปอยู่ระหว่างการตรวจสอบ",
+                "message": (
+                    "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
+                    if held_for_bank_check
+                    else "สลิปอยู่ระหว่างการตรวจสอบ"
+                ),
                 "data": {
                     "verification_id": verification.id,
                     "order_id": order_id,
                     "amount": float(parsed.amount.value) if parsed.amount else None,
                     "reference": parsed.reference.value if parsed.reference else None,
                     "risk_score": assessment.total_score,
+                    "pending_reason": "bank_check" if held_for_bank_check else "risk_review",
                 },
             }
 

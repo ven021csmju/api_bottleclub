@@ -711,8 +711,19 @@ Content-Type: multipart/form-data
 }
 ```
 
-A verified slip settles the order (`status` becomes `paid`, same as POS
-checkout). Uploading for an order that is already paid returns
+**`SLIP_AUTO_VERIFY`** (setting, default `false`) decides what happens to a
+slip that passes every check (amount = order total, receiver, reference and
+image not used before):
+
+| `SLIP_AUTO_VERIFY` | result | order |
+|---|---|---|
+| `false` (default) | `200` `{"success": true, "status": "review", "message": "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร", "data": {..., "pending_reason": "bank_check"}}` | unchanged; staff approve it (below) after checking the bank app. The verification keeps `ocr_amount`, `ocr_reference`, `ocr_receiver_name`/`_account` and `failure_reason` = `รอตรวจกับธนาคาร (auto-verify ปิด)` |
+| `true` | `200` `status: "verified"` (example above) | settled: `paid`, same as POS checkout |
+
+`review` is not an error for the customer: the slip was received. A `review`
+caused by the risk score has `pending_reason: "risk_review"`. Failure results
+(`amount_mismatch`, `duplicate_reference`, `duplicate_image`, `ocr_failed`,
+...) are the same with either setting. Uploading for an order that is already paid returns
 `order_already_paid` (400). A slip that was `rejected` or `ocr_failed` may be
 uploaded again.
 

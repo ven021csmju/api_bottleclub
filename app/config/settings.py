@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     OCR_SERVICE_TIMEOUT: float = 20.0
     OCR_SERVICE_CONNECT_TIMEOUT: float = 3.0
 
+    # False (default): a slip that passes every check is held as ``review``
+    # until staff confirm it in the bank app. True: such a slip settles the
+    # order immediately (v0.1.1 behaviour).
+    SLIP_AUTO_VERIFY: bool = False
+
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN: str = "30/minute"
     RATE_LIMIT_REFRESH: str = "60/minute"

@@ -107,3 +107,18 @@ class TestSlipRoutesRunInThreadpool:
 
         for fn in (router.upload_slip, router.check_slip, router._process_slip):
             assert not inspect.iscoroutinefunction(fn), fn.__name__
+
+
+class TestAutoVerifyFlag:
+    def test_slip_auto_verify_defaults_to_false(self):
+        from app.config.settings import Settings
+
+        assert Settings.model_fields["SLIP_AUTO_VERIFY"].default is False
+
+    def test_flag_reads_from_environment(self, monkeypatch):
+        from app.config.settings import Settings
+
+        monkeypatch.setenv("SLIP_AUTO_VERIFY", "true")
+        assert Settings().SLIP_AUTO_VERIFY is True
+        monkeypatch.setenv("SLIP_AUTO_VERIFY", "false")
+        assert Settings().SLIP_AUTO_VERIFY is False

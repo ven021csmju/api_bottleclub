@@ -39,6 +39,13 @@ def no_events(monkeypatch):
     monkeypatch.setattr(user_events, "publish_user_event_sync", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def auto_verify(monkeypatch):
+    """The flows below are the v0.1.1 behaviour (SLIP_AUTO_VERIFY=true);
+    TestAutoVerifyDisabled switches it back off."""
+    monkeypatch.setattr(slip_svc.settings, "SLIP_AUTO_VERIFY", True)
+
+
 @pytest.fixture()
 def headers(seed_user: dict) -> dict[str, str]:
     token = create_access_token(
@@ -348,3 +355,60 @@ class TestImageType:
         verification = session.get(PaymentVerification, _verification_id(session, order_id, "ocr_failed"))
         assert verification.image_mime_type == "image/png"
         assert verification.image_storage_key.endswith(".png")
+
+
+class TestAutoVerifyDisabled:
+    """SLIP_AUTO_VERIFY=false (the default): a clean slip is held for staff."""
+
+    @pytest.fixture(autouse=True)
+    def auto_verify_off(self, monkeypatch):
+        monkeypatch.setattr(slip_svc.settings, "SLIP_AUTO_VERIFY", False)
+
+    def test_clean_slip_is_held_for_review_then_approved(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-11")
+        slip.amount, slip.reference = total, "REFHELD0011"
+
+        resp = _upload(client, headers, order_id, _image(16))
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()["data"]
+        assert body["success"] is True  # received, not an error
+        assert body["status"] == "review"
+        assert body["message"] == "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
+        assert body["data"]["pending_reason"] == "bank_check"
+        session.expire_all()
+        assert session.get(Order, order_id).status != "paid"
+        assert _payments(session, order_id) == 0
+        vid = _verification_id(session, order_id, "review")
+        verification = session.get(PaymentVerification, vid)
+        assert verification.failure_reason == slip_svc.HELD_FOR_BANK_CHECK_REASON
+        assert Decimal(str(verification.ocr_amount)) == total
+        assert verification.ocr_reference == "REFHELD0011"
+        assert verification.payment_id is None
+
+        # Staff still type every field; nothing is pre-filled from the OCR.
+        bare = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json={"note": "ok"})
+        assert bare.status_code == 422, bare.text
+        ok = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFHELD0011"))
+
+        assert ok.status_code == 200, ok.text
+        session.expire_all()
+        assert session.get(Order, order_id).status == "paid"
+        assert _payments(session, order_id) == 1
+        assert session.get(PaymentVerification, vid).failure_reason == slip_svc.HELD_FOR_BANK_CHECK_REASON
+
+    def test_failures_are_unchanged(self, client, session, headers, seed_user, slip):
+        held_id, total = _order(client, headers, session, seed_user, "SLIP-12A")
+        slip.amount, slip.reference = total, "REFHELD0012"
+        assert _status(_upload(client, headers, held_id, _image(17))) == "review"
+
+        other_id, _ = _order(client, headers, session, seed_user, "SLIP-12B")
+        assert _status(_upload(client, headers, other_id, _image(18))) == "duplicate_reference"
+
+        slip.amount, slip.reference = total + Decimal("1.00"), "REFHELD0013"
+        assert _status(_upload(client, headers, other_id, _image(19))) == "amount_mismatch"
+
+        slip.fail = True
+        assert _upload(client, headers, other_id, _image(20)).status_code == 422
+        assert _payments(session, held_id) == 0
+        assert _payments(session, other_id) == 0
