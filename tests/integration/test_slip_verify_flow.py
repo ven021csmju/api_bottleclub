@@ -73,7 +73,7 @@ class FakeSlip:
             if self.reference:
                 texts.append(f"รหัสอ้างอิง {self.reference}")
             if self.amount is not None:
-                texts += [f"{self.amount:.2f}", "บาท", "จำนวนเงิน"]
+                texts += [f"{self.amount:,.2f}", "บาท", "จำนวนเงิน"]  # 1,250.00 as on the slip
             return OCRResult(texts=texts, confidences=[0.99] * len(texts))
 
         def fake_assess(**kwargs):
@@ -94,11 +94,11 @@ def _image(seed: int, fmt: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
-def _order(client, headers, session, seed_user, sku: str) -> tuple[int, Decimal]:
+def _order(client, headers, session, seed_user, sku: str, price: str = "100.00") -> tuple[int, Decimal]:
     from app.db.models import Inventory, Product
 
     product = Product(
-        organization_id=seed_user["org_id"], name="Wine", sku=sku, selling_price=100, track_inventory=True
+        organization_id=seed_user["org_id"], name="Wine", sku=sku, selling_price=Decimal(price), track_inventory=True
     )
     session.add(product)
     session.flush()
@@ -109,7 +109,7 @@ def _order(client, headers, session, seed_user, sku: str) -> tuple[int, Decimal]
         headers=headers,
         json={
             "branch_id": seed_user["branch_id"],
-            "items": [{"product_id": product.id, "quantity": 1, "unit_price": "100.00"}],
+            "items": [{"product_id": product.id, "quantity": 1, "unit_price": price}],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -195,6 +195,20 @@ class TestAutoVerify:
         assert resp.status_code == 400, resp.text
         assert _status(resp) == "order_already_paid"
         assert _payments(session, order_id) == 1
+
+
+    def test_amount_with_thousands_separator_is_not_a_mismatch(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-16", price="1250.00")
+        assert total >= 1000
+        slip.amount, slip.reference = total, "REFTHOUSAND"
+
+        resp = _upload(client, headers, order_id, _image(25))
+
+        assert _status(resp) == "verified", resp.text
+        session.expire_all()
+        verification = session.get(PaymentVerification, _verification_id(session, order_id, "verified"))
+        assert Decimal(str(verification.ocr_amount)) == total
+        assert Decimal(str(session.get(Order, order_id).amount_paid)) == total
 
 
 class TestApproveConflict:

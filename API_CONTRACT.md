@@ -720,6 +720,17 @@ image not used before):
 | `false` (default) | `200` `{"success": true, "status": "review", "message": "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร", "data": {..., "pending_reason": "bank_check"}}` | unchanged; staff approve it (below) after checking the bank app. The verification keeps `ocr_amount`, `ocr_reference`, `ocr_receiver_name`/`_account` and `failure_reason` = `รอตรวจกับธนาคาร (auto-verify ปิด)` |
 | `true` | `200` `status: "verified"` (example above) | settled: `paid`, same as POS checkout |
 
+What the slip reader takes from the OCR text (Krungthai, K PLUS and
+Paotang layouts):
+- `amount`: the value next to `จำนวนเงิน` / `จำนวน:`; thousands separators
+  are read (`1,250.00` → 1250.00) and a whole number counts when `บาท`
+  follows it (`7 บาท`).
+- `reference`: only the value on or right below a reference label
+  (`รหัสอ้างอิง`, `เลขที่รายการ`, `Ref`, `Transaction ID`). No label, or a
+  reference the app cut short with `...`, gives `reference: null`; nothing
+  else on the slip is used as the reference.
+- dates with a two-digit Buddhist year (`3 ม.ค. 70`) are read as 2027.
+
 `review` is not an error for the customer: the slip was received. A `review`
 caused by the risk score has `pending_reason: "risk_review"`. Failure results
 (`amount_mismatch`, `duplicate_reference`, `duplicate_image`, `ocr_failed`,
