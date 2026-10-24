@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 def _create_test_image(
@@ -37,39 +37,46 @@ class TestImageValidation:
     def test_valid_jpeg(self):
         from app.services.image_service import ImageService
         img_bytes = _create_blank_image()
-        result = ImageService.validate_image(img_bytes, "test.jpg", "image/jpeg")
-        assert result is None
+        assert ImageService.validate_image(img_bytes) == (None, "image/jpeg")
 
     def test_valid_png(self):
         from app.services.image_service import ImageService
         img = Image.new("RGB", (100, 100), color="white")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        result = ImageService.validate_image(buf.getvalue(), "test.png", "image/png")
-        assert result is None
+        assert ImageService.validate_image(buf.getvalue()) == (None, "image/png")
+
+    def test_valid_webp(self):
+        from app.services.image_service import ImageService
+        assert ImageService.validate_image(_create_test_image(format="WEBP")) == (None, "image/webp")
+
+    def test_mime_comes_from_bytes_not_filename(self):
+        """A PNG uploaded as slip.jpg / image/jpeg is still sent on as PNG."""
+        from app.services.image_service import ImageService
+        assert ImageService.validate_image(_create_test_image(format="PNG"))[1] == "image/png"
+
+    def test_gif_is_unsupported(self):
+        from app.services.image_service import ImageService, UnsupportedImageType
+        with pytest.raises(UnsupportedImageType):
+            ImageService.validate_image(_create_test_image(format="GIF"))
 
     def test_oversized_file(self):
         from app.services.image_service import ImageService, MAX_FILE_SIZE
         large_bytes = b"\x00" * (MAX_FILE_SIZE + 1)
-        result = ImageService.validate_image(large_bytes, "test.jpg", "image/jpeg")
-        assert result is not None
-        assert "too large" in result.lower()
-
-    def test_unsupported_extension(self):
-        from app.services.image_service import ImageService
-        result = ImageService.validate_image(b"fake", "test.exe", "application/x-executable")
-        assert result is not None
-        assert "extension" in result.lower() or "unsupported" in result.lower()
+        error, mime = ImageService.validate_image(large_bytes)
+        assert "too large" in error.lower()
+        assert mime is None
 
     def test_invalid_image_content(self):
         from app.services.image_service import ImageService
-        result = ImageService.validate_image(b"not an image", "test.jpg", "image/jpeg")
-        assert result is not None
+        error, mime = ImageService.validate_image(b"not an image")
+        assert error is not None
+        assert mime is None
 
     def test_corrupted_image(self):
         from app.services.image_service import ImageService
-        result = ImageService.validate_image(b"\xff\xd8\xff\xe0\x00\x10JFIF", "test.jpg", "image/jpeg")
-        assert result is not None
+        error, _ = ImageService.validate_image(b"\xff\xd8\xff\xe0\x00\x10JFIF")
+        assert error is not None
 
 
 class TestImageHashing:
@@ -135,7 +142,7 @@ class TestOCRService:
         mock_client = mock_client_cls.return_value.__enter__.return_value
         mock_client.post.return_value = response
 
-        result = OCRService.extract_text(_create_blank_image())
+        result = OCRService.extract_text(_create_blank_image(), mime_type="image/jpeg")
 
         assert result.success is True
         assert len(result.texts) == 3
@@ -151,7 +158,7 @@ class TestOCRService:
             {"success": False, "error": "OCR processing failed"}, status_code=500
         )
 
-        result = OCRService.extract_text(_create_blank_image())
+        result = OCRService.extract_text(_create_blank_image(), mime_type="image/jpeg")
         assert result.success is False
         assert result.error == "OCR processing failed"
 
@@ -162,7 +169,7 @@ class TestOCRService:
         mock_client = mock_client_cls.return_value.__enter__.return_value
         mock_client.post.side_effect = httpx.ConnectError("connection refused")
 
-        result = OCRService.extract_text(_create_blank_image())
+        result = OCRService.extract_text(_create_blank_image(), mime_type="image/jpeg")
         assert result.success is False
         assert "unavailable" in result.error.lower()
 
@@ -173,20 +180,20 @@ class TestOCRService:
         mock_client = mock_client_cls.return_value.__enter__.return_value
         mock_client.post.side_effect = httpx.TimeoutException("timed out")
 
-        result = OCRService.extract_text(_create_blank_image())
+        result = OCRService.extract_text(_create_blank_image(), mime_type="image/jpeg")
         assert result.success is False
         assert "timeout" in result.error.lower()
 
     def test_extract_text_invalid_image(self):
         from app.services.ocr_service import OCRService, MAX_FILE_SIZE
         oversized_bytes = b"\xff\xd8" + b"\x00" * (MAX_FILE_SIZE + 1)
-        result = OCRService.extract_text(oversized_bytes)
+        result = OCRService.extract_text(oversized_bytes, mime_type="image/jpeg")
         assert result.success is False
         assert result.error is not None
 
     def test_extract_text_empty_bytes(self):
         from app.services.ocr_service import OCRService
-        result = OCRService.extract_text(b"")
+        result = OCRService.extract_text(b"", mime_type="image/jpeg")
         assert result.success is False
         assert result.error is not None
 

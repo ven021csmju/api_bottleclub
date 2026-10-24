@@ -38,37 +38,39 @@ _UPLOAD_ACCEPTED_STATUSES = {
 }
 
 
-async def _process_slip(
+#: HTTP status per result status; everything else is 200.
+_HTTP_STATUS = {
+    "order_not_found": 404,
+    "ocr_failed": 422,
+    "order_already_paid": 400,
+    "unsupported_media_type": 415,
+}
+
+
+# Sync on purpose: FastAPI runs it in the threadpool, so the blocking DB work,
+# image decoding and OCR HTTP call never stall the event loop.
+def _process_slip(
     request: Request,
     file: UploadFile,
     order_id: int,
     user: User,
     db: Session,
 ) -> JSONResponse:
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
 
     result = SlipVerifyService.verify_slip(
         db=db,
         user=user,
         order_id=order_id,
         file_bytes=file_bytes,
-        filename=file.filename or "unknown.jpg",
-        content_type=file.content_type or "",
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("User-Agent", ""),
     )
 
     db.commit()
 
-    status_code = 200
-    if result.get("status") in ("order_not_found",):
-        status_code = 404
-    elif result.get("status") in ("ocr_failed",):
-        status_code = 422
-    elif result.get("status") in ("order_already_paid",):
-        status_code = 400
-
     status = result.get("status")
+    status_code = _HTTP_STATUS.get(status, 200)
     if status in _UPLOAD_ACCEPTED_STATUSES:
         verification_id = None
         storage_key = None
@@ -79,9 +81,8 @@ async def _process_slip(
         if latest:
             verification_id = verification_id or latest[0].id
             storage_key = latest[0].image_storage_key
-        # Async entry point (this endpoint runs in the event loop), so use the
-        # awaitable helper; publish_user_event never raises.
-        await user_events.publish_user_event(
+        # Worker thread, no running loop: the sync helper; it never raises.
+        user_events.publish_user_event_sync(
             "slip_upload",
             user.id,
             getattr(request.state, "request_id", ""),
@@ -94,7 +95,7 @@ async def _process_slip(
         )
     if status == "verified":
         # The slip settled the order: same event as POS checkout.
-        await user_events.publish_user_event(
+        user_events.publish_user_event_sync(
             "purchase_completed",
             user.id,
             getattr(request.state, "request_id", ""),
@@ -105,25 +106,25 @@ async def _process_slip(
 
 
 @router.post("/upload", response_model=None)
-async def upload_slip(
+def upload_slip(
     request: Request,
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
     order_id: int = Form(..., description="Order ID to verify against"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return await _process_slip(request, file, order_id, user, db)
+    return _process_slip(request, file, order_id, user, db)
 
 
 @router.post("/checkslip", response_model=None)
-async def check_slip(
+def check_slip(
     request: Request,
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
     order_id: int = Form(..., description="Order ID to verify against"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return await _process_slip(request, file, order_id, user, db)
+    return _process_slip(request, file, order_id, user, db)
 
 
 def _verification_detail(verification) -> dict:

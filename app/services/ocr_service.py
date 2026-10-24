@@ -4,10 +4,18 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.config.settings import settings
+from app.services.image_service import MIME_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+HEALTH_TIMEOUT = httpx.Timeout(3.0)
+
+
+def _request_timeout() -> httpx.Timeout:
+    return httpx.Timeout(
+        settings.OCR_SERVICE_TIMEOUT, connect=settings.OCR_SERVICE_CONNECT_TIMEOUT
+    )
 
 
 @dataclass
@@ -30,7 +38,13 @@ class OCRService:
     MAX_FILE_SIZE = 10 * 1024 * 1024
 
     @staticmethod
-    def extract_text(image_bytes: bytes) -> OCRResult:
+    def extract_text(image_bytes: bytes, *, mime_type: str) -> OCRResult:
+        """Send the slip to the OCR service.
+
+        ``mime_type`` is the type detected from the image bytes
+        (:meth:`ImageService.validate_image`); the file is sent as
+        ``slip.<ext>`` with that type.
+        """
         if not image_bytes:
             return OCRResult(success=False, error="No image data provided")
 
@@ -40,13 +54,16 @@ class OCRService:
                 error=f"Image too large: {len(image_bytes)} bytes (max {OCRService.MAX_FILE_SIZE})",
             )
 
+        ext = MIME_EXTENSIONS.get(mime_type)
+        if ext is None:
+            return OCRResult(success=False, error=f"Unsupported MIME type: {mime_type}")
+
         url = settings.OCR_SERVICE_URL.rstrip("/") + "/ocr"
-        timeout = settings.OCR_SERVICE_TIMEOUT
         logger.info("Sending image to OCR service at %s", url)
 
         try:
-            with httpx.Client(timeout=timeout) as client:
-                files = {"file": ("slip.jpg", image_bytes, "image/jpeg")}
+            with httpx.Client(timeout=_request_timeout()) as client:
+                files = {"file": (f"slip{ext}", image_bytes, mime_type)}
                 response = client.post(url, files=files)
         except httpx.TimeoutException:
             logger.error("OCR service timeout")
@@ -109,7 +126,7 @@ class OCRService:
     def health() -> bool:
         url = settings.OCR_SERVICE_URL.rstrip("/") + "/health"
         try:
-            with httpx.Client(timeout=settings.OCR_SERVICE_TIMEOUT) as client:
+            with httpx.Client(timeout=HEALTH_TIMEOUT) as client:
                 response = client.get(url)
                 return response.status_code == 200 and response.json().get("status") == "ok"
         except Exception as exc:

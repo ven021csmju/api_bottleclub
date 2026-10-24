@@ -10,8 +10,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+#: Decoded PIL format -> MIME type. Only these are accepted (and the OCR
+#: service accepts the same three).
+FORMAT_MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+MIME_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_IMAGE_PIXELS = 20_000_000
 
@@ -27,34 +29,43 @@ class ImageMetadata:
     storage_key: str
 
 
+class UnsupportedImageType(ValueError):
+    """The bytes decode as an image, but not as JPEG, PNG or WebP."""
+
+
 class ImageService:
     @staticmethod
-    def validate_image(file_bytes: bytes, filename: str, content_type: str) -> str | None:
+    def validate_image(file_bytes: bytes) -> tuple[str | None, str | None]:
+        """Return ``(error, mime_type)`` for an uploaded slip.
+
+        The MIME type comes from the decoded image format (its magic bytes),
+        never from the client's filename or Content-Type. Raises
+        :class:`UnsupportedImageType` for an image in any other format.
+        """
         if len(file_bytes) > MAX_FILE_SIZE:
-            return f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})"
-
-        ext = Path(filename).suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            return f"Unsupported file extension: {ext}"
-
-        if content_type and content_type not in ALLOWED_MIME_TYPES:
-            return f"Unsupported MIME type: {content_type}"
+            return f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})", None
 
         try:
             img = Image.open(io.BytesIO(file_bytes))
+        except Exception:
+            return "Invalid or corrupted image file", None
+        mime_type = FORMAT_MIME_TYPES.get(img.format or "")
+        if mime_type is None:
+            raise UnsupportedImageType(img.format or "unknown")
+        try:
             img.verify()
         except Exception:
-            return "Invalid or corrupted image file"
+            return "Invalid or corrupted image file", None
 
         try:
             img = Image.open(io.BytesIO(file_bytes))
             width, height = img.size
             if width * height > MAX_IMAGE_PIXELS:
-                return f"Image too large: {width}x{height} pixels"
+                return f"Image too large: {width}x{height} pixels", None
         except Exception:
-            return "Cannot read image dimensions"
+            return "Cannot read image dimensions", None
 
-        return None
+        return None, mime_type
 
     @staticmethod
     def compute_sha256(file_bytes: bytes) -> str:

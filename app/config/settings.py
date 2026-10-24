@@ -47,7 +47,9 @@ class Settings(BaseSettings):
     REGISTRATION_ORGANIZATION_ID: int | None = None
 
     OCR_SERVICE_URL: str = "http://127.0.0.1:9000"
-    OCR_SERVICE_TIMEOUT: int = 60
+    # Seconds. TIMEOUT bounds read/write/pool, CONNECT bounds the TCP connect.
+    OCR_SERVICE_TIMEOUT: float = 20.0
+    OCR_SERVICE_CONNECT_TIMEOUT: float = 3.0
 
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN: str = "30/minute"

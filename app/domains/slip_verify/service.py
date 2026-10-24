@@ -9,7 +9,7 @@ from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
 from app.services.fraud_detection import FraudDetectionService
-from app.services.image_service import ImageService
+from app.services.image_service import MIME_EXTENSIONS, ImageService, UnsupportedImageType
 from app.services.ocr_service import OCRService
 from app.services import user_events
 from app.services.slip_parser import parse_slip
@@ -57,8 +57,6 @@ class SlipVerifyService:
         user: User,
         order_id: int,
         file_bytes: bytes,
-        filename: str,
-        content_type: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> dict:
@@ -80,7 +78,12 @@ class SlipVerifyService:
             raise BadRequestException(detail="Order is cancelled")
 
         # 2. Validate image
-        image_error = ImageService.validate_image(file_bytes, filename, content_type)
+        try:
+            image_error, image_mime = ImageService.validate_image(file_bytes)
+        except UnsupportedImageType as exc:
+            reason = f"Unsupported image format: {exc}"
+            _log_attempt(db, user, order_id, None, None, None, 415, "unsupported_media_type", None, reason, ip_address, user_agent)
+            return _error_response("unsupported_media_type", "รองรับเฉพาะไฟล์ JPEG, PNG หรือ WebP", 415)
         if image_error:
             _log_attempt(db, user, order_id, None, None, None, 422, "ocr_failed", None, image_error, ip_address, user_agent)
             return _error_response("ocr_failed", image_error, 422)
@@ -88,9 +91,8 @@ class SlipVerifyService:
         # 3. Compute image hashes
         image_sha256 = ImageService.compute_sha256(file_bytes)
         image_phash = ImageService.compute_perceptual_hash(file_bytes)
-        image_mime = content_type
         image_size = len(file_bytes)
-        storage_key = ImageService.generate_storage_key(filename)
+        storage_key = ImageService.generate_storage_key("slip" + MIME_EXTENSIONS[image_mime])
 
         # 4. Check duplicate image
         existing_image = SlipVerifyRepository.find_existing_verification_by_image_hash(db, image_sha256, order_id)
@@ -107,7 +109,7 @@ class SlipVerifyService:
             }
 
         # 5. OCR extraction
-        ocr_result = OCRService.extract_text(file_bytes)
+        ocr_result = OCRService.extract_text(file_bytes, mime_type=image_mime)
         if not ocr_result.success:
             verification = SlipVerifyRepository.create_verification(
                 db,

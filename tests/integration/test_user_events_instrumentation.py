@@ -550,21 +550,21 @@ class TestRefundReturnEvents:
 
 
 # ---------------------------------------------------------------------------
-# Slip verify (async publish)
+# Slip verify (runs in the threadpool -> sync publish)
 # ---------------------------------------------------------------------------
 
 class TestSlipUploadEvents:
-    def test_accepted_slip_publishes_slip_upload(self, client, session, seed_user, seed_branch, multiperm_headers, record_async):
+    def test_accepted_slip_publishes_slip_upload(self, client, session, seed_user, seed_branch, multiperm_headers, record_sync):
         product = _seed_product(session, seed_user["org_id"], "BEER-007", branch_id=seed_branch)
         session.commit()
 
         body = _create_order(client, multiperm_headers, seed_branch, product, qty=1, unit="50.00")
         order_id = body["data"]["id"]
-        record_async.clear()  # drop the sync events; we only assert slip_upload
+        record_sync.clear()  # drop the order events; we only assert slip_upload
 
         # Force OCR failure so the flow resolves deterministically to a created
         # (ocr_failed) verification without a real OCR service.
-        def fake_extract_text(image_bytes):
+        def fake_extract_text(image_bytes, **kwargs):
             return OCRResult(success=False, error="simulated failure")
 
         monkeypatch = pytest.MonkeyPatch()
@@ -584,8 +584,8 @@ class TestSlipUploadEvents:
 
         assert resp.status_code == 422, resp.text  # ocr_failed -> 422 (raw response)
         assert resp.headers.get("X-Request-Id") == "slip-req-42"
-        assert [c["event_type"] for c in record_async] == ["slip_upload"]
-        call = record_async[0]
+        assert [c["event_type"] for c in record_sync] == ["slip_upload"]
+        call = record_sync[0]
         assert call["data"]["order_id"] == order_id
         assert call["data"]["status"] == "ocr_failed"
         assert call["data"]["verification_id"] is not None

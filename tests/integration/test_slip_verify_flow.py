@@ -327,3 +327,24 @@ class TestManualApproval:
 
         assert resp.status_code == 400, resp.text
         assert _payments(session, order_id) == 0
+
+
+class TestImageType:
+    def test_gif_named_jpg_is_415(self, client, session, headers, seed_user, slip):
+        order_id, _ = _order(client, headers, session, seed_user, "SLIP-9")
+
+        resp = _upload(client, headers, order_id, _image(14, fmt="GIF"), name="slip.jpg", mime="image/jpeg")
+
+        assert resp.status_code == 415, resp.text
+        assert _status(resp) == "unsupported_media_type"
+        assert _verification_id(session, order_id, "ocr_failed") is None
+
+    def test_png_sent_as_jpeg_is_stored_as_png(self, client, session, headers, seed_user, slip):
+        order_id, _ = _order(client, headers, session, seed_user, "SLIP-10")
+        slip.fail = True
+
+        _upload(client, headers, order_id, _image(15, fmt="PNG"), name="photo.jpg", mime="image/jpeg")
+
+        verification = session.get(PaymentVerification, _verification_id(session, order_id, "ocr_failed"))
+        assert verification.image_mime_type == "image/png"
+        assert verification.image_storage_key.endswith(".png")
