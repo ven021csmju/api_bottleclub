@@ -189,5 +189,5 @@ class TestShifts:
     def test_shift_list_holds_only_the_callers_organization(self, client: TestClient, home, other, headers):
         resp = client.get(f"{API}/shifts/", headers=headers)
         assert [s["id"] for s in resp.json()["data"]["shifts"]] == [home.shift]
-        resp = client.get(f"{API}/shifts/?branch_id={other.branch}", headers=headers)
-        assert resp.json()["data"]["shifts"] == []
+        # A branch of another organization is not one of the caller's (35c): 404.
+        assert client.get(f"{API}/shifts/?branch_id={other.branch}", headers=headers).status_code == 404

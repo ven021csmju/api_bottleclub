@@ -82,6 +82,7 @@ class ShiftRepository:
         db: Session,
         org_id: int,
         branch_id: int | None = None,
+        user_id: int | None = None,
         status: str | None = None,
         date_from=None,
         date_to=None,
@@ -96,6 +97,8 @@ class ShiftRepository:
 
         if branch_id is not None:
             stmt = stmt.where(Shift.branch_id == branch_id)
+        if user_id is not None:
+            stmt = stmt.where(Shift.user_id == user_id)
         if status is not None:
             stmt = stmt.where(Shift.status == status)
         if date_from:

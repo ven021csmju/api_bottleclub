@@ -18,6 +18,10 @@ def _org_shift(db: Session, org_id: int, shift_id: int) -> Shift:
 
 class ShiftService:
     @staticmethod
+    def get_shift(db: Session, org_id: int, shift_id: int) -> Shift:
+        return _org_shift(db, org_id, shift_id)
+
+    @staticmethod
     def open_shift(
         db: Session,
         org_id: int,
@@ -114,6 +118,7 @@ class ShiftService:
         db: Session,
         org_id: int,
         branch_id: int | None = None,
+        user_id: int | None = None,
         status: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
@@ -121,7 +126,7 @@ class ShiftService:
         per_page: int = 20,
     ) -> tuple[list[Shift], int]:
         return ShiftRepository.list_shifts(
-            db, org_id, branch_id, status, date_from, date_to, page, per_page
+            db, org_id, branch_id, user_id, status, date_from, date_to, page, per_page
         )
 
     @staticmethod

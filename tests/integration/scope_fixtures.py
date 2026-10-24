@@ -204,3 +204,30 @@ def stock(session: Session, world: World) -> int:
         world.data[f"lot_{where}"] = lot.id
     session.commit()
     return product.id
+
+
+@pytest.fixture()
+def shifts(session: Session, world: World) -> dict[str, int]:
+    """Open shifts: ``a1`` (pos_a at A), ``a2`` (pos_a2 at A), ``b1`` (pos_b at B); a free
+    register at A in ``world.data["free_register_A"]``."""
+    from decimal import Decimal
+
+    from app.db.models import Register, Shift
+
+    out = {}
+    for name, (user, where) in {"a1": ("pos_a", "A"), "a2": ("pos_a2", "A"), "b1": ("pos_b", "B")}.items():
+        register = Register(branch_id=world.branch[where], name=f"R-{name}")
+        session.add(register)
+        session.flush()
+        shift = Shift(branch_id=world.branch[where], register_id=register.id, user_id=world.users[user],
+                      status="open", opening_cash=Decimal("100"))
+        session.add(shift)
+        session.flush()
+        out[name] = shift.id
+    free = Register(branch_id=world.A, name="R-free")
+    session.add(free)
+    session.flush()
+    world.data["free_register_A"] = free.id
+    world.data["register_B"] = session.get(Shift, out["b1"]).register_id
+    session.commit()
+    return out
