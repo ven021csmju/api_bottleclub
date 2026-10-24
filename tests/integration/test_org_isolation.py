@@ -29,6 +29,7 @@ from app.db.models import (
     User,
 )
 from app.shared.security import create_access_token
+from tests.integration.conftest import grant
 
 pytestmark = pytest.mark.integration
 
@@ -97,7 +98,8 @@ def other(session: Session) -> Org:
 
 
 @pytest.fixture()
-def headers(home: Org) -> dict[str, str]:
+def headers(session: Session, home: Org) -> dict[str, str]:
+    grant(session, home.user, home.id, PERMISSIONS, home.branch)
     token = create_access_token(user_id=home.user, org_id=home.id, permissions=PERMISSIONS, branches=[home.branch])
     return {"Authorization": f"Bearer {token}", "X-Branch-Id": str(home.branch)}
 

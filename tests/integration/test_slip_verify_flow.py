@@ -17,6 +17,7 @@ from app.services import user_events
 from app.services.fraud_detection import FraudAssessment
 from app.services.ocr_service import OCRResult
 from app.shared.security import create_access_token
+from tests.integration.conftest import grant
 
 SLIP_PERMS = [
     "orders.create",
@@ -47,7 +48,8 @@ def auto_verify(monkeypatch):
 
 
 @pytest.fixture()
-def headers(seed_user: dict) -> dict[str, str]:
+def headers(session, seed_user: dict) -> dict[str, str]:
+    grant(session, seed_user["user_id"], seed_user["org_id"], SLIP_PERMS, seed_user["branch_id"])
     token = create_access_token(
         user_id=seed_user["user_id"],
         org_id=seed_user["org_id"],

@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.db.models import Inventory, Order, Product
 from app.middleware.rate_limit import limiter
 from app.shared.security import create_access_token, hash_password
+from tests.integration.conftest import grant
 
 
 def _make_tracking_order(session, org_id: int, branch_id: int, user_id: int, tracking_number: str, order_number: str) -> Order:
@@ -339,10 +340,12 @@ def _make_org_user(
     session.add(user)
     session.flush()
 
+    permissions = permissions if permissions is not None else ["orders.read"]
+    grant(session, user.id, org.id, permissions)
     token = create_access_token(
         user_id=user.id,
         org_id=org.id,
-        permissions=permissions if permissions is not None else ["orders.read"],
+        permissions=permissions,
         branches=[],
     )
     return org.id, {"Authorization": f"Bearer {token}"}

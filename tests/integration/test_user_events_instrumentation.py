@@ -19,6 +19,7 @@ from app.domains.slip_verify import service as slip_svc
 from app.services import user_events
 from app.services.ocr_service import OCRResult
 from app.shared.security import create_access_token
+from tests.integration.conftest import grant
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,8 @@ ALL_PERMS = [
 
 
 @pytest.fixture()
-def multiperm_headers(seed_user: dict) -> dict[str, str]:
+def multiperm_headers(session, seed_user: dict) -> dict[str, str]:
+    grant(session, seed_user["user_id"], seed_user["org_id"], ALL_PERMS, seed_user["branch_id"])
     token = create_access_token(
         user_id=seed_user["user_id"],
         org_id=seed_user["org_id"],

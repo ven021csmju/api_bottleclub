@@ -36,7 +36,7 @@ def list_promotions(
 def create_promotion(
     data: PromotionCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("promotions.create")),
+    _: User = Depends(require_permission("promotions.create", scope="org")),
 ) -> PromotionMutationResponse:
     return PromotionMutationResponse(
         promotion=_response(PromotionService.create(db, data.model_dump(by_alias=False)))
@@ -47,7 +47,7 @@ def create_promotion(
 def update_promotion(
     data: PromotionUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("promotions.update")),
+    _: User = Depends(require_permission("promotions.update", scope="org")),
 ) -> PromotionMutationResponse:
     return PromotionMutationResponse(
         promotion=_response(
@@ -60,7 +60,7 @@ def update_promotion(
 def bulk_update_promotions(
     data: list[PromotionBulkItem],
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("promotions.update")),
+    _: User = Depends(require_permission("promotions.update", scope="org")),
 ) -> PromotionBulkResponse:
     count = PromotionService.bulk_update(
         db, [item.model_dump(exclude_unset=True, by_alias=False) for item in data]
@@ -72,7 +72,7 @@ def bulk_update_promotions(
 def delete_promotion(
     promotion_id: str = Query(..., alias="id"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("promotions.delete")),
+    _: User = Depends(require_permission("promotions.delete", scope="org")),
 ) -> dict:
     PromotionService.delete(db, promotion_id)
     return {"success": True, "message": "ลบโปรโมชั่นสำเร็จ"}

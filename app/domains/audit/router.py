@@ -27,7 +27,7 @@ def list_audit_logs(
     date_to: Optional[datetime] = Query(None),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("audit.read")),
+    user: User = Depends(require_permission("audit.read", scope="org")),
 ) -> AuditLogListResponse:
     logs, total = AuditService.list_audit_logs(
         db,
@@ -53,7 +53,7 @@ def list_audit_logs(
 def get_audit_log(
     log_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("audit.read")),
+    user: User = Depends(require_permission("audit.read", scope="org")),
 ) -> AuditLogResponse:
     result = AuditService.get_audit_log(db, user.organization_id, log_id)
     return AuditLogResponse(**result)

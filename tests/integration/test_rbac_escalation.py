@@ -52,7 +52,8 @@ def _role(session: Session, org_id: int, name: str, codes: list[str], perms: dic
     return role.id
 
 
-def _user(session: Session, org: Org, name: str, role: str | None, branch: int | None = None) -> int:
+def _user(session: Session, org: Org, name: str, role: str | None, branch: int | None = None,
+          org_wide: bool = False) -> int:
     user = User(
         organization_id=org.id, username=name, email=f"{name}@org{org.id}.test",
         password_hash="x", display_name=name.title(), status="active",
@@ -60,7 +61,8 @@ def _user(session: Session, org: Org, name: str, role: str | None, branch: int |
     session.add(user)
     session.flush()
     if role:
-        session.add(UserRole(user_id=user.id, role_id=org.roles[role], branch_id=branch or org.branch))
+        branch_id = None if org_wide else branch or org.branch
+        session.add(UserRole(user_id=user.id, role_id=org.roles[role], branch_id=branch_id))
         session.flush()
     org.users[name] = user.id
     return user.id
@@ -102,7 +104,9 @@ def org(session: Session, perms: dict[str, int]) -> Org:
     _user(session, org, "newbie", None)
     org.roles["Auditor"] = _role(session, org.id, "Auditor", ["audit.read", "orders.read"], perms, system=False)
     org.roles["Deputy"] = _role(session, org.id, "Deputy", ["roles.delete", "roles.read"], perms, system=False)
-    _user(session, org, "deputy", "Deputy")
+    _user(session, org, "deputy", "Deputy", org_wide=True)
+    # Roles are organization-level: managing them needs a role held at every branch.
+    _user(session, org, "orgmgr", "Manager", org_wide=True)
     org.roles["Kitchen"] = _role(session, org.id, "Kitchen", ["orders.read"], perms)
     org.roles["HR"] = _role(
         session, org.id, "HR",
@@ -135,7 +139,11 @@ def as_(session: Session, org: Org):
             permissions=AuthRepository.load_permission_codes(session, user_id),
             branches=AuthRepository.load_branch_ids(session, user_id),
         )
-        return {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}"}
+        branches = AuthRepository.load_branch_ids(session, user_id)
+        if branches:
+            headers["X-Branch-Id"] = str(branches[0])
+        return headers
 
     return headers
 
@@ -226,23 +234,23 @@ class TestGrantOnlyWhatYouHold:
 
     def test_manager_cannot_create_a_role_with_permissions_they_lack(self, client: TestClient, session, org, as_):
         body = {"name": "Snoop", "permission_ids": [org.perms["orders.read"], org.perms["audit.read"]]}
-        assert client.post(f"{API}/roles/", json=body, headers=as_("manager")).status_code == 403
+        assert client.post(f"{API}/roles/", json=body, headers=as_("orgmgr")).status_code == 403
         assert _roles_named(session, org, "Snoop") == []
 
         body["permission_ids"] = [org.perms["orders.read"]]
-        assert client.post(f"{API}/roles/", json=body, headers=as_("manager")).status_code == 201
+        assert client.post(f"{API}/roles/", json=body, headers=as_("orgmgr")).status_code == 201
 
     def test_manager_cannot_add_permissions_they_lack_to_a_role(self, client: TestClient, session, org, as_):
         resp = client.post(
             f"{API}/roles/",
             json={"name": "Helper", "permission_ids": [org.perms["orders.read"]]},
-            headers=as_("manager"),
+            headers=as_("orgmgr"),
         )
         role_id = resp.json()["data"]["id"]
         resp = client.put(
             f"{API}/roles/{role_id}",
             json={"permission_ids": [org.perms["orders.read"], org.perms["users.delete"]]},
-            headers=as_("manager"),
+            headers=as_("orgmgr"),
         )
         assert resp.status_code == 403
         session.expire_all()
@@ -252,7 +260,7 @@ class TestGrantOnlyWhatYouHold:
         resp = client.put(
             f"{API}/roles/{org.roles['Auditor']}",
             json={"description": "mine now", "permission_ids": [org.perms["orders.read"]]},
-            headers=as_("manager"),
+            headers=as_("orgmgr"),
         )
         assert resp.status_code == 403
         session.expire_all()
@@ -265,8 +273,8 @@ class TestGrantOnlyWhatYouHold:
         assert len(_roles_named(session, org, "Auditor")) == 1
 
     def test_permissions_are_read_from_the_database_not_the_token(self, client: TestClient, session, org, as_):
-        stale = as_("manager")
-        manager_role = session.query(UserRole).filter(UserRole.user_id == org.users["manager"]).one()
+        stale = as_("orgmgr")
+        manager_role = session.query(UserRole).filter(UserRole.user_id == org.users["orgmgr"]).one()
         manager_role.role_id = org.roles["Cashier"]
         session.commit()
 
@@ -319,10 +327,10 @@ class TestSystemRoles:
     ):
         url = f"{API}/roles/{org.roles['Manager']}"
         fewer = {"permission_ids": [org.perms[c] for c in MANAGER if c != "orders.create"]}
-        assert client.put(url, json=fewer, headers=as_("manager")).status_code == 403
+        assert client.put(url, json=fewer, headers=as_("orgmgr")).status_code == 403
         assert _perm_codes(session, org.roles["Manager"]) == set(MANAGER)
 
-        assert client.put(url, json={"description": "Runs a branch"}, headers=as_("manager")).status_code == 200
+        assert client.put(url, json={"description": "Runs a branch"}, headers=as_("orgmgr")).status_code == 200
         assert client.put(url, json=fewer, headers=as_("admin")).status_code == 200
         assert _perm_codes(session, org.roles["Manager"]) == set(MANAGER) - {"orders.create"}
 

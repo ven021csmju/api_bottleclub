@@ -42,7 +42,7 @@ def get_coupon(
 def create_coupon(
     data: CouponCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("coupons.create")),
+    user: User = Depends(require_permission("coupons.create", scope="org")),
 ) -> CouponResponse:
     return CouponService.create(
         db, user.organization_id, **data.model_dump()
@@ -53,7 +53,7 @@ def create_coupon(
 def delete_coupon(
     coupon_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("coupons.delete")),
+    user: User = Depends(require_permission("coupons.delete", scope="org")),
 ) -> None:
     CouponService.delete(db, user.organization_id, coupon_id)
 

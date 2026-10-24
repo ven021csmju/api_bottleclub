@@ -97,3 +97,35 @@ def test_station_item_route_checks_its_station():
         if isinstance(r, APIRoute) and r.path.endswith("/station-items/{run_id}/status")
     ]
     assert require_station_item_permission in list(_calls(route.dependant))
+
+
+#: Organization-wide data: a role held at one branch does not reach it
+#: (``require_permission(..., scope="org")``, app/middleware/access.py).
+ORG_LEVEL_PERMISSIONS = {
+    "catalog.create",
+    "promotions.create", "promotions.update", "promotions.delete",
+    "coupons.create", "coupons.update", "coupons.delete",
+    "branches.create", "branches.update", "branches.delete",
+    "roles.create", "roles.update", "roles.delete",
+    "audit.read",
+}
+
+
+def _permission_checks(route: APIRoute) -> list[tuple[str, str]]:
+    return [
+        (c.permission_code, c.scope)
+        for c in _calls(route.dependant)
+        if getattr(c, "__qualname__", "").endswith("permission_checker")
+    ]
+
+
+def test_organization_level_permissions_are_checked_at_organization_level():
+    checks = {
+        (method, route.path.removeprefix(PREFIX)): check
+        for route in create_app().routes if isinstance(route, APIRoute)
+        for method in route.methods
+        for check in _permission_checks(route)
+    }
+    wrong = {key: check for key, check in checks.items() if check[0] in ORG_LEVEL_PERMISSIONS and check[1] != "org"}
+    assert wrong == {}
+    assert {code for code, scope in checks.values() if scope == "org"} <= ORG_LEVEL_PERMISSIONS | {"settings.update"}

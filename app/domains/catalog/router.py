@@ -40,7 +40,7 @@ def list_categories(
 def create_category(
     data: CategoryCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.create_category(db, user.organization_id, data)
 
@@ -50,7 +50,7 @@ def update_category(
     category_id: int,
     data: CategoryUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.update_category(db, user.organization_id, category_id, data)
 
@@ -59,7 +59,7 @@ def update_category(
 def delete_category(
     category_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     CatalogService.delete_category(db, user.organization_id, category_id)
     return None
@@ -121,7 +121,7 @@ def get_product(
 def create_product(
     data: ProductCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.create_product(db, user.organization_id, data)
 
@@ -131,7 +131,7 @@ def update_product(
     product_id: int,
     data: ProductUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.update_product(db, user.organization_id, product_id, data)
 
@@ -140,7 +140,7 @@ def update_product(
 def delete_product(
     product_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     CatalogService.delete_product(db, user.organization_id, product_id)
     return None
@@ -174,7 +174,7 @@ def get_supplier(
 def create_supplier(
     data: SupplierCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.create_supplier(db, user.organization_id, data)
 
@@ -184,7 +184,7 @@ def update_supplier(
     supplier_id: int,
     data: SupplierUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.update_supplier(db, user.organization_id, supplier_id, data)
 
@@ -193,7 +193,7 @@ def update_supplier(
 def delete_supplier(
     supplier_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     CatalogService.delete_supplier(db, user.organization_id, supplier_id)
     return None
@@ -223,7 +223,7 @@ def create_supplier_product(
     supplier_id: int,
     data: SupplierProductCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.create_supplier_product(
         db, user.organization_id, supplier_id, data
@@ -239,7 +239,7 @@ def update_supplier_product(
     supplier_product_id: int,
     data: SupplierProductUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     return CatalogService.update_supplier_product(
         db, user.organization_id, supplier_product_id, data
@@ -254,7 +254,7 @@ def delete_supplier_product(
     supplier_id: int,
     supplier_product_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("catalog.create")),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
 ):
     CatalogService.delete_supplier_product(
         db, user.organization_id, supplier_product_id

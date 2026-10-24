@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.db.models import Inventory, Order, Product
 from app.shared.security import create_access_token
+from tests.integration.conftest import grant
 
 ALL_PERMS = [
     "orders.read",
@@ -20,7 +21,8 @@ ALL_PERMS = [
 
 
 @pytest.fixture()
-def broad_token(seed_user: dict):
+def broad_token(session, seed_user: dict):
+    grant(session, seed_user["user_id"], seed_user["org_id"], ALL_PERMS, seed_user["branch_id"])
     return create_access_token(
         user_id=seed_user["user_id"],
         org_id=seed_user["org_id"],

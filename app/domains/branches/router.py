@@ -33,7 +33,7 @@ def get_branch(
 def create_branch(
     data: BranchCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("branches.create")),
+    current_user: User = Depends(require_permission("branches.create", scope="org")),
 ) -> BranchResponse:
     branch = BranchService.create_branch(db, current_user.organization_id, data)
     return BranchResponse.model_validate(branch)
@@ -44,7 +44,7 @@ def update_branch(
     branch_id: int,
     data: BranchUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("branches.update")),
+    current_user: User = Depends(require_permission("branches.update", scope="org")),
 ) -> BranchResponse:
     branch = BranchService.update_branch(db, current_user.organization_id, branch_id, data)
     return BranchResponse.model_validate(branch)
@@ -54,6 +54,6 @@ def update_branch(
 def delete_branch(
     branch_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("branches.delete")),
+    current_user: User = Depends(require_permission("branches.delete", scope="org")),
 ) -> None:
     BranchService.delete_branch(db, current_user.organization_id, branch_id)

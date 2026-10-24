@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.repositories.slip_verify.slip_verify_repository import SlipVerifyRepository
-from app.middleware.auth import get_audit_context, get_current_user, has_permission
+from app.middleware.access import Access
+from app.middleware.auth import get_access, get_audit_context, get_current_user
 from app.db.models import User
 from app.services import user_events
 from app.shared.audit import AuditContext
@@ -62,11 +63,12 @@ def _process_slip(
     file: UploadFile,
     order_id: int,
     user: User,
+    access: Access,
     db: Session,
 ) -> JSONResponse:
     # Same 403 whether the order is someone else's or does not exist, so
     # order ids cannot be probed.
-    if not has_permission(request, UPLOAD_PERMISSION) and not SlipVerifyRepository.is_order_owner(
+    if not access.can_anywhere(UPLOAD_PERMISSION) and not SlipVerifyRepository.is_order_owner(
         db, order_id, user.organization_id, user.id
     ):
         raise ForbiddenException(detail="Not allowed to submit a slip for this order")
@@ -126,9 +128,10 @@ def upload_slip(
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
     order_id: int = Form(..., description="Order ID to verify against"),
     user: User = Depends(get_current_user),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ):
-    return _process_slip(request, file, order_id, user, db)
+    return _process_slip(request, file, order_id, user, access, db)
 
 
 @router.post("/checkslip", response_model=None)
@@ -137,9 +140,10 @@ def check_slip(
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
     order_id: int = Form(..., description="Order ID to verify against"),
     user: User = Depends(get_current_user),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ):
-    return _process_slip(request, file, order_id, user, db)
+    return _process_slip(request, file, order_id, user, access, db)
 
 
 def _verification_detail(verification) -> dict:

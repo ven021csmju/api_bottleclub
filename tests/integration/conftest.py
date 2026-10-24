@@ -155,6 +155,28 @@ def client(session: Session, rate_limit_disabled: None) -> Generator[TestClient,
 # ---------------------------------------------------------------------------
 # Seed data helpers
 # ---------------------------------------------------------------------------
+def grant(session: Session, user_id: int, org_id: int, codes: list[str], branch_id: int | None = None) -> None:
+    """Give the user a role holding ``codes`` at ``branch_id`` (None: every branch).
+
+    Permission checks read the user's roles from the database; the
+    ``permissions`` claim of an access token grants nothing by itself.
+    """
+    from app.db.models import Permission, Role, RolePermission, UserRole
+
+    role = Role(organization_id=org_id, name=f"grant-{user_id}-{branch_id}-{len(session.new)}-{id(codes)}")
+    session.add(role)
+    session.flush()
+    for code in dict.fromkeys(codes):
+        permission = session.query(Permission).filter_by(code=code).one_or_none()
+        if permission is None:
+            permission = Permission(code=code, module=code.split(".")[0])
+            session.add(permission)
+            session.flush()
+        session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    session.add(UserRole(user_id=user_id, role_id=role.id, branch_id=branch_id))
+    session.flush()
+
+
 
 @pytest.fixture()
 def seed_org(session: Session) -> int:
@@ -245,6 +267,7 @@ def seed_user(
 
 @pytest.fixture()
 def auth_headers(seed_user: dict) -> dict[str, str]:
+    # seed_user's role at seed_branch holds exactly these.
     token = create_access_token(
         user_id=seed_user["user_id"],
         org_id=seed_user["org_id"],
@@ -260,7 +283,8 @@ def auth_headers(seed_user: dict) -> dict[str, str]:
 
 
 @pytest.fixture()
-def staff_headers(seed_user: dict) -> dict[str, str]:
+def staff_headers(session: Session, seed_user: dict) -> dict[str, str]:
+    grant(session, seed_user["user_id"], seed_user["org_id"], ["orders.update"], seed_user["branch_id"])
     token = create_access_token(
         user_id=seed_user["user_id"],
         org_id=seed_user["org_id"],
