@@ -28,6 +28,32 @@ Each line is a behaviour the frontend may have relied on.
 | `POST /auth/login`, `/auth/refresh` | a second login of the same user from the same device and IP within one second → 500 | 200; every refresh token carries a random `jti` |
 | `GET /auth/google/callback` | the Google email signed in to **any** account with that email, staff and Superadmin included; new accounts got `GOOGLE_DEFAULT_ROLE_NAME` | an account with any role, or a Superadmin, → 403 `GOOGLE_STAFF_ACCOUNT`; new accounts get **no role** (`GOOGLE_DEFAULT_ROLE_NAME` / `GOOGLE_DEFAULT_BRANCH_ID` removed); inactive/locked → 401; every sign-in writes `login_attempts` |
 
+### Roles, users and organization scope (v0.1.5)
+
+**Who counts as a Superadmin:** a user holding the system role named
+`Superadmin` of their own organization. `users.is_superadmin` is display only;
+no permission check reads it. Permission comparisons below use the roles the
+caller holds in the database at the time of the request, not the permissions
+listed in the access token.
+
+| Route | Before | Now |
+|---|---|---|
+| `POST /users/{id}/roles` | any `role_id`, `user_id`, `branch_id`, of any organization; a Manager could give themselves `Superadmin` | role, user and branch of another organization → 404; a role with a permission the caller lacks → 403 `PERMISSION_ESCALATION`; a target user with a permission the caller lacks, or a Superadmin target (unless the caller is one) → 403 `PERMISSION_ESCALATION`; own account → 403 `SELF_CHANGE` |
+| `DELETE /users/{id}/roles/{role_id}/{branch_id}` | users of any organization, anyone's roles | user of another organization → 404; same target and self rules → 403; removing the Superadmin role of the last active Superadmin → 409 `LAST_SUPERADMIN` |
+| `POST /users/` | `branch_ids: [..]` → 500 when not empty | **`branch_ids` removed → 422**; give `roles: [{role_id, branch_id}]` (404 / 403 as for `POST /users/{id}/roles`; nothing is created on a refusal); `is_superadmin` in the body → 422 |
+| `PUT /users/{id}` | changed any user of the organization; `branch_ids: []` deleted every role of the user, `branch_ids: [..]` → 500 | **`branch_ids` → 422** (roles change only through `/users/{id}/roles`); `is_superadmin` → 422; target with a permission the caller lacks, or a Superadmin, → 403 `PERMISSION_ESCALATION`; changing one's own `status` → 403 `SELF_CHANGE` (sending the unchanged value is fine); deactivating the last active Superadmin → 409 `LAST_SUPERADMIN` |
+| `DELETE /users/{id}` | any user of the organization, oneself included | same target rule → 403; own account → 403 `SELF_CHANGE`; last active Superadmin → 409 `LAST_SUPERADMIN` |
+| `GET /users/`, `GET /users/{id}`, user responses | no role information | each user carries `roles: [{role_id, branch_id}]` (added) |
+| `POST /roles/` | any `permission_ids`; unknown id → 500 | unknown id → 422 `UNKNOWN_PERMISSION`; a permission the caller lacks → 403 `PERMISSION_ESCALATION`; duplicates stored once |
+| `PUT /roles/{id}` | any change to any role, Superadmin role included (`is_system` only blocked a rename) | role `Superadmin` → 403 `SUPERADMIN_ROLE` for everyone; `permission_ids` of another system role → 403 `SYSTEM_ROLE` unless Superadmin; the role's current **and** new permissions must all be the caller's → else 403 `PERMISSION_ESCALATION`; unknown id → 422 `UNKNOWN_PERMISSION`; renaming a system role stays 400 |
+| `DELETE /roles/{id}` | system role → 400 for everyone | role `Superadmin` → 403 `SUPERADMIN_ROLE`; another system role → 403 `SYSTEM_ROLE` unless Superadmin (a Superadmin **may now delete** it when no user holds it); a role with a permission the caller lacks → 403 `PERMISSION_ESCALATION` |
+| `GET /payments/{order_id}` | payments of any order id, any organization | order of another organization → 404 |
+| `GET /inventory/balances/{branch_id}/{product_id}`, `GET /inventory/lots`, `GET /inventory/movements` | any branch and product, any organization | branch or product of another organization → 404 |
+| `POST /inventory/adjust` | stock of any branch with any product, any organization | branch or product of another organization → 404; `lot_id` not of that branch and product → 404 |
+| `POST /shifts/open` | any `branch_id` / `register_id` | branch of another organization, or a register not of that branch → 404 |
+| `PUT /shifts/{id}/close`, `POST /shifts/{id}/cash-movements`, `GET /shifts/{id}/x-report` | any shift id | shift of another organization → 404 |
+| `GET /shifts/` | shifts of every organization | only the caller's organization |
+
 ---
 
 ## Authentication
@@ -119,10 +145,25 @@ Response envelope:
 
 ## Users `/users`
 
+Changing a user (`PUT`, `DELETE`, both `/roles` routes) needs every permission
+that user holds; only a Superadmin changes a Superadmin; nobody changes their
+own status or roles or deletes themselves; an organization keeps at least one
+active Superadmin. See "Roles, users and organization scope" above.
+
 ### GET `/users/`
 Query: `?page=&per_page=&search=&status=active`
 
 ### GET `/users/{user_id}`
+```json
+// Response (also of POST and PUT)
+{
+  "id": 1, "username": "string", "email": "string", "display_name": "string",
+  "phone": "string" | null, "status": "active", "is_superadmin": false,
+  "roles": [{ "role_id": 2, "branch_id": 1 | null }],
+  "created_at": "...", "updated_at": "..."
+}
+```
+`is_superadmin` is display only and cannot be sent (422).
 
 ### POST `/users/`
 ```json
@@ -132,9 +173,10 @@ Query: `?page=&per_page=&search=&status=active`
   "password": "string",
   "display_name": "string",
   "phone": "0812345678" | null,
-  "branch_ids": [1, 2]
+  "roles": [{ "role_id": 3, "branch_id": 1 | null }]
 }
 ```
+`branch_ids` was removed (422): a branch is part of a role assignment.
 
 ### PUT `/users/{user_id}`
 ```json
@@ -142,10 +184,10 @@ Query: `?page=&per_page=&search=&status=active`
   "email": "string" | null,
   "display_name": "string" | null,
   "phone": "string" | null,
-  "status": "active" | "inactive" | "suspended" | "locked",
-  "branch_ids": [1, 2] | null
+  "status": "active" | "inactive" | "suspended" | "locked"
 }
 ```
+Roles are not changed here; `branch_ids` → 422.
 
 ### DELETE `/users/{user_id}` → 204
 
@@ -191,11 +233,15 @@ Query: `?page=&per_page=&search=&status=active`
 ```json
 { "name": "string", "description": "string" | null, "permission_ids": [1, 2, 3] }
 ```
+Every permission must exist (422 `UNKNOWN_PERMISSION`) and be held by the caller
+(403 `PERMISSION_ESCALATION`) unless the caller is a Superadmin.
 
 ### PUT `/roles/{role_id}`
 ```json
 { "name": "string" | null, "description": "string" | null, "permission_ids": [1, 2] | null }
 ```
+The `Superadmin` role cannot be changed (403 `SUPERADMIN_ROLE`); the
+permissions of another system role only by a Superadmin (403 `SYSTEM_ROLE`).
 
 ### DELETE `/roles/{role_id}` → 204
 
@@ -264,6 +310,7 @@ DELETE /catalog/suppliers/{id}/products/{sp_id}  → 204
 Query: `?branch_id=&search=&low_stock_only=`
 
 ### GET `/inventory/balances/{branch_id}/{product_id}`
+Branch or product of another organization → 404 (also for `/lots`, `/movements`, `/adjust`).
 
 ### POST `/inventory/adjust`
 ```json
@@ -399,6 +446,7 @@ Rate limited like the staff route; over the limit →
 ```
 
 ### GET `/payments/{order_id}`
+Order of another organization → 404.
 
 ### POST `/payments/{order_id}/refund`
 ```json
@@ -642,6 +690,9 @@ Query: `?page=&per_page=&transaction_type=&date_from=&date_to=`
 ---
 
 ## Shifts `/shifts`
+
+Branches, registers and shifts of another organization are 404; the register
+must belong to `branch_id`; the list holds only the caller's organization.
 
 ### POST `/shifts/open`
 ```json
