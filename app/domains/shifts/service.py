@@ -4,19 +4,32 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.db.models import Shift, ShiftCashMovement
+from app.db.repositories.branches import BranchRepository
 from app.db.repositories.shifts import ShiftRepository
 from app.shared.exceptions import BadRequestException, NotFoundException
+
+
+def _org_shift(db: Session, org_id: int, shift_id: int) -> Shift:
+    shift = ShiftRepository.get_org_shift(db, org_id, shift_id)
+    if shift is None:
+        raise NotFoundException(detail="Shift not found")
+    return shift
 
 
 class ShiftService:
     @staticmethod
     def open_shift(
         db: Session,
+        org_id: int,
         branch_id: int,
         register_id: int,
         user_id: int,
         opening_cash: Decimal,
     ) -> Shift:
+        if not BranchRepository.get_org_branch(db, org_id, branch_id):
+            raise NotFoundException(detail="Branch not found")
+        if not ShiftRepository.get_branch_register(db, branch_id, register_id):
+            raise NotFoundException(detail="Register not found")
         existing_open = ShiftRepository.find_open_shift(db, branch_id, register_id)
         if existing_open:
             raise BadRequestException(
@@ -38,13 +51,12 @@ class ShiftService:
     @staticmethod
     def close_shift(
         db: Session,
+        org_id: int,
         shift_id: int,
         user_id: int,
         closing_cash: Decimal,
     ) -> Shift:
-        shift = ShiftRepository.get_shift(db, shift_id)
-        if shift is None:
-            raise NotFoundException(detail="Shift not found")
+        shift = _org_shift(db, org_id, shift_id)
 
         if shift.status != "open":
             raise BadRequestException(detail="Shift is not open")
@@ -74,15 +86,14 @@ class ShiftService:
     @staticmethod
     def add_cash_movement(
         db: Session,
+        org_id: int,
         shift_id: int,
         user_id: int,
         amount: Decimal,
         movement_type: str,
         reason: str,
     ) -> ShiftCashMovement:
-        shift = ShiftRepository.get_shift(db, shift_id)
-        if shift is None:
-            raise NotFoundException(detail="Shift not found")
+        shift = _org_shift(db, org_id, shift_id)
         if shift.status != "open":
             raise BadRequestException(detail="Shift is not open")
 
@@ -101,6 +112,7 @@ class ShiftService:
     @staticmethod
     def list_shifts(
         db: Session,
+        org_id: int,
         branch_id: int | None = None,
         status: str | None = None,
         date_from: datetime | None = None,
@@ -109,14 +121,12 @@ class ShiftService:
         per_page: int = 20,
     ) -> tuple[list[Shift], int]:
         return ShiftRepository.list_shifts(
-            db, branch_id, status, date_from, date_to, page, per_page
+            db, org_id, branch_id, status, date_from, date_to, page, per_page
         )
 
     @staticmethod
-    def get_x_report(db: Session, shift_id: int) -> dict:
-        shift = ShiftRepository.get_shift(db, shift_id)
-        if shift is None:
-            raise NotFoundException(detail="Shift not found")
+    def get_x_report(db: Session, org_id: int, shift_id: int) -> dict:
+        shift = _org_shift(db, org_id, shift_id)
 
         cash_movements = ShiftRepository.group_cash_movements(db, shift_id)
 

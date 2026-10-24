@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Order, Shift, ShiftCashMovement
+from app.db.models import Branch, Order, Register, Shift, ShiftCashMovement
 
 
 class ShiftRepository:
@@ -22,9 +22,17 @@ class ShiftRepository:
         db.add(shift)
 
     @staticmethod
-    def get_shift(db: Session, shift_id: int) -> Shift | None:
+    def get_org_shift(db: Session, org_id: int, shift_id: int) -> Shift | None:
         return db.execute(
-            select(Shift).where(Shift.id == shift_id)
+            select(Shift)
+            .join(Branch, Branch.id == Shift.branch_id)
+            .where(Shift.id == shift_id, Branch.organization_id == org_id)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def get_branch_register(db: Session, branch_id: int, register_id: int) -> Register | None:
+        return db.execute(
+            select(Register).where(Register.id == register_id, Register.branch_id == branch_id)
         ).scalar_one_or_none()
 
     @staticmethod
@@ -72,6 +80,7 @@ class ShiftRepository:
     @staticmethod
     def list_shifts(
         db: Session,
+        org_id: int,
         branch_id: int | None = None,
         status: str | None = None,
         date_from=None,
@@ -79,7 +88,11 @@ class ShiftRepository:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[Shift], int]:
-        stmt = select(Shift)
+        stmt = (
+            select(Shift)
+            .join(Branch, Branch.id == Shift.branch_id)
+            .where(Branch.organization_id == org_id)
+        )
 
         if branch_id is not None:
             stmt = stmt.where(Shift.branch_id == branch_id)

@@ -143,3 +143,49 @@ class TestInventory:
 
         assert adjust(home.branch, home.product, lot=home.lot) == 200
         assert _on_hand(session, home.branch, home.product) == 6
+
+
+def _shift(session: Session, shift_id: int) -> Shift:
+    session.expire_all()
+    return session.get(Shift, shift_id)
+
+
+class TestShifts:
+    def test_opening_a_shift_at_a_branch_or_register_of_another_organization_is_404(
+        self, client: TestClient, session, home, other, headers
+    ):
+        def open_(branch: int, register: int) -> int:
+            body = {"branch_id": branch, "register_id": register, "opening_cash": "0"}
+            return client.post(f"{API}/shifts/open", json=body, headers=headers).status_code
+
+        assert open_(other.branch, other.register) == 404
+        assert open_(home.branch, other.register) == 404
+        assert session.query(Shift).filter(Shift.user_id == home.user).count() == 1
+
+        session.query(Shift).filter(Shift.id == home.shift).update({"status": "closed"})
+        session.commit()
+        assert open_(home.branch, home.register) == 201
+
+    def test_closing_a_shift_of_another_organization_is_404(self, client: TestClient, session, home, other, headers):
+        resp = client.put(f"{API}/shifts/{other.shift}/close", json={"closing_cash": "0"}, headers=headers)
+        assert resp.status_code == 404
+        assert _shift(session, other.shift).status == "open"
+
+    def test_cash_movement_on_a_shift_of_another_organization_is_404(
+        self, client: TestClient, session, home, other, headers
+    ):
+        body = {"movement_type": "cash_out", "amount": "50", "reason": "x"}
+        assert client.post(f"{API}/shifts/{other.shift}/cash-movements", json=body, headers=headers).status_code == 404
+        assert session.query(ShiftCashMovement).filter_by(shift_id=other.shift).count() == 0
+
+        assert client.post(f"{API}/shifts/{home.shift}/cash-movements", json=body, headers=headers).status_code == 201
+
+    def test_x_report_of_a_shift_of_another_organization_is_404(self, client: TestClient, home, other, headers):
+        assert client.get(f"{API}/shifts/{other.shift}/x-report", headers=headers).status_code == 404
+        assert client.get(f"{API}/shifts/{home.shift}/x-report", headers=headers).status_code == 200
+
+    def test_shift_list_holds_only_the_callers_organization(self, client: TestClient, home, other, headers):
+        resp = client.get(f"{API}/shifts/", headers=headers)
+        assert [s["id"] for s in resp.json()["data"]["shifts"]] == [home.shift]
+        resp = client.get(f"{API}/shifts/?branch_id={other.branch}", headers=headers)
+        assert resp.json()["data"]["shifts"] == []

@@ -30,6 +30,7 @@ def open_shift(
 ) -> ShiftResponse:
     return ShiftService.open_shift(
         db,
+        org_id=user.organization_id,
         branch_id=data.branch_id,
         register_id=data.register_id,
         user_id=user.id,
@@ -44,7 +45,7 @@ def close_shift(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("shifts.close")),
 ) -> ShiftResponse:
-    return ShiftService.close_shift(db, shift_id, user.id, data.closing_cash)
+    return ShiftService.close_shift(db, user.organization_id, shift_id, user.id, data.closing_cash)
 
 
 @router.post(
@@ -60,6 +61,7 @@ def add_cash_movement(
 ) -> ShiftCashMovementResponse:
     movement = ShiftService.add_cash_movement(
         db,
+        org_id=user.organization_id,
         shift_id=shift_id,
         user_id=user.id,
         amount=data.amount,
@@ -88,6 +90,7 @@ def list_shifts(
 ) -> ShiftListResponse:
     shifts, total = ShiftService.list_shifts(
         db,
+        org_id=user.organization_id,
         branch_id=branch_id,
         status=status,
         date_from=date_from,
@@ -109,5 +112,5 @@ def get_x_report(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("shifts.read")),
 ) -> XReport:
-    report = ShiftService.get_x_report(db, shift_id)
+    report = ShiftService.get_x_report(db, user.organization_id, shift_id)
     return XReport(**report)
