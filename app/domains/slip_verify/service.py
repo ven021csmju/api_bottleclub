@@ -11,8 +11,11 @@ from app.domains.orders.service import OrderService
 from app.services.fraud_detection import FraudDetectionService
 from app.services.image_service import ImageService
 from app.services.ocr_service import OCRService
+from app.services import user_events
 from app.services.slip_parser import parse_slip
+from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
+    AppException,
     BadRequestException,
     ConflictException,
     NotFoundException,
@@ -22,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 #: Order statuses that mean the order has already been settled.
 _SETTLED_ORDER_STATUSES = {"paid", "completed", "refunded"}
+
+#: Verifications staff may approve by hand. amount_mismatch stays excluded.
+_APPROVABLE_STATUSES = {"pending", "review", "ocr_failed"}
 
 
 def _order_is_paid(order: Order) -> bool:
@@ -357,16 +363,9 @@ class SlipVerifyService:
         return SlipVerifyRepository.list_org_verifications(db, organization_id, status, limit)
 
     @staticmethod
-    def moderate_verification(
-        db: Session,
-        *,
-        verification_id: int,
-        organization_id: int,
-        user_id: int,
-        approve: bool,
-        note: str | None = None,
-    ) -> PaymentVerification:
-        """Approve/reject a slip and keep payment, stock and order atomic."""
+    def _lock_for_moderation(
+        db: Session, verification_id: int, organization_id: int
+    ) -> tuple[PaymentVerification, Order]:
         verification = SlipVerifyRepository.get_org_verification(
             db, verification_id, organization_id, for_update=True
         )
@@ -380,19 +379,27 @@ class SlipVerifyService:
         )
         if order is None:
             raise NotFoundException(detail="Order not found")
+        return verification, order
 
-        if not approve:
-            if verification.status == "rejected":
-                return verification
-            if verification.status in {"verified", "duplicate_reference", "duplicate_image"}:
-                raise BadRequestException(detail="This verification cannot be rejected")
-            verification.status = "rejected"
-            verification.failure_reason = note or "Rejected by administrator"
-            verification.verified_by_user_id = user_id
-            verification.verified_at = datetime.now(timezone.utc)
-            db.commit()
-            db.refresh(verification)
-            return verification
+    @staticmethod
+    def approve_verification(
+        db: Session,
+        *,
+        verification_id: int,
+        audit: AuditContext,
+        confirmed_amount: Decimal,
+        bank_reference: str,
+        note: str,
+    ) -> PaymentVerification:
+        """Settle the order from a slip a staff member checked in the bank app.
+
+        Nothing is taken from the OCR: the amount and reference are the ones
+        the staff member confirmed. Payment, order, loyalty and audit row are
+        committed together.
+        """
+        verification, order = SlipVerifyService._lock_for_moderation(
+            db, verification_id, audit.organization_id
+        )
 
         # Re-approving the slip that already settled this order is a no-op.
         if verification.status == "verified" and verification.payment_id is not None and _order_is_paid(order):
@@ -401,41 +408,105 @@ class SlipVerifyService:
         # then sees the first one's payment instead of adding another.
         if _order_is_paid(order):
             raise ConflictException(detail="Order is already paid", code="ORDER_ALREADY_PAID")
-        if verification.status not in {"pending", "review"}:
+        if verification.status not in _APPROVABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be approved")
 
-        try:
-            payment_amount = verification.ocr_amount or order.grand_total
-            payment_amount = Decimal(str(payment_amount))
-            if payment_amount < Decimal(str(order.grand_total)):
-                raise BadRequestException(detail="Slip amount is less than order total")
+        if confirmed_amount != Decimal(str(order.grand_total)):
+            raise AppException(
+                status_code=422,
+                detail="confirmed_amount must equal the order total",
+                code="AMOUNT_MISMATCH",
+            )
+        # The slip's own OCR reference is expected to match; any other use is a reuse.
+        if SlipVerifyRepository.find_existing_verification_by_reference(
+            db, bank_reference, exclude_id=verification.id
+        ) is not None or SlipVerifyRepository.payment_reference_exists(db, bank_reference):
+            raise ConflictException(
+                detail="bank_reference is already used by another slip or payment",
+                code="DUPLICATE_REFERENCE",
+            )
 
+        before_status = verification.status
+        try:
             payments = OrderService.settle_order(
                 db,
                 order,
-                user_id,
-                payments=[
-                    _slip_payment(
-                        payment_amount,
-                        verification.ocr_reference,
-                        verification.ocr_bank,
-                        note or "Approved by administrator",
-                    )
-                ],
+                audit.user_id,
+                payments=[_slip_payment(confirmed_amount, bank_reference, verification.ocr_bank, note)],
             )
             verification.payment_id = payments[0].id
-
             verification.status = "verified"
-            verification.failure_reason = note
-            verification.verified_by_user_id = user_id
+            verification.verified_by_user_id = audit.user_id
             verification.verified_at = datetime.now(timezone.utc)
+            log_audit(
+                db,
+                audit,
+                action="slip_verification.approve_manual",
+                entity_type="payment_verification",
+                entity_id=verification.id,
+                before_data={
+                    "status": before_status,
+                    "ocr_amount": str(verification.ocr_amount) if verification.ocr_amount is not None else None,
+                    "ocr_reference": verification.ocr_reference,
+                    "failure_reason": verification.failure_reason,
+                },
+                after_data={
+                    "status": "verified",
+                    "order_id": order.id,
+                    "payment_id": verification.payment_id,
+                    "amount": str(confirmed_amount),
+                    "bank_reference": bank_reference,
+                    "note": note,
+                },
+            )
             db.commit()
-            db.refresh(verification)
-            return verification
         except Exception:
             db.rollback()
             raise
+        db.refresh(verification)
+        user_events.publish_user_event_sync(
+            "purchase_completed",
+            audit.user_id,
+            audit.request_id,
+            {"order_id": order.id, "amount_paid": str(order.amount_paid)},
+        )
+        return verification
 
+    @staticmethod
+    def reject_verification(
+        db: Session,
+        *,
+        verification_id: int,
+        audit: AuditContext,
+        note: str | None = None,
+    ) -> PaymentVerification:
+        verification, _ = SlipVerifyService._lock_for_moderation(
+            db, verification_id, audit.organization_id
+        )
+        if verification.status == "rejected":
+            return verification
+        if verification.status in {"verified", "duplicate_reference", "duplicate_image"}:
+            raise BadRequestException(detail="This verification cannot be rejected")
+
+        before_status = verification.status
+        verification.status = "rejected"
+        # Keep the original reason (e.g. the OCR error); the note goes to the audit log.
+        if verification.failure_reason is None:
+            verification.failure_reason = note or "Rejected by administrator"
+        verification.verified_by_user_id = audit.user_id
+        verification.verified_at = datetime.now(timezone.utc)
+        log_audit(
+            db,
+            audit,
+            action="slip_verification.reject",
+            entity_type="payment_verification",
+            entity_id=verification.id,
+            before_data={"status": before_status, "failure_reason": verification.failure_reason},
+            after_data={"status": "rejected", "note": note},
+        )
+        db.commit()
+        db.refresh(verification)
+        return verification
 
 def _log_attempt(
     db: Session,

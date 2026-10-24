@@ -74,7 +74,8 @@ class SlipVerifyRepository:
             .where(
                 PaymentVerification.image_sha256 == sha256,
                 PaymentVerification.order_id == order_id,
-                PaymentVerification.status != "rejected",
+                # A rejected or unreadable slip may be sent again.
+                PaymentVerification.status.notin_(("rejected", "ocr_failed")),
             )
             .order_by(PaymentVerification.id)
             .limit(1)

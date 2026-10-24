@@ -5,12 +5,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_audit_context, get_current_user
 from app.db.models import User
 from app.services import user_events
+from app.shared.audit import AuditContext
 
 from .schemas import (
     ErrorResponse,
+    VerificationApproveRequest,
     VerificationDetailResponse,
     VerificationListResponse,
     VerificationModerationRequest,
@@ -168,17 +170,18 @@ def list_verifications(
 @router.post("/{verification_id}/approve", response_model=VerificationDetailResponse)
 def approve_verification(
     verification_id: int,
-    body: VerificationModerationRequest | None = None,
+    body: VerificationApproveRequest,
     user: User = Depends(require_permission("slip_verification.approve")),
+    audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> VerificationDetailResponse:
-    verification = SlipVerifyService.moderate_verification(
+    verification = SlipVerifyService.approve_verification(
         db,
         verification_id=verification_id,
-        organization_id=user.organization_id,
-        user_id=user.id,
-        approve=True,
-        note=body.note if body else None,
+        audit=audit,
+        confirmed_amount=body.confirmed_amount,
+        bank_reference=body.bank_reference,
+        note=body.note,
     )
     return VerificationDetailResponse.model_validate(_verification_detail(verification))
 
@@ -188,14 +191,13 @@ def reject_verification(
     verification_id: int,
     body: VerificationModerationRequest | None = None,
     user: User = Depends(require_permission("slip_verification.reject")),
+    audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> VerificationDetailResponse:
-    verification = SlipVerifyService.moderate_verification(
+    verification = SlipVerifyService.reject_verification(
         db,
         verification_id=verification_id,
-        organization_id=user.organization_id,
-        user_id=user.id,
-        approve=False,
+        audit=audit,
         note=body.note if body else None,
     )
     return VerificationDetailResponse.model_validate(_verification_detail(verification))

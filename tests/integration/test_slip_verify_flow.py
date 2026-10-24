@@ -213,3 +213,117 @@ class TestApproveConflict:
 
 def APPROVE_BODY(amount: Decimal, reference: str, note: str = "checked in bank app") -> dict:
     return {"confirmed_amount": str(amount), "bank_reference": reference, "note": note}
+
+
+def _audit_rows(session, verification_id: int, action: str):
+    from app.db.models import AuditLog
+
+    return list(
+        session.scalars(
+            select(AuditLog).where(
+                AuditLog.entity_type == "payment_verification",
+                AuditLog.entity_id == verification_id,
+                AuditLog.action == action,
+            )
+        )
+    )
+
+
+class TestManualApproval:
+    def test_ocr_failed_slip_can_be_resent_and_approved_by_hand(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-5")
+        slip.fail = True
+        image = _image(9)
+
+        first = _upload(client, headers, order_id, image)
+        again = _upload(client, headers, order_id, image)  # same bytes: no duplicate_image
+
+        assert first.status_code == 422, first.text
+        assert again.status_code == 422, again.text
+        assert _status(again) == "ocr_failed"
+        vid = _verification_id(session, order_id, "ocr_failed")
+        url = f"/api/v1/slip-verify/{vid}/approve"
+
+        for body in (
+            {},
+            {"bank_reference": "REFMANUAL05", "note": "ok"},
+            {"confirmed_amount": str(total), "note": "ok"},
+            {"confirmed_amount": str(total), "bank_reference": "REFMANUAL05"},
+            {"confirmed_amount": str(total), "bank_reference": "REFMANUAL05", "note": "   "},
+        ):
+            resp = client.post(url, headers=headers, json=body)
+            assert resp.status_code == 422, (body, resp.text)
+
+        wrong = client.post(url, headers=headers, json=APPROVE_BODY(total - Decimal("1.00"), "REFMANUAL05"))
+        assert wrong.status_code == 422, wrong.text
+        assert wrong.json()["code"] == "AMOUNT_MISMATCH"
+        assert _payments(session, order_id) == 0
+
+        ok = client.post(url, headers=headers, json=APPROVE_BODY(total, "REFMANUAL05"))
+
+        assert ok.status_code == 200, ok.text
+        session.expire_all()
+        verification = session.get(PaymentVerification, vid)
+        assert verification.status == "verified"
+        assert verification.failure_reason == "simulated OCR failure"  # not overwritten
+        assert verification.verified_by_user_id == seed_user["user_id"]
+        order = session.get(Order, order_id)
+        assert order.status == "paid"
+        payment = session.scalar(select(Payment).where(Payment.order_id == order_id))
+        assert payment.external_reference == "REFMANUAL05"
+        assert Decimal(str(payment.amount)) == total
+        rows = _audit_rows(session, vid, "slip_verification.approve_manual")
+        assert len(rows) == 1
+        assert rows[0].user_id == seed_user["user_id"]
+        assert rows[0].before_data["status"] == "ocr_failed"
+        assert rows[0].after_data == {
+            "status": "verified",
+            "order_id": order_id,
+            "payment_id": payment.id,
+            "amount": str(total),
+            "bank_reference": "REFMANUAL05",
+            "note": "checked in bank app",
+        }
+
+    def test_bank_reference_of_existing_payment_is_refused(self, client, session, headers, seed_user, slip):
+        paid_id, total = _order(client, headers, session, seed_user, "SLIP-6A")
+        slip.amount, slip.reference = total, "REFTAKEN006"
+        assert _status(_upload(client, headers, paid_id, _image(10))) == "verified"
+
+        order_id, _ = _order(client, headers, session, seed_user, "SLIP-6B")
+        slip.fail = True
+        assert _upload(client, headers, order_id, _image(11)).status_code == 422
+        vid = _verification_id(session, order_id, "ocr_failed")
+
+        resp = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFTAKEN006"))
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["code"] == "DUPLICATE_REFERENCE"
+        assert _payments(session, order_id) == 0
+        assert _audit_rows(session, vid, "slip_verification.approve_manual") == []
+
+    def test_reject_keeps_failure_reason_and_is_audited(self, client, session, headers, seed_user, slip):
+        order_id, _ = _order(client, headers, session, seed_user, "SLIP-7")
+        slip.fail = True
+        assert _upload(client, headers, order_id, _image(12)).status_code == 422
+        vid = _verification_id(session, order_id, "ocr_failed")
+
+        resp = client.post(f"/api/v1/slip-verify/{vid}/reject", headers=headers, json={"note": "blurry photo"})
+
+        assert resp.status_code == 200, resp.text
+        session.expire_all()
+        assert session.get(PaymentVerification, vid).failure_reason == "simulated OCR failure"
+        rows = _audit_rows(session, vid, "slip_verification.reject")
+        assert len(rows) == 1
+        assert rows[0].after_data == {"status": "rejected", "note": "blurry photo"}
+
+    def test_amount_mismatch_still_cannot_be_approved(self, client, session, headers, seed_user, slip):
+        order_id, total = _order(client, headers, session, seed_user, "SLIP-8")
+        slip.amount, slip.reference = total + Decimal("5.00"), "REFMISMATCH"
+        assert _status(_upload(client, headers, order_id, _image(13))) == "amount_mismatch"
+        vid = _verification_id(session, order_id, "amount_mismatch")
+
+        resp = client.post(f"/api/v1/slip-verify/{vid}/approve", headers=headers, json=APPROVE_BODY(total, "REFMISMATCH"))
+
+        assert resp.status_code == 400, resp.text
+        assert _payments(session, order_id) == 0

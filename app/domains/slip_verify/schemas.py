@@ -1,8 +1,8 @@
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class OCRFieldSchema(BaseModel):
@@ -86,6 +86,14 @@ class VerificationDetailResponse(BaseModel):
 
 class VerificationModerationRequest(BaseModel):
     note: str | None = Field(None, max_length=1000)
+
+
+class VerificationApproveRequest(BaseModel):
+    """Manual approval: staff confirm the transfer in the bank app first."""
+
+    confirmed_amount: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
+    bank_reference: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 
 
 class VerificationListResponse(BaseModel):

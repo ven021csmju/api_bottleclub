@@ -711,6 +711,40 @@ Content-Type: multipart/form-data
 }
 ```
 
+A verified slip settles the order (`status` becomes `paid`, same as POS
+checkout). Uploading for an order that is already paid returns
+`order_already_paid` (400). A slip that was `rejected` or `ocr_failed` may be
+uploaded again.
+
+### GET `/slip-verify/list?status=review`
+Staff queue (`slip_verification.read`). Statuses staff can approve:
+`pending`, `review`, `ocr_failed`.
+
+### POST `/slip-verify/{verification_id}/approve`
+Permission `slip_verification.approve`. Staff check the transfer in the bank
+app first; every field is required (missing or blank → 422).
+```json
+{
+  "confirmed_amount": "500.00",
+  "bank_reference": "2026090112345",
+  "note": "checked in KBank app"
+}
+```
+| Error | Code |
+|-------|------|
+| `confirmed_amount` ≠ order total | 422 `AMOUNT_MISMATCH` |
+| `bank_reference` already used by another slip or payment | 409 `DUPLICATE_REFERENCE` |
+| order already paid | 409 `ORDER_ALREADY_PAID` |
+| status not approvable (e.g. `amount_mismatch`) | 400 |
+
+Writes an `audit_logs` row `slip_verification.approve_manual`
+(before/after status, amount, bank_reference, note).
+
+### POST `/slip-verify/{verification_id}/reject`
+Permission `slip_verification.reject`. Body optional: `{"note": "..."}`.
+Keeps the original `failure_reason`; the note goes to the audit row
+`slip_verification.reject`.
+
 ### GET `/slip-verify/{verification_id}`
 ### GET `/slip-verify/order/{order_id}`
 
