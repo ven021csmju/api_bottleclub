@@ -53,6 +53,8 @@ def test_superadmin_and_organization_wide_manager_reach_both_branches(
 def test_manager_at_a_cashier_at_b_cannot_cancel_at_b(client: TestClient, world, orders, as_):
     # orders.cancel: Manager only; mixed is Cashier at B.
     assert client.post(f"{API}/orders/{orders['b1']}/cancel", json={}, headers=as_("mixed", "B")).status_code == 404
-    assert client.get(f"{API}/orders/{orders['b1']}", headers=as_("mixed", "B")).status_code != 404
+    # orders.update: Cashier has it, so mixed may act on B's order.
+    resp = client.put(f"{API}/orders/{orders['b1']}/status", json={"status": "preparing"}, headers=as_("mixed", "B"))
+    assert resp.status_code not in (403, 404)
     resp = client.post(f"{API}/orders/{orders['a1']}/cancel", json={}, headers=as_("mixed", "A"))
     assert resp.status_code == 200

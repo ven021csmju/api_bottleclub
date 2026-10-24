@@ -15,6 +15,7 @@ from app.middleware.auth import (
 from app.middleware.rate_limit import limiter
 from app.db.models import Order, User
 from app.config.settings import settings
+from app.shared.exceptions import ForbiddenException, NotFoundException
 
 from .schemas import (
     CheckoutRequest,
@@ -37,10 +38,26 @@ from .service import OrderService
 router = APIRouter()
 
 
+#: Sees every order of a branch; without it, only one's own (orders.user_id).
+READ_BRANCH = "orders.read_branch"
+
+
+def _ensure_may_read(access: Access, order: Order) -> None:
+    """orders.read at the order's branch, and either orders.read_branch there or
+    the caller created the order; else 404."""
+    access.ensure_at("orders.read", order.branch_id, "Order")
+    if order.user_id != access.user_id and not access.can_at(READ_BRANCH, order.branch_id):
+        raise NotFoundException(detail="Order not found")
+
+
 def _scoped_order(db: Session, access: Access, reference: str | int, code: str) -> Order:
-    """The order of the caller's organization, if ``code`` is held at its branch; else 404."""
+    """The order of the caller's organization, if ``code`` is held at its branch; else 404.
+    Reading (``orders.read``) also needs the order to be the caller's, or READ_BRANCH."""
     order = OrderService.get_order_by_reference(db=db, org_id=access.org_id, reference=str(reference))
-    access.ensure_at(code, order.branch_id, "Order")
+    if code == "orders.read":
+        _ensure_may_read(access, order)
+    else:
+        access.ensure_at(code, order.branch_id, "Order")
     return order
 
 
@@ -98,6 +115,7 @@ def replace_order_tracking_token(
 def list_orders(
     user: User = Depends(require_permission("orders.read")),
     branch_id: int = Depends(get_current_branch),
+    access: Access = Depends(get_access),
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -107,6 +125,10 @@ def list_orders(
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
 ) -> OrderListResponse:
+    if not access.can(READ_BRANCH, branch_id):
+        if user_filter is not None and user_filter != user.id:
+            raise ForbiddenException(detail=f"Missing required permission: {READ_BRANCH}")
+        user_filter = user.id
     result = OrderService.list_orders(
         db=db,
         org_id=user.organization_id,
@@ -247,9 +269,8 @@ def track_order(
         )
     )
     if not order:
-        from app.shared.exceptions import NotFoundException
         raise NotFoundException(detail="Order not found")
-    access.ensure_at("orders.read", order.branch_id, "Order")
+    _ensure_may_read(access, order)
 
     return {
         "order_number": order.order_number,
