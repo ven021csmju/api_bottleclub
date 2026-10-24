@@ -160,3 +160,22 @@ def orders(session: Session, world: World) -> dict[str, int]:
         out[name] = order.id
     session.commit()
     return out
+
+
+@pytest.fixture()
+def sales(session: Session, world: World) -> str:
+    """Completed sales today: 100 at A, 250 at B. Returns today's date (ISO)."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from app.db.models import Order
+
+    now = datetime.now(timezone.utc)
+    for where, total in (("A", "100"), ("B", "250")):
+        session.add(Order(
+            organization_id=world.org, branch_id=world.branch[where], order_number=f"SALE-{where}",
+            user_id=world.users["sa"], status="completed", completed_at=now,
+            subtotal=Decimal(total), grand_total=Decimal(total), amount_paid=Decimal(total),
+        ))
+    session.commit()
+    return now.date().isoformat()

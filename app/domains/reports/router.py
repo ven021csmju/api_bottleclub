@@ -15,7 +15,8 @@ from app.domains.reports.schemas import (
     SalesReportResponse,
 )
 from app.domains.reports.service import ReportService
-from app.middleware.auth import require_permission
+from app.middleware.access import Access
+from app.middleware.auth import get_access, require_permission
 from app.shared.enums import OrderSource
 from app.shared.exceptions import AppException
 from app.db.models import User
@@ -46,8 +47,10 @@ def get_sales_report(
     branch_id: Optional[int] = Query(None),
     order_source: Optional[OrderSource] = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.sales")),
+    user: User = Depends(require_permission("reports.sales", scope="any")),
+    access: Access = Depends(get_access),
 ) -> SalesReportResponse:
+    branch_id = access.target_branch("reports.sales", branch_id)
     resolved_from, resolved_to = _resolve_date_range(
         date_from, date_to, from_date, to_date
     )
@@ -72,7 +75,8 @@ def get_sales_report(
 @router.get("/ecommerce/dashboard", response_model=EcommerceDashboardResponse)
 def get_ecommerce_dashboard(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.read")),
+    # No branch filter: the whole organization.
+    user: User = Depends(require_permission("reports.read", scope="org")),
 ) -> EcommerceDashboardResponse:
     return EcommerceDashboardResponse(
         **ReportService.get_ecommerce_dashboard(db, user.organization_id)
@@ -84,8 +88,10 @@ def get_daily_summary(
     summary_date: date = Query(..., alias="date"),
     branch_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.read")),
+    user: User = Depends(require_permission("reports.read", scope="any")),
+    access: Access = Depends(get_access),
 ) -> DailySalesSummary:
+    branch_id = access.target_branch("reports.read", branch_id)
     result = ReportService.get_daily_summary(
         db, user.organization_id, summary_date, branch_id
     )
@@ -97,8 +103,10 @@ def get_inventory_report(
     branch_id: Optional[int] = Query(None),
     category_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.read")),
+    user: User = Depends(require_permission("reports.read", scope="any")),
+    access: Access = Depends(get_access),
 ) -> InventoryReportResponse:
+    branch_id = access.target_branch("reports.read", branch_id)
     result = ReportService.get_inventory_report(
         db, user.organization_id, branch_id, category_id
     )
@@ -113,8 +121,10 @@ def get_financial_report(
     to_date: Optional[date] = Query(None, alias="to_date"),
     branch_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.read")),
+    user: User = Depends(require_permission("reports.read", scope="any")),
+    access: Access = Depends(get_access),
 ) -> FinancialReportResponse:
+    branch_id = access.target_branch("reports.read", branch_id)
     resolved_from, resolved_to = _resolve_date_range(
         date_from, date_to, from_date, to_date
     )
@@ -135,7 +145,8 @@ def get_loyalty_report(
     from_date: date = Query(...),
     to_date: date = Query(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("reports.read")),
+    # No branch filter: the whole organization.
+    user: User = Depends(require_permission("reports.read", scope="org")),
 ) -> LoyaltyReportResponse:
     result = ReportService.get_loyalty_report(
         db, user.organization_id, from_date, to_date
