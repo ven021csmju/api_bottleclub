@@ -1,4 +1,4 @@
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import User, UserRole
@@ -15,12 +15,18 @@ class UserRepository:
         org_id: int,
         search: str | None = None,
         status: str | None = None,
+        branches: frozenset[int] | None = None,
     ):
         query = (
             db.query(User)
             .filter(User.organization_id == org_id, User.deleted_at.is_(None))
             .options(joinedload(User.user_roles))
         )
+        if branches is not None:
+            # Users with a role at one of ``branches``; None: every user.
+            query = query.filter(
+                User.id.in_(select(UserRole.user_id).where(UserRole.branch_id.in_(branches)))
+            )
 
         if search:
             like = f"%{search}%"

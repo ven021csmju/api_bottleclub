@@ -76,15 +76,27 @@ class RoleRepository:
         return {r[0] for r in rows}
 
     @staticmethod
-    def permission_ids_of_user(db: Session, org_id: int, user_id: int) -> set[int]:
-        """Permissions the user holds now through roles of ``org_id``."""
+    def permission_codes(db: Session, permission_ids: set[int]) -> set[str]:
+        rows = db.query(Permission.code).filter(Permission.id.in_(permission_ids))
+        return {r[0] for r in rows}
+
+    @staticmethod
+    def assignment_codes(db: Session, org_id: int, user_id: int) -> dict[int | None, set[str]]:
+        """branch_id (None: every branch) → permission codes the user holds there
+        through that assignment, for roles of ``org_id``."""
         rows = (
-            db.query(RolePermission.permission_id)
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            db.query(UserRole.branch_id, Permission.code)
             .join(Role, Role.id == UserRole.role_id)
+            .outerjoin(RolePermission, RolePermission.role_id == Role.id)
+            .outerjoin(Permission, Permission.id == RolePermission.permission_id)
             .filter(UserRole.user_id == user_id, Role.organization_id == org_id)
         )
-        return {r[0] for r in rows}
+        out: dict[int | None, set[str]] = {}
+        for branch_id, code in rows:
+            codes = out.setdefault(branch_id, set())
+            if code is not None:
+                codes.add(code)
+        return out
 
     @staticmethod
     def holds_system_role(db: Session, org_id: int, user_id: int, name: str) -> bool:

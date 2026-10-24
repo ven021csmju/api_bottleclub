@@ -223,14 +223,18 @@ class TestGrantOnlyWhatYouHold:
         assert _role_ids(session, org.users["manager"]) == {(org.roles["Manager"], org.branch)}
 
     def test_manager_cannot_give_superadmin_but_can_give_cashier(self, client: TestClient, session, org, as_):
-        url = f"{API}/users/{org.users['newbie']}/roles"
+        # The cashier works at the manager's branch (35c: a user without a role
+        # there is not visible to a branch manager).
+        url = f"{API}/users/{org.users['cashier']}/roles"
         resp = client.post(url, json={"role_id": org.roles["Superadmin"], "branch_id": org.branch}, headers=as_("manager"))
         assert resp.status_code == 403
         assert resp.json()["code"] == "PERMISSION_ESCALATION"
 
-        resp = client.post(url, json={"role_id": org.roles["Cashier"], "branch_id": org.branch}, headers=as_("manager"))
+        resp = client.post(url, json={"role_id": org.roles["Kitchen"], "branch_id": org.branch}, headers=as_("manager"))
         assert resp.status_code == 201
-        assert _role_ids(session, org.users["newbie"]) == {(org.roles["Cashier"], org.branch)}
+        assert _role_ids(session, org.users["cashier"]) == {
+            (org.roles["Cashier"], org.branch), (org.roles["Kitchen"], org.branch)
+        }
 
     def test_manager_cannot_create_a_role_with_permissions_they_lack(self, client: TestClient, session, org, as_):
         body = {"name": "Snoop", "permission_ids": [org.perms["orders.read"], org.perms["audit.read"]]}
@@ -448,9 +452,11 @@ class TestLastSuperadmin:
         from app.domains.users.service import UserService
         from app.shared.exceptions import ConflictException
 
+        from app.middleware.access import load_access
+
         _fresh(session, org.users["admin2"]).status = "inactive"
         session.commit()
-        actor = _fresh(session, org.users["admin2"])
+        actor = load_access(session, org.users["admin2"], org.id, None)
 
         with pytest.raises(ConflictException):
             UserService.update_user(session, actor, org.users["admin"], UserUpdate(status="inactive"))
@@ -539,7 +545,7 @@ class TestIsSuperadminFlag:
         session.commit()
 
         resp = client.post(
-            f"{API}/users/{org.users['newbie']}/roles",
+            f"{API}/users/{org.users['cashier']}/roles",
             json={"role_id": org.roles["Superadmin"], "branch_id": org.branch},
             headers=as_("manager"),
         )

@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.middleware.auth import get_current_user, require_permission
+from app.middleware.access import Access
+from app.middleware.auth import get_access, get_current_user, require_permission
 from app.db.models import User
 
 from .schemas import PermissionResponse, RoleCreate, RoleListResponse, RoleResponse, RoleUpdate
@@ -45,8 +46,9 @@ def create_role(
     data: RoleCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.create", scope="org")),
+    access: Access = Depends(get_access),
 ) -> RoleResponse:
-    role = RoleService.create_role(db, current_user, data)
+    role = RoleService.create_role(db, access, data)
     return RoleResponse.model_validate(role)
 
 
@@ -56,8 +58,9 @@ def update_role(
     data: RoleUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.update", scope="org")),
+    access: Access = Depends(get_access),
 ) -> RoleResponse:
-    role = RoleService.update_role(db, current_user, role_id, data)
+    role = RoleService.update_role(db, access, role_id, data)
     return RoleResponse.model_validate(role)
 
 
@@ -66,5 +69,6 @@ def delete_role(
     role_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.delete", scope="org")),
+    access: Access = Depends(get_access),
 ) -> None:
-    RoleService.delete_role(db, current_user, role_id)
+    RoleService.delete_role(db, access, role_id)

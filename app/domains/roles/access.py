@@ -1,9 +1,13 @@
-"""Who may grant which permissions.
+"""Who may grant which permissions, and to whom.
 
-Authority comes from the roles a user holds in the database now, not from the
-access token (it may predate a demotion) and not from ``users.is_superadmin``,
-which is shown to clients but never checked. A Superadmin is a user holding
-the system role named ``Superadmin`` in their own organization.
+Authority is the caller's :class:`~app.middleware.access.Access`: the roles
+they hold in the database now, per branch, never the access token and never
+``users.is_superadmin`` (shown to clients, never checked). A Superadmin is a
+user holding the system role named ``Superadmin`` in their own organization.
+
+Permissions are compared at the branch they would apply at: a role given at
+branch X must be held by the caller at X, a role given at every branch
+(branch_id NULL) at organization level.
 """
 from collections.abc import Iterable
 
@@ -11,44 +15,54 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.db.repositories.roles import RoleRepository
+from app.middleware.access import SUPERADMIN_ROLE, Access
 from app.shared.exceptions import ConflictException, ForbiddenException
 
-SUPERADMIN_ROLE = "Superadmin"
+__all__ = [
+    "SUPERADMIN_ROLE",
+    "ensure_can_grant",
+    "ensure_can_manage",
+    "ensure_not_self",
+    "ensure_superadmin_remains",
+    "is_superadmin",
+]
 
 
 def is_superadmin(db: Session, user: User) -> bool:
     return RoleRepository.holds_system_role(db, user.organization_id, user.id, SUPERADMIN_ROLE)
 
 
-def ensure_can_grant(db: Session, actor: User, permission_ids: Iterable[int]) -> None:
-    """403 unless ``actor`` holds every one of ``permission_ids`` (a Superadmin always may)."""
+def _escalation(detail: str) -> ForbiddenException:
+    return ForbiddenException(detail=detail, code="PERMISSION_ESCALATION")
+
+
+def ensure_can_grant(
+    db: Session, access: Access, permission_ids: Iterable[int], branch_id: int | None = None
+) -> None:
+    """403 unless the caller holds every one of ``permission_ids`` at ``branch_id``
+    (None: organization level); a Superadmin always may."""
+    held = access.permissions_at(branch_id)
     wanted = set(permission_ids)
-    if not wanted or is_superadmin(db, actor):
+    if held is None or not wanted:
         return
-    if wanted - RoleRepository.permission_ids_of_user(db, actor.organization_id, actor.id):
-        raise ForbiddenException(
-            detail="Cannot grant permissions you do not hold", code="PERMISSION_ESCALATION"
-        )
+    if RoleRepository.permission_codes(db, wanted) - held:
+        raise _escalation("Cannot grant permissions you do not hold")
 
 
-def ensure_can_manage(db: Session, actor: User, target: User) -> None:
-    """403 unless ``target`` holds no permission ``actor`` lacks; only a Superadmin
-    manages a Superadmin."""
-    if is_superadmin(db, actor):
+def ensure_can_manage(db: Session, access: Access, target: User) -> None:
+    """403 unless, at every branch where ``target`` has a role, the caller holds
+    all of that role's permissions; only a Superadmin manages a Superadmin."""
+    if access.superadmin:
         return
-    org_id = actor.organization_id
-    if is_superadmin(db, target) or (
-        RoleRepository.permission_ids_of_user(db, org_id, target.id)
-        - RoleRepository.permission_ids_of_user(db, org_id, actor.id)
-    ):
-        raise ForbiddenException(
-            detail="Cannot change a user who has permissions you do not hold",
-            code="PERMISSION_ESCALATION",
-        )
+    if is_superadmin(db, target):
+        raise _escalation("Cannot change a user who has permissions you do not hold")
+    for branch_id, codes in RoleRepository.assignment_codes(db, access.org_id, target.id).items():
+        if codes - access.permissions_at(branch_id):
+            raise _escalation("Cannot change a user who has permissions you do not hold")
 
 
-def ensure_not_self(actor: User, target: User, what: str) -> None:
-    if actor.id == target.id:
+def ensure_not_self(access: Access, target: User, what: str) -> None:
+    if access.user_id == target.id:
         raise ForbiddenException(detail=f"Cannot change your own {what}", code="SELF_CHANGE")
 
 
