@@ -100,3 +100,8 @@ class RoleRepository:
             .first()
             is not None
         )
+
+    @staticmethod
+    def existing_permission_ids(db: Session, permission_ids: set[int]) -> set[int]:
+        rows = db.query(Permission.id).filter(Permission.id.in_(permission_ids))
+        return {r[0] for r in rows}

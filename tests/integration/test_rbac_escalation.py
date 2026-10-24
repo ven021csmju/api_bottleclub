@@ -270,3 +270,29 @@ class TestGrantOnlyWhatYouHold:
         )
         assert resp.status_code == 403
         assert _roles_named(session, org, "Stale") == []
+
+
+# ---------------------------------------------------------------------------
+# ⑤ permission_ids must exist
+# ---------------------------------------------------------------------------
+class TestPermissionIdsExist:
+    def test_creating_a_role_with_an_unknown_permission_is_422(self, client: TestClient, session, org, as_):
+        body = {"name": "Ghost", "permission_ids": [org.perms["orders.read"], 987654]}
+        resp = client.post(f"{API}/roles/", json=body, headers=as_("admin"))
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "UNKNOWN_PERMISSION"
+        assert _roles_named(session, org, "Ghost") == []
+
+    def test_updating_a_role_with_an_unknown_permission_is_422(self, client: TestClient, session, org, as_):
+        resp = client.put(
+            f"{API}/roles/{org.roles['Auditor']}", json={"permission_ids": [987654]}, headers=as_("admin")
+        )
+        assert resp.status_code == 422
+        session.expire_all()
+        assert {p.code for p in session.get(Role, org.roles["Auditor"]).permissions} == {"audit.read", "orders.read"}
+
+    def test_a_permission_listed_twice_is_stored_once(self, client: TestClient, session, org, as_):
+        read = org.perms["orders.read"]
+        resp = client.post(f"{API}/roles/", json={"name": "Twice", "permission_ids": [read, read]}, headers=as_("admin"))
+        assert resp.status_code == 201
+        assert [p["id"] for p in resp.json()["data"]["permissions"]] == [read]

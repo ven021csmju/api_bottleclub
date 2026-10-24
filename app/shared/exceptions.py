@@ -33,6 +33,11 @@ class ConflictException(AppException):
         super().__init__(status_code=409, detail=detail, code=code or "CONFLICT")
 
 
+class UnprocessableException(AppException):
+    def __init__(self, detail: str = "Invalid input", code: str | None = None) -> None:
+        super().__init__(status_code=422, detail=detail, code=code or "VALIDATION_ERROR")
+
+
 class ForbiddenException(AppException):
     def __init__(self, detail: str = "Forbidden", code: str | None = None) -> None:
         super().__init__(status_code=403, detail=detail, code=code or "FORBIDDEN")

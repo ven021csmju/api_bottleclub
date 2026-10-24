@@ -2,11 +2,27 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Permission, Role, User
 from app.db.repositories.roles import RoleRepository
-from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
+from app.shared.exceptions import (
+    BadRequestException,
+    ConflictException,
+    NotFoundException,
+    UnprocessableException,
+)
 from app.shared.pagination import paginate
 
 from .access import ensure_can_grant
 from .schemas import PermissionResponse, RoleCreate, RoleListResponse, RoleResponse, RoleUpdate
+
+
+def _known_permission_ids(db: Session, permission_ids: list[int]) -> set[int]:
+    """``permission_ids`` without duplicates; 422 if any of them does not exist."""
+    wanted = set(permission_ids)
+    unknown = wanted - RoleRepository.existing_permission_ids(db, wanted)
+    if unknown:
+        raise UnprocessableException(
+            detail=f"Unknown permission_ids: {sorted(unknown)}", code="UNKNOWN_PERMISSION"
+        )
+    return wanted
 
 
 class RoleService:
@@ -32,7 +48,8 @@ class RoleService:
     @staticmethod
     def create_role(db: Session, actor: User, data: RoleCreate) -> Role:
         org_id = actor.organization_id
-        ensure_can_grant(db, actor, data.permission_ids)
+        permission_ids = _known_permission_ids(db, data.permission_ids)
+        ensure_can_grant(db, actor, permission_ids)
         existing = RoleRepository.find_by_name(db, org_id, data.name)
         if existing:
             raise ConflictException(detail="Role with this name already exists")
@@ -40,7 +57,7 @@ class RoleService:
         role = Role(organization_id=org_id, name=data.name, description=data.description)
         RoleRepository.add_role(db, role)
 
-        for perm_id in data.permission_ids:
+        for perm_id in permission_ids:
             RoleRepository.add_role_permission(db, role.id, perm_id)
 
         db.commit()
@@ -51,10 +68,13 @@ class RoleService:
     def update_role(db: Session, actor: User, role_id: int, data: RoleUpdate) -> Role:
         org_id = actor.organization_id
         role = RoleService.get_role(db, org_id, role_id)
+        new_permission_ids = (
+            None if data.permission_ids is None else _known_permission_ids(db, data.permission_ids)
+        )
         # Changing a role at all, not only its permissions, needs every permission it
         # has now and every one it will have.
         ensure_can_grant(
-            db, actor, RoleRepository.permission_ids_of_role(db, role_id) | set(data.permission_ids or [])
+            db, actor, RoleRepository.permission_ids_of_role(db, role_id) | (new_permission_ids or set())
         )
 
         if role.is_system and data.name is not None and data.name != role.name:
@@ -66,13 +86,13 @@ class RoleService:
                 raise ConflictException(detail="Role with this name already exists")
 
         update_data = data.model_dump(exclude_unset=True)
-        permission_ids = update_data.pop("permission_ids", None)
+        update_data.pop("permission_ids", None)
 
         for field, value in update_data.items():
             setattr(role, field, value)
 
-        if permission_ids is not None:
-            RoleRepository.replace_role_permissions(db, role_id, permission_ids)
+        if new_permission_ids is not None:
+            RoleRepository.replace_role_permissions(db, role_id, sorted(new_permission_ids))
 
         db.commit()
         db.refresh(role)
