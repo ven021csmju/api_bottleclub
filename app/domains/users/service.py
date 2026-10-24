@@ -5,6 +5,7 @@ from app.db.models import Role, User, UserRole
 from app.db.repositories.branches import BranchRepository
 from app.db.repositories.roles import RoleRepository
 from app.db.repositories.users import UserRepository
+from app.domains.roles.access import ensure_can_grant
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import hash_password
@@ -105,10 +106,12 @@ class UserService:
 
     @staticmethod
     def assign_role(
-        db: Session, org_id: int, user_id: int, role_id: int, branch_id: int | None = None
+        db: Session, actor: User, user_id: int, role_id: int, branch_id: int | None = None
     ) -> UserRole:
+        org_id = actor.organization_id
         UserService.get_user(db, org_id, user_id)
         UserService.resolve_assignment(db, org_id, role_id, branch_id)
+        ensure_can_grant(db, actor, RoleRepository.permission_ids_of_role(db, role_id))
 
         existing = UserRepository.find_role_assignment(db, user_id, role_id, branch_id)
         if existing:

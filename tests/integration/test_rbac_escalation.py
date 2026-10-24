@@ -99,6 +99,10 @@ def org(session: Session, perms: dict[str, int]) -> Org:
     _user(session, org, "manager", "Manager")
     _user(session, org, "manager2", "Manager")
     _user(session, org, "cashier", "Cashier")
+    _user(session, org, "newbie", None)
+    org.roles["Auditor"] = _role(session, org.id, "Auditor", ["audit.read", "orders.read"], perms, system=False)
+    org.roles["Deputy"] = _role(session, org.id, "Deputy", ["roles.delete", "roles.read"], perms, system=False)
+    _user(session, org, "deputy", "Deputy")
     session.commit()
     return org
 
@@ -183,3 +187,86 @@ class TestOtherOrganization:
         )
         assert resp.status_code == 404
         assert _role_ids(session, other.users["stranger"]) == {(other.roles["Cashier"], other.branch)}
+
+
+# ---------------------------------------------------------------------------
+# ② a role can be given, created or changed only by someone holding all of it
+# ---------------------------------------------------------------------------
+def _roles_named(session: Session, org: Org, name: str) -> list[Role]:
+    session.expire_all()
+    return session.query(Role).filter(Role.organization_id == org.id, Role.name == name).all()
+
+
+class TestGrantOnlyWhatYouHold:
+    def test_manager_cannot_make_themselves_superadmin(self, client: TestClient, session, org, as_):
+        resp = client.post(
+            f"{API}/users/{org.users['manager']}/roles",
+            json={"role_id": org.roles["Superadmin"], "branch_id": org.branch},
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        assert _role_ids(session, org.users["manager"]) == {(org.roles["Manager"], org.branch)}
+
+    def test_manager_cannot_give_superadmin_but_can_give_cashier(self, client: TestClient, session, org, as_):
+        url = f"{API}/users/{org.users['newbie']}/roles"
+        resp = client.post(url, json={"role_id": org.roles["Superadmin"], "branch_id": org.branch}, headers=as_("manager"))
+        assert resp.status_code == 403
+        assert resp.json()["code"] == "PERMISSION_ESCALATION"
+
+        resp = client.post(url, json={"role_id": org.roles["Cashier"], "branch_id": org.branch}, headers=as_("manager"))
+        assert resp.status_code == 201
+        assert _role_ids(session, org.users["newbie"]) == {(org.roles["Cashier"], org.branch)}
+
+    def test_manager_cannot_create_a_role_with_permissions_they_lack(self, client: TestClient, session, org, as_):
+        body = {"name": "Snoop", "permission_ids": [org.perms["orders.read"], org.perms["audit.read"]]}
+        assert client.post(f"{API}/roles/", json=body, headers=as_("manager")).status_code == 403
+        assert _roles_named(session, org, "Snoop") == []
+
+        body["permission_ids"] = [org.perms["orders.read"]]
+        assert client.post(f"{API}/roles/", json=body, headers=as_("manager")).status_code == 201
+
+    def test_manager_cannot_add_permissions_they_lack_to_a_role(self, client: TestClient, session, org, as_):
+        resp = client.post(
+            f"{API}/roles/",
+            json={"name": "Helper", "permission_ids": [org.perms["orders.read"]]},
+            headers=as_("manager"),
+        )
+        role_id = resp.json()["data"]["id"]
+        resp = client.put(
+            f"{API}/roles/{role_id}",
+            json={"permission_ids": [org.perms["orders.read"], org.perms["users.delete"]]},
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        session.expire_all()
+        assert [p.code for p in session.get(Role, role_id).permissions] == ["orders.read"]
+
+    def test_manager_cannot_change_a_role_that_has_more_than_they_do(self, client: TestClient, session, org, as_):
+        resp = client.put(
+            f"{API}/roles/{org.roles['Auditor']}",
+            json={"description": "mine now", "permission_ids": [org.perms["orders.read"]]},
+            headers=as_("manager"),
+        )
+        assert resp.status_code == 403
+        session.expire_all()
+        assert {p.code for p in session.get(Role, org.roles["Auditor"]).permissions} == {"audit.read", "orders.read"}
+
+    def test_role_deleter_cannot_delete_a_role_that_has_more_than_they_do(
+        self, client: TestClient, session, org, as_
+    ):
+        assert client.delete(f"{API}/roles/{org.roles['Auditor']}", headers=as_("deputy")).status_code == 403
+        assert len(_roles_named(session, org, "Auditor")) == 1
+
+    def test_permissions_are_read_from_the_database_not_the_token(self, client: TestClient, session, org, as_):
+        stale = as_("manager")
+        manager_role = session.query(UserRole).filter(UserRole.user_id == org.users["manager"]).one()
+        manager_role.role_id = org.roles["Cashier"]
+        session.commit()
+
+        resp = client.post(
+            f"{API}/roles/",
+            json={"name": "Stale", "permission_ids": [org.perms["users.read"]]},
+            headers=stale,
+        )
+        assert resp.status_code == 403
+        assert _roles_named(session, org, "Stale") == []

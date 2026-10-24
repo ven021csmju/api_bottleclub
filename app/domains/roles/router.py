@@ -46,7 +46,7 @@ def create_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.create")),
 ) -> RoleResponse:
-    role = RoleService.create_role(db, current_user.organization_id, data)
+    role = RoleService.create_role(db, current_user, data)
     return RoleResponse.model_validate(role)
 
 
@@ -57,7 +57,7 @@ def update_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.update")),
 ) -> RoleResponse:
-    role = RoleService.update_role(db, current_user.organization_id, role_id, data)
+    role = RoleService.update_role(db, current_user, role_id, data)
     return RoleResponse.model_validate(role)
 
 
@@ -67,4 +67,4 @@ def delete_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("roles.delete")),
 ) -> None:
-    RoleService.delete_role(db, current_user.organization_id, role_id)
+    RoleService.delete_role(db, current_user, role_id)

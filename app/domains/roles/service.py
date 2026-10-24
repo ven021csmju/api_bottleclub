@@ -1,10 +1,11 @@
 from sqlalchemy.orm import Session
 
-from app.db.models import Permission, Role
+from app.db.models import Permission, Role, User
 from app.db.repositories.roles import RoleRepository
 from app.shared.exceptions import BadRequestException, ConflictException, NotFoundException
 from app.shared.pagination import paginate
 
+from .access import ensure_can_grant
 from .schemas import PermissionResponse, RoleCreate, RoleListResponse, RoleResponse, RoleUpdate
 
 
@@ -29,7 +30,9 @@ class RoleService:
         return role
 
     @staticmethod
-    def create_role(db: Session, org_id: int, data: RoleCreate) -> Role:
+    def create_role(db: Session, actor: User, data: RoleCreate) -> Role:
+        org_id = actor.organization_id
+        ensure_can_grant(db, actor, data.permission_ids)
         existing = RoleRepository.find_by_name(db, org_id, data.name)
         if existing:
             raise ConflictException(detail="Role with this name already exists")
@@ -45,8 +48,14 @@ class RoleService:
         return role
 
     @staticmethod
-    def update_role(db: Session, org_id: int, role_id: int, data: RoleUpdate) -> Role:
+    def update_role(db: Session, actor: User, role_id: int, data: RoleUpdate) -> Role:
+        org_id = actor.organization_id
         role = RoleService.get_role(db, org_id, role_id)
+        # Changing a role at all, not only its permissions, needs every permission it
+        # has now and every one it will have.
+        ensure_can_grant(
+            db, actor, RoleRepository.permission_ids_of_role(db, role_id) | set(data.permission_ids or [])
+        )
 
         if role.is_system and data.name is not None and data.name != role.name:
             raise BadRequestException(detail="Cannot rename a system role")
@@ -70,11 +79,12 @@ class RoleService:
         return role
 
     @staticmethod
-    def delete_role(db: Session, org_id: int, role_id: int) -> None:
-        role = RoleService.get_role(db, org_id, role_id)
+    def delete_role(db: Session, actor: User, role_id: int) -> None:
+        role = RoleService.get_role(db, actor.organization_id, role_id)
 
         if role.is_system:
             raise BadRequestException(detail="Cannot delete a system role")
+        ensure_can_grant(db, actor, RoleRepository.permission_ids_of_role(db, role_id))
 
         user_count = RoleRepository.count_user_assignments(db, role_id)
         if user_count > 0:

@@ -73,7 +73,7 @@ def assign_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.assign_roles")),
 ) -> UserRoleAssign:
-    UserService.assign_role(db, current_user.organization_id, user_id, data.role_id, data.branch_id)
+    UserService.assign_role(db, current_user, user_id, data.role_id, data.branch_id)
     return data
 
 

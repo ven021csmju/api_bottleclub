@@ -70,3 +70,33 @@ class RoleRepository:
     @staticmethod
     def list_all_permissions(db: Session) -> list[Permission]:
         return db.query(Permission).order_by(Permission.module, Permission.code).all()
+    @staticmethod
+    def permission_ids_of_role(db: Session, role_id: int) -> set[int]:
+        rows = db.query(RolePermission.permission_id).filter(RolePermission.role_id == role_id)
+        return {r[0] for r in rows}
+
+    @staticmethod
+    def permission_ids_of_user(db: Session, org_id: int, user_id: int) -> set[int]:
+        """Permissions the user holds now through roles of ``org_id``."""
+        rows = (
+            db.query(RolePermission.permission_id)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .join(Role, Role.id == UserRole.role_id)
+            .filter(UserRole.user_id == user_id, Role.organization_id == org_id)
+        )
+        return {r[0] for r in rows}
+
+    @staticmethod
+    def holds_system_role(db: Session, org_id: int, user_id: int, name: str) -> bool:
+        return (
+            db.query(UserRole.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .filter(
+                UserRole.user_id == user_id,
+                Role.organization_id == org_id,
+                Role.name == name,
+                Role.is_system.is_(True),
+            )
+            .first()
+            is not None
+        )
