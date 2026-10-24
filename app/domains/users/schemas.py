@@ -1,28 +1,48 @@
 import datetime
 
-from pydantic import BaseModel, EmailStr
+from typing import Any
+
+from pydantic import BaseModel, EmailStr, Field, model_validator
+
+#: Fields clients used to send that now mean nothing; 422 instead of silently ignoring them.
+REMOVED_FIELDS = {
+    "branch_ids": "branch_ids was removed: a branch is part of a role assignment, "
+    "give roles: [{role_id, branch_id}] on POST /users/ or use POST/DELETE /users/{id}/roles",
+}
 
 
-class UserCreate(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    display_name: str
-    phone: str | None = None
-    branch_ids: list[int] = []
-
-
-class UserUpdate(BaseModel):
-    email: EmailStr | None = None
-    display_name: str | None = None
-    phone: str | None = None
-    status: str | None = None
-    branch_ids: list[int] | None = None
+class _RejectRemovedFields(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for name, message in REMOVED_FIELDS.items():
+                if name in data:
+                    raise ValueError(message)
+        return data
 
 
 class UserRoleAssign(BaseModel):
     role_id: int
     branch_id: int | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class UserCreate(_RejectRemovedFields):
+    username: str
+    email: EmailStr
+    password: str
+    display_name: str
+    phone: str | None = None
+    roles: list[UserRoleAssign] = []
+
+
+class UserUpdate(_RejectRemovedFields):
+    email: EmailStr | None = None
+    display_name: str | None = None
+    phone: str | None = None
+    status: str | None = None
 
 
 class UserResponse(BaseModel):
@@ -33,6 +53,7 @@ class UserResponse(BaseModel):
     phone: str | None
     status: str
     is_superadmin: bool
+    roles: list[UserRoleAssign] = Field(default=[], validation_alias="user_roles")
     created_at: datetime.datetime
     updated_at: datetime.datetime
 

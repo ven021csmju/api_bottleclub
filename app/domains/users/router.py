@@ -42,7 +42,7 @@ def create_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.create")),
 ) -> UserResponse:
-    user = UserService.create_user(db, current_user.organization_id, data)
+    user = UserService.create_user(db, current_user, data)
     return UserResponse.model_validate(user)
 
 

@@ -46,7 +46,15 @@ class UserService:
         return user
 
     @staticmethod
-    def create_user(db: Session, org_id: int, data: UserCreate) -> User:
+    def create_user(db: Session, actor: User, data: UserCreate) -> User:
+        org_id = actor.organization_id
+        assignments = list(dict.fromkeys((a.role_id, a.branch_id) for a in data.roles))
+        granted: set[int] = set()
+        for role_id, branch_id in assignments:
+            UserService.resolve_assignment(db, org_id, role_id, branch_id)
+            granted |= RoleRepository.permission_ids_of_role(db, role_id)
+        ensure_can_grant(db, actor, granted)
+
         existing = UserRepository.find_by_username_or_email(db, org_id, data.username, data.email)
         if existing:
             field = "username" if existing.username == data.username else "email"
@@ -62,8 +70,8 @@ class UserService:
         )
         UserRepository.add_user(db, user)
 
-        for branch_id in data.branch_ids:
-            UserRepository.add_user_role(db, user.id, branch_id)
+        for role_id, branch_id in assignments:
+            UserRepository.create_user_role(db, user.id, role_id, branch_id)
 
         db.commit()
         db.refresh(user)
@@ -84,16 +92,8 @@ class UserService:
             if conflict:
                 raise ConflictException(detail="Email already in use")
 
-        update_data = data.model_dump(exclude_unset=True)
-        branch_ids = update_data.pop("branch_ids", None)
-
-        for field, value in update_data.items():
+        for field, value in data.model_dump(exclude_unset=True).items():
             setattr(user, field, value)
-
-        if branch_ids is not None:
-            UserRepository.delete_user_roles(db, user_id)
-            for branch_id in branch_ids:
-                UserRepository.add_user_role(db, user_id, branch_id)
 
         db.commit()
         db.refresh(user)

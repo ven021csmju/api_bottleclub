@@ -458,3 +458,57 @@ class TestLastSuperadmin:
 
         resp = client.put(f"{API}/users/{org.users['admin2']}", json={"status": "inactive"}, headers=as_("admin"))
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# ⑥ a branch is part of a role assignment; branch_ids is gone
+# ---------------------------------------------------------------------------
+def _new_user(**extra) -> dict:
+    return {"username": "fresh", "email": "fresh@example.com", "password": "Passw0rd!", "display_name": "Fresh", **extra}
+
+
+def _user_named(session: Session, org: Org, username: str) -> User | None:
+    session.expire_all()
+    return session.query(User).filter(User.organization_id == org.id, User.username == username).one_or_none()
+
+
+class TestRoleAssignmentsReplaceBranchIds:
+    def test_create_user_with_roles(self, client: TestClient, session, org, as_):
+        roles = [{"role_id": org.roles["Cashier"], "branch_id": org.branch}]
+        resp = client.post(f"{API}/users/", json=_new_user(roles=roles + roles), headers=as_("manager"))
+        assert resp.status_code == 201
+        assert resp.json()["data"]["roles"] == roles
+        assert _role_ids(session, _user_named(session, org, "fresh").id) == {(org.roles["Cashier"], org.branch)}
+
+    def test_create_user_with_a_role_beyond_the_caller_is_403_and_creates_nobody(
+        self, client: TestClient, session, org, as_
+    ):
+        roles = [{"role_id": org.roles["Superadmin"], "branch_id": org.branch}]
+        assert client.post(f"{API}/users/", json=_new_user(roles=roles), headers=as_("manager")).status_code == 403
+        assert _user_named(session, org, "fresh") is None
+
+    def test_create_user_with_a_role_or_branch_of_another_organization_is_404(
+        self, client: TestClient, session, org, other, as_
+    ):
+        for roles in (
+            [{"role_id": other.roles["Cashier"], "branch_id": org.branch}],
+            [{"role_id": org.roles["Cashier"], "branch_id": other.branch}],
+        ):
+            assert client.post(f"{API}/users/", json=_new_user(roles=roles), headers=as_("admin")).status_code == 404
+        assert _user_named(session, org, "fresh") is None
+
+    @pytest.mark.parametrize("branch_ids", [[], [1]])
+    def test_branch_ids_on_create_is_422(self, client: TestClient, session, org, as_, branch_ids):
+        resp = client.post(f"{API}/users/", json=_new_user(branch_ids=branch_ids), headers=as_("admin"))
+        assert resp.status_code == 422
+        assert "branch_ids was removed" in resp.json()["detail"]
+        assert _user_named(session, org, "fresh") is None
+
+    def test_branch_ids_on_update_is_422_and_keeps_every_role(self, client: TestClient, session, org, as_):
+        resp = client.put(f"{API}/users/{org.users['cashier']}", json={"branch_ids": []}, headers=as_("admin"))
+        assert resp.status_code == 422
+        assert _role_ids(session, org.users["cashier"]) == {(org.roles["Cashier"], org.branch)}
+
+    def test_user_response_lists_role_assignments(self, client: TestClient, session, org, as_):
+        resp = client.get(f"{API}/users/{org.users['manager']}", headers=as_("admin"))
+        assert resp.json()["data"]["roles"] == [{"role_id": org.roles["Manager"], "branch_id": org.branch}]

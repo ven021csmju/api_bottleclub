@@ -82,20 +82,12 @@ class UserRepository:
         db.flush()
 
     @staticmethod
-    def add_user_role(db: Session, user_id: int, branch_id: int | None, role_id: int | None = None) -> None:
-        db.add(UserRole(user_id=user_id, branch_id=branch_id, role_id=role_id))
-
-    @staticmethod
     def create_user_role(
         db: Session, user_id: int, role_id: int, branch_id: int | None
     ) -> UserRole:
         user_role = UserRole(user_id=user_id, role_id=role_id, branch_id=branch_id)
         db.add(user_role)
         return user_role
-
-    @staticmethod
-    def delete_user_roles(db: Session, user_id: int) -> None:
-        db.query(UserRole).filter(UserRole.user_id == user_id).delete()
 
     @staticmethod
     def find_role_assignment(
