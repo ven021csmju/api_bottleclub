@@ -539,3 +539,37 @@ class TestIsSuperadminFlag:
         assert client.put(
             f"{API}/users/{org.users['admin']}", json={"status": "inactive"}, headers=as_("manager")
         ).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# A Superadmin can still do all of it
+# ---------------------------------------------------------------------------
+class TestSuperadminStillCan:
+    def test_every_role_and_user_change(self, client: TestClient, session, org, as_):
+        admin = as_("admin")
+        everything = [org.perms[c] for c in PERMISSIONS]
+
+        resp = client.post(f"{API}/roles/", json={"name": "Owner", "permission_ids": everything}, headers=admin)
+        assert resp.status_code == 201
+        owner = resp.json()["data"]["id"]
+        assert client.put(f"{API}/roles/{org.roles['Auditor']}", json={"permission_ids": everything}, headers=admin).status_code == 200
+        assert client.put(f"{API}/roles/{org.roles['Manager']}", json={"permission_ids": everything}, headers=admin).status_code == 200
+        assert client.delete(f"{API}/roles/{org.roles['Kitchen']}", headers=admin).status_code == 204
+
+        superadmin = {"role_id": org.roles["Superadmin"], "branch_id": org.branch}
+        resp = client.post(f"{API}/users/", json=_new_user(roles=[superadmin]), headers=admin)
+        assert resp.status_code == 201
+        assert resp.json()["data"]["roles"] == [superadmin]
+        assert client.post(f"{API}/users/{org.users['newbie']}/roles", json=superadmin, headers=admin).status_code == 201
+        assert client.post(
+            f"{API}/users/{org.users['cashier']}/roles", json={"role_id": owner, "branch_id": None}, headers=admin
+        ).status_code == 201
+
+        assert client.put(f"{API}/users/{org.users['admin2']}", json={"status": "inactive"}, headers=admin).status_code == 200
+        assert client.delete(
+            f"{API}/users/{org.users['admin2']}/roles/{org.roles['Superadmin']}/{org.branch}", headers=admin
+        ).status_code == 204
+        assert client.delete(
+            f"{API}/users/{org.users['manager']}/roles/{org.roles['Manager']}/{org.branch}", headers=admin
+        ).status_code == 204
+        assert client.delete(f"{API}/users/{org.users['hr']}", headers=admin).status_code == 204
