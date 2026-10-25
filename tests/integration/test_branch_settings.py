@@ -1,10 +1,15 @@
-"""Branch settings need the permission at that branch; organization settings, a Superadmin (Phase 35c ②)."""
+"""Branch settings need the permission at that branch; organization settings, a Superadmin (Phase 35c ②).
+
+Since 35d no system role but Superadmin holds settings.update, so the branch
+scope is checked with a custom role holding it at A.
+"""
 from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.db.models import SystemSetting
+from tests.integration.conftest import grant
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -15,9 +20,11 @@ def _put(client: TestClient, headers, branch: int | None = None) -> int:
     return client.put(f"{API}/settings/tax_rate{query}", json={"value": "8"}, headers=headers).status_code
 
 
-def test_branch_manager_changes_settings_of_their_branch_only(client: TestClient, session, world, as_):
-    assert _put(client, as_("ba_a", "A"), world.B) == 404
-    assert _put(client, as_("ba_a", "A"), world.A) == 200
+def test_settings_update_at_a_branch_changes_that_branch_only(client: TestClient, session, world, as_):
+    grant(session, world.users["pos_a"], world.org, ["settings.read", "settings.update"], world.A)
+    session.commit()
+    assert _put(client, as_("pos_a", "A"), world.B) == 404
+    assert _put(client, as_("pos_a", "A"), world.A) == 200
     rows = session.query(SystemSetting).filter_by(organization_id=world.org, key="tax_rate").all()
     assert [(r.branch_id, r.value) for r in rows] == [(world.A, "8")]
 

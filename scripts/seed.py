@@ -110,57 +110,50 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
     "Superadmin": [p[0] for p in PERMISSIONS],  # everything
     "Manager": [
         "users.read", "users.create", "users.update", "users.assign_roles",
-        "roles.read", "roles.create", "roles.update",
+        "roles.read",
         "catalog.read", "catalog.create",
         "orders.create", "orders.read", "orders.cancel", "orders.complete", "orders.update",
         "orders.read_branch",
         "payments.create", "payments.read", "payments.refund",
         "refunds.read",
         "returns.create", "returns.read", "returns.process",
-        "customers.read", "customers.create", "customers.update", "customers.delete",
+        "customers.read", "customers.create", "customers.update",
         "loyalty.earn", "loyalty.redeem", "loyalty.read",
         "inventory.read", "inventory.adjust",
         "purchases.read", "purchases.create", "purchases.approve", "purchases.receive",
         "transfers.create", "transfers.read", "transfers.approve", "transfers.ship", "transfers.receive",
-        "promotions.read", "promotions.create", "promotions.update", "promotions.delete",
-        "coupons.read", "coupons.create", "coupons.update", "coupons.delete",
+        "promotions.read",
+        "coupons.read",
         "reports.sales", "reports.read",
-        "audit.read",
-        "settings.read", "settings.update",
-        "branches.read", "branches.create", "branches.update",
+        "settings.read",
+        "branches.read", "branches.update",
         "shifts.open", "shifts.close", "shifts.cash_movement", "shifts.read",
         "customer_addresses.read", "customer_addresses.create", "customer_addresses.update", "customer_addresses.delete",
+        "slip_verification.read", "slip_verification.approve", "slip_verification.reject",
         "reviews.read", "reviews.create", "reviews.moderate",
     ],
     "Cashier": [
+        "catalog.read",
         "orders.create", "orders.read", "orders.update", "orders.complete",
         "payments.create", "payments.read",
         "customers.read", "customers.create",
         "customer_addresses.read", "customer_addresses.create",
-        "reviews.read", "reviews.create",
+        "reviews.read",
         "loyalty.earn", "loyalty.redeem", "loyalty.read",
         "inventory.read",
-        "shifts.read",
+        "shifts.open", "shifts.close", "shifts.cash_movement", "shifts.read",
         "returns.read",
         "coupons.read",
         "refunds.read",
     ],
-    "Staff": [
-        "orders.read", "orders.update",
-        "payments.read",
-        "customers.read",
-        "inventory.read",
-        "catalog.read",
-        "shifts.read",
-    ],
+    # Kitchen / Bar screens use /orders/station/* and the station-item PATCH
+    # only, which need kds.* and nothing from orders.*.
     "Kitchen": [
         "kds.kitchen.read", "kds.kitchen.update",
-        "orders.read",
         "catalog.read",
     ],
     "Bar": [
         "kds.bar.read", "kds.bar.update",
-        "orders.read",
         "catalog.read",
     ],
 }
@@ -249,7 +242,6 @@ def seed(conn: psycopg.Connection) -> None:
         "Superadmin": "Full system access with all permissions",
         "Manager": "Branch management with most operational permissions",
         "Cashier": "Point-of-sale operations and basic customer management",
-        "Staff": "Basic read-only access",
         "Kitchen": "Kitchen station queue operations",
         "Bar": "Bar station queue operations",
     }
@@ -491,7 +483,7 @@ def seed(conn: psycopg.Connection) -> None:
     print(f" Branch       : Main Branch      (code: MNB)")
     print(f" Admin login  : admin / admin123")
     print(f" Test login   : ven / 0217")
-    print(f" Roles        : Superadmin, Manager, Cashier, Staff, Kitchen, Bar")
+    print(f" Roles        : Superadmin, Manager, Cashier, Kitchen, Bar")
     print(f" Categories   : Beer, Wine, Spirits, Non-Alcoholic, Snacks")
     print(f" Suppliers    : {len(SUPPLIERS)}")
     print(f" Products     : {len(PRODUCTS)}")
