@@ -83,8 +83,8 @@ Managers see only their own orders).
 |---|---|
 | **required** (401 without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
 | **required unless `branch_id` is given** (401 with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
-| **not used** (the record's branch decides) | routes with an order, payment, refund, return, slip, shift, transfer or user id in the path; `GET/PUT /settings/...` (`?branch_id=`); `POST /inventory/adjust`, `GET /inventory/balances/{branch_id}/...`, `/lots`, `/movements`, `POST /shifts/open` (branch in the body/query) |
-| **ignored** (organization level only) | catalog, supplier and category changes (`catalog.create`), promotions and coupons changes, `/branches` changes, `/roles` changes, `/audit`, `GET /reports/ecommerce/dashboard`, `/reports/loyalty`, `DELETE /users/{id}/roles/{role_id}` |
+| **not used** (the record's branch decides) | routes with an order, payment, refund, return, slip, shift, transfer, purchase order or user id in the path; `PUT /branches/{id}`; `POST /purchases` (`branch_id` in the body); `GET/PUT /settings/...` (`?branch_id=`); `POST /inventory/adjust`, `GET /inventory/balances/{branch_id}/...`, `/lots`, `/movements`, `POST /shifts/open` (branch in the body/query) |
+| **ignored** (organization level only) | catalog, supplier and category changes (`catalog.create`), promotions and coupons changes, `POST /branches/`, `DELETE /branches/{id}`, `/roles` changes, `/audit`, `GET /reports/ecommerce/dashboard`, `/reports/loyalty`, `DELETE /users/{id}/roles/{role_id}` |
 | **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...) |
 
 | Route | Before | Now |
@@ -112,6 +112,51 @@ Managers see only their own orders).
 | `GET /returns/{id}`, `PUT /returns/{id}/process`, `POST /returns/` | `{id}` of **any organization**; an order of any branch | the permission at the return's / order's branch, else 404 |
 | `DELETE /roles/{id}` | blocked by assignments of deleted users | only live users count |
 | `POST /catalog/...`, promotions, coupons, branches, roles changes | the permission at any branch | organization-level (`branch_id` null) role or Superadmin, else 403 |
+
+### Four-tier roles (Phase 35d)
+
+**Deploy order: apply migration 009 first, then deploy the code.** Neither
+depends on the other: the code checks permissions only, and works (with the old,
+wider grants) before 009; the v0.1.6 code works with 009's grants (no v0.1.6 route
+needs a permission 009 removes from a role that uses it). Migration first closes
+the wider Manager grants at once instead of leaving them live until the 009 run.
+Rollback in either order (`009_..._rollback.sql` restores the snapshot it took).
+
+009 makes every organization's system roles hold exactly
+`scripts/seed.py` `ROLE_PERMISSIONS`: it adds what is missing and **removes
+everything else, including permissions given by hand with SQL**. Custom (non-system)
+roles are not touched.
+
+| Tier | System role | Holds |
+|---|---|---|
+| 1 Superadmin | `Superadmin` | every permission, every branch; the only one who creates/removes branches, changes organization settings, manages roles, promotions and coupons, reads the audit log |
+| 2 Branch admin | `Manager` | at the branches where the role is held: users (`read/create/update/assign_roles`), `roles.read`, catalog (`read/create`), orders incl. `orders.read_branch`, payments incl. refunds, returns, customers (`read/create/update`), customer addresses, loyalty, inventory, purchases, transfers, `promotions.read`, `coupons.read`, reports, `settings.read`, `branches.read/update`, shifts, **`slip_verification.read/approve/reject`**, reviews incl. moderation |
+| 3 POS | `Cashier` | `catalog.read`, `orders.create/read/update/complete`, `payments.create/read`, `customers.read/create`, `customer_addresses.read/create`, `reviews.read`, loyalty, `inventory.read`, **`shifts.open/close/cash_movement/read`**, `returns.read`, `coupons.read`, `refunds.read`; no `slip_verification.*` |
+| 4 KDS | `Kitchen` / `Bar` | `kds.kitchen.*` / `kds.bar.*` and `catalog.read`; no `orders.*` (the KDS screens use `GET /orders/station/kitchen`, `/station/bar` and `PATCH /orders/{id}/station-items/{run}/status` only) |
+
+`Staff` is removed: each user who held it now holds `Cashier` at the same branch
+(or every branch). Superadmin keeps `users.delete`, `roles.delete`,
+`branches.delete`, `customers.delete`, `promotions.*`/`coupons.*` writes,
+`settings.update`, `audit.read`, which no other system role has.
+
+| Route / role | Before (v0.1.6) | Now |
+|---|---|---|
+| Manager: `POST /roles/`, `PUT /roles/{id}` | allowed (`roles.create/update`) | 403 |
+| Manager: `POST/PUT/DELETE /api/admin/promotions`, `POST/DELETE /coupons/` | allowed | 403 |
+| Manager: `PUT /settings/{key}?branch_id=` | allowed at their branch | 403 (no `settings.update`) |
+| Manager: `GET /audit/`, `DELETE /customers/{id}` | allowed | 403 |
+| Manager: `/slip-verify/list`, `/{id}`, `/approve`, `/reject` | 403 (unless given by SQL) | allowed at their branches |
+| Manager: `PUT /branches/{id}` | organization-level role only (a branch Manager got 403) | allowed for a branch where `branches.update` is held; another branch → **404** |
+| `PUT /branches/{id}` with `is_active`, `POST /branches/`, `DELETE /branches/{id}` | the permission at organization level | **Superadmin only** (403), even for a custom role holding `branches.*` for the whole organization |
+| Cashier: `GET /catalog/products`, `/categories`, `/suppliers` (product scan) | 403 | allowed |
+| Cashier: `POST /shifts/open`, `PUT /shifts/{id}/close`, `POST /shifts/{id}/cash-movements` | 403 | allowed at their branch |
+| Cashier: `POST /reviews/` | allowed | 403 |
+| Cashier: `/slip-verify/*` reads | 403 (allowed if `slip_verification.read` was given by SQL) | 403 |
+| Kitchen/Bar: `GET /orders/`, `/orders/{ref}`, `/receipt`, `/track/{x}` | 200 / 404 (only their own orders, i.e. none) | 403 |
+| `GET /purchases` | every purchase order of the organization | only those of branches where `purchases.read` is held |
+| `GET/PUT /purchases/{id}`, `/approve`, `/receive`, `/cancel` | any purchase order of the organization | the permission at the order's branch, else **404** |
+| `POST /purchases` | any `branch_id`, even of another organization | `purchases.create` at `branch_id`; another branch or organization → **404** |
+| `POST /shifts/{id}/cash-movements` with `movement_type` other than `cash_in`/`cash_out` (`drop`, `pickup`, `opening`, ...) | **500** (database CHECK) | **422** |
 
 ---
 
@@ -264,7 +309,7 @@ Roles are not changed here; `branch_ids` → 422.
 ### GET `/branches/`
 ### GET `/branches/{branch_id}`
 
-### POST `/branches/`
+### POST `/branches/` — Superadmin only
 ```json
 { "name": "string", "code": "string", "phone": "string" | null, "address": "string" | null }
 ```
@@ -273,8 +318,9 @@ Roles are not changed here; `branch_ids` → 422.
 ```json
 { "name": "string" | null, "phone": "string" | null, "address": "string" | null, "is_active": true }
 ```
+`branches.update` at that branch (another branch → 404). Sending `is_active` → Superadmin only (403).
 
-### DELETE `/branches/{branch_id}` → 204
+### DELETE `/branches/{branch_id}` → 204 — Superadmin only
 
 ---
 
@@ -531,6 +577,7 @@ Order of another organization → 404.
 
 ### GET `/purchases`
 Query: `?page=&per_page=&status=&supplier_id=&date_from=&date_to=`
+Only purchase orders of branches where `purchases.read` is held. Every route with `{po_id}` needs its permission at the order's branch (404 otherwise); `POST` needs `purchases.create` at `branch_id` (404).
 
 ### GET `/purchases/{po_id}`
 
@@ -767,6 +814,7 @@ must belong to `branch_id`; the list holds only the caller's organization.
 ```json
 { "amount": 500.00, "movement_type": "cash_in" | "cash_out", "reason": "string" }
 ```
+Any other `movement_type` → 422.
 
 ### GET `/shifts/`  `?page=&per_page=&branch_id=&status=&date=`
 ### GET `/shifts/{shift_id}/x-report`
