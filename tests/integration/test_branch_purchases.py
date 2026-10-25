@@ -93,9 +93,7 @@ def test_approve_and_receive_at_the_callers_branch(client: TestClient, session, 
     receive = {"received_items": [{"purchase_order_item_id": world.data["item_A"], "quantity_received": 2,
                                    "lot_number": "L-A", "cost_price": "20"}]}
     resp = client.post(f"{url}/receive", json=receive, headers=as_("ba_a", "A"))
-    # Past the branch check. The goods are received, but the response then fails
-    # with 500 (PurchaseReceivingResponse.items is missing: a known bug, not 35d).
-    assert resp.status_code != 404
+    assert resp.status_code == 200, resp.text
     session.expire_all()
     assert session.get(PurchaseOrder, pos_["A"]).status == "received"
 

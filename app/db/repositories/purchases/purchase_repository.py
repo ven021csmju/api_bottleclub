@@ -52,6 +52,17 @@ class PurchaseRepository:
         return db.get(PurchaseOrder, po_id)
 
     @staticmethod
+    def lock_po(db: Session, po_id: int) -> PurchaseOrder | None:
+        """The purchase order, row-locked until commit and reloaded (a concurrent
+        receipt of the same order waits, then sees its new status)."""
+        return db.scalars(
+            select(PurchaseOrder)
+            .where(PurchaseOrder.id == po_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+
+    @staticmethod
     def get_po_item(db: Session, item_id: int) -> PurchaseOrderItem | None:
         return db.get(PurchaseOrderItem, item_id)
 

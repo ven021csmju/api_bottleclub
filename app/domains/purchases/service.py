@@ -9,6 +9,7 @@ from app.domains.purchases.schemas import (
     PurchaseOrderResponse,
     PurchaseOrderUpdate,
     PurchaseReceivingCreate,
+    PurchaseReceivingItemResponse,
     PurchaseReceivingResponse,
 )
 from app.db.models import (
@@ -235,8 +236,8 @@ class PurchaseService:
         branch_id: int,
         data: PurchaseReceivingCreate,
         user_id: int,
-    ) -> PurchaseReceiving:
-        po = PurchaseRepository.get_po(db, po_id)
+    ) -> PurchaseReceivingResponse:
+        po = PurchaseRepository.lock_po(db, po_id)
         if not po or po.organization_id != org_id:
             raise NotFoundException(detail="Purchase order not found")
 
@@ -247,6 +248,26 @@ class PurchaseService:
             raise BadRequestException(
                 detail=f"Cannot receive PO in '{po.status}' status"
             )
+
+        # Checked before anything is written: an item is never received beyond
+        # what was ordered, so a receipt sent twice does not count twice in stock.
+        po_items: dict[int, PurchaseOrderItem] = {}
+        wanted: dict[int, int] = {}
+        for item_data in data.received_items:
+            item_id = item_data.purchase_order_item_id
+            po_item = PurchaseRepository.get_po_item(db, item_id)
+            if not po_item or po_item.purchase_order_id != po.id:
+                raise NotFoundException(detail=f"PO item {item_id} not found")
+            po_items[item_id] = po_item
+            wanted[item_id] = wanted.get(item_id, 0) + item_data.quantity_received
+        for item_id, quantity in wanted.items():
+            po_item = po_items[item_id]
+            remaining = po_item.quantity_ordered - po_item.quantity_received
+            if quantity > remaining:
+                raise BadRequestException(
+                    detail=f"PO item {item_id}: {quantity} received but {remaining} left to receive",
+                    code="OVER_RECEIPT",
+                )
 
         receiving_number = PurchaseService._generate_receiving_number(db)
         receiving = PurchaseReceiving(
@@ -260,12 +281,9 @@ class PurchaseService:
 
         all_fully_received = True
 
+        receiving_items: list[PurchaseReceivingItem] = []
         for item_data in data.received_items:
-            po_item = PurchaseRepository.get_po_item(db, item_data.purchase_order_item_id)
-            if not po_item or po_item.purchase_order_id != po.id:
-                raise NotFoundException(
-                    detail=f"PO item {item_data.purchase_order_item_id} not found"
-                )
+            po_item = po_items[item_data.purchase_order_item_id]
 
             receiving_item = PurchaseReceivingItem(
                 purchase_receiving_id=receiving.id,
@@ -276,6 +294,7 @@ class PurchaseService:
                 expiry_date=item_data.expiry_date,
             )
             PurchaseRepository.add_receiving_item(db, receiving_item)
+            receiving_items.append(receiving_item)
 
             # Create or update inventory lot
             lot = PurchaseRepository.find_lot(
@@ -345,7 +364,14 @@ class PurchaseService:
         db.flush()
         db.commit()
         db.refresh(receiving)
-        return receiving
+        # PurchaseReceiving has no items relationship: give them explicitly.
+        return PurchaseReceivingResponse(
+            id=receiving.id,
+            receiving_number=receiving.receiving_number,
+            status=receiving.status,
+            received_at=receiving.received_at,
+            items=[PurchaseReceivingItemResponse.model_validate(i) for i in receiving_items],
+        )
 
     # ------------------------------------------------------------------
     # Cancel
