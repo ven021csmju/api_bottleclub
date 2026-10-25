@@ -105,7 +105,7 @@ ORG_LEVEL_PERMISSIONS = {
     "catalog.create",
     "promotions.create", "promotions.update", "promotions.delete",
     "coupons.create", "coupons.update", "coupons.delete",
-    "branches.create", "branches.update", "branches.delete",
+    "branches.create", "branches.delete",
     "roles.create", "roles.update", "roles.delete",
     "audit.read",
 }
@@ -129,3 +129,12 @@ def test_organization_level_permissions_are_checked_at_organization_level():
     wrong = {key: check for key, check in checks.items() if check[0] in ORG_LEVEL_PERMISSIONS and check[1] != "org"}
     assert wrong == {}
     assert {code for code, scope in checks.values() if scope == "org"} <= ORG_LEVEL_PERMISSIONS | {"reports.read", "users.assign_roles"}
+
+
+def test_branch_update_is_checked_at_the_branch_of_the_path():
+    """A branch admin edits the branches where the role is held (Phase 35d)."""
+    (route,) = [
+        r for r in create_app().routes
+        if isinstance(r, APIRoute) and r.path == f"{PREFIX}/branches/{{branch_id}}" and "PUT" in r.methods
+    ]
+    assert _permission_checks(route) == [("branches.update", "any")]
