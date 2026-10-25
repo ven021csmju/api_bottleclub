@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -41,9 +41,13 @@ class ShiftClose(BaseModel):
     closing_cash: Decimal = Field(..., ge=0, decimal_places=2)
 
 
+#: What ck_shift_cash_movement_type allows; anything else is 422, not a 500 from the database.
+CashMovementKind = Literal["cash_in", "cash_out"]
+
+
 class CashMovementCreate(BaseModel):
     amount: Decimal = Field(..., gt=0, decimal_places=2)
-    movement_type: str = Field(..., max_length=30)
+    movement_type: CashMovementKind
     reason: str
 
 

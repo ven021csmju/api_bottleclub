@@ -43,7 +43,7 @@ class ShiftRepository:
                     func.coalesce(
                         func.sum(
                             case(
-                                (ShiftCashMovement.movement_type.in_(["cash_in", "opening"]), ShiftCashMovement.amount),
+                                (ShiftCashMovement.movement_type == "cash_in", ShiftCashMovement.amount),
                                 else_=0,
                             )
                         ),
@@ -62,7 +62,7 @@ class ShiftRepository:
                     func.coalesce(
                         func.sum(
                             case(
-                                (ShiftCashMovement.movement_type.in_(["cash_out", "drop", "pickup"]), ShiftCashMovement.amount),
+                                (ShiftCashMovement.movement_type == "cash_out", ShiftCashMovement.amount),
                                 else_=0,
                             )
                         ),

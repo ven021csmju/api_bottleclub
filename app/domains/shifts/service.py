@@ -138,7 +138,7 @@ class ShiftService:
         movements_in = Decimal("0")
         movements_out = Decimal("0")
         for mtype, total in cash_movements:
-            if mtype in ("cash_in", "opening"):
+            if mtype == "cash_in":
                 movements_in += Decimal(str(total))
             else:
                 movements_out += Decimal(str(total))
