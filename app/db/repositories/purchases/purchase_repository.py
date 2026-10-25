@@ -2,6 +2,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    Branch,
     Inventory,
     InventoryLot,
     Product,
@@ -15,6 +16,15 @@ from app.db.models import (
 
 
 class PurchaseRepository:
+    @staticmethod
+    def get_branch(db: Session, org_id: int, branch_id: int) -> Branch | None:
+        return db.execute(
+            select(Branch).where(
+                Branch.id == branch_id,
+                Branch.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+
     @staticmethod
     def count_org_purchase_orders(db: Session, org_id: int) -> int:
         return db.scalar(
@@ -65,12 +75,16 @@ class PurchaseRepository:
         supplier_id: int | None = None,
         date_from=None,
         date_to=None,
+        branches: frozenset[int] | None = None,
     ) -> tuple[list[PurchaseOrder], int]:
         import datetime
 
         stmt = select(PurchaseOrder).where(
             PurchaseOrder.organization_id == org_id
         )
+
+        if branches is not None:
+            stmt = stmt.where(PurchaseOrder.branch_id.in_(branches))
 
         if status:
             stmt = stmt.where(PurchaseOrder.status == status)

@@ -70,9 +70,10 @@ class PurchaseService:
         supplier_id: Optional[int] = None,
         date_from: Optional[datetime.date] = None,
         date_to: Optional[datetime.date] = None,
+        branches: frozenset[int] | None = None,
     ) -> PurchaseOrderListResponse:
         pos, total = PurchaseRepository.list_purchase_orders(
-            db, org_id, page, per_page, status, supplier_id, date_from, date_to
+            db, org_id, page, per_page, status, supplier_id, date_from, date_to, branches
         )
         response_items = [PurchaseService._build_po_response(po, db) for po in pos]
 
@@ -153,6 +154,9 @@ class PurchaseService:
     def create_purchase_order(
         db: Session, org_id: int, user_id: int, data: PurchaseOrderCreate
     ) -> PurchaseOrder:
+        if PurchaseRepository.get_branch(db, org_id, data.branch_id) is None:
+            raise NotFoundException(detail="Branch not found")
+
         supplier = PurchaseRepository.get_supplier(db, data.supplier_id)
         if not supplier or supplier.organization_id != org_id:
             raise NotFoundException(detail="Supplier not found")

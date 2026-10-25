@@ -14,10 +14,18 @@ from app.domains.purchases.schemas import (
     PurchaseReceivingResponse,
 )
 from app.domains.purchases.service import PurchaseService
-from app.middleware.auth import require_permission
-from app.db.models import User
+from app.middleware.access import Access
+from app.middleware.auth import get_access, require_permission
+from app.db.models import PurchaseOrder, User
 
 router = APIRouter()
+
+
+def _scoped_po(db: Session, access: Access, po_id: int, code: str) -> PurchaseOrder:
+    """The purchase order, if ``code`` is held at its branch; else 404."""
+    po = PurchaseService.get_purchase_order(db, access.org_id, po_id)
+    access.ensure_at(code, po.branch_id, "Purchase order")
+    return po
 
 
 @router.get("", response_model=list[PurchaseOrderResponse])
@@ -29,10 +37,12 @@ def list_purchase_orders(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.read")),
+    user: User = Depends(require_permission("purchases.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
     result = PurchaseService.list_purchase_orders(
-        db, user.organization_id, page, per_page, status, supplier_id, date_from, date_to
+        db, user.organization_id, page, per_page, status, supplier_id, date_from, date_to,
+        branches=access.branches("purchases.read"),
     )
     return result.purchase_orders
 
@@ -41,9 +51,10 @@ def list_purchase_orders(
 def get_purchase_order(
     po_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.read")),
+    user: User = Depends(require_permission("purchases.read", scope="any")),
+    access: Access = Depends(get_access),
 ):
-    po = PurchaseService.get_purchase_order(db, user.organization_id, po_id)
+    po = _scoped_po(db, access, po_id, "purchases.read")
     return PurchaseService._build_po_response(po, db)
 
 
@@ -51,8 +62,10 @@ def get_purchase_order(
 def create_purchase_order(
     data: PurchaseOrderCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.create")),
+    user: User = Depends(require_permission("purchases.create", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    access.ensure_at("purchases.create", data.branch_id, "Branch")
     po = PurchaseService.create_purchase_order(
         db, user.organization_id, user.id, data
     )
@@ -64,8 +77,10 @@ def update_purchase_order(
     po_id: int,
     data: PurchaseOrderUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.create")),
+    user: User = Depends(require_permission("purchases.create", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    _scoped_po(db, access, po_id, "purchases.create")
     po = PurchaseService.update_purchase_order(
         db, user.organization_id, po_id, data
     )
@@ -76,8 +91,10 @@ def update_purchase_order(
 def approve_purchase_order(
     po_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.approve")),
+    user: User = Depends(require_permission("purchases.approve", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    _scoped_po(db, access, po_id, "purchases.approve")
     po = PurchaseService.approve_purchase_order(
         db, user.organization_id, po_id, user.id
     )
@@ -89,9 +106,10 @@ def receive_purchase_order(
     po_id: int,
     data: PurchaseReceivingCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.receive")),
+    user: User = Depends(require_permission("purchases.receive", scope="any")),
+    access: Access = Depends(get_access),
 ):
-    po = PurchaseService.get_purchase_order(db, user.organization_id, po_id)
+    po = _scoped_po(db, access, po_id, "purchases.receive")
     receiving = PurchaseService.receive_purchase_order(
         db=db,
         org_id=user.organization_id,
@@ -107,8 +125,10 @@ def receive_purchase_order(
 def cancel_purchase_order(
     po_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("purchases.create")),
+    user: User = Depends(require_permission("purchases.create", scope="any")),
+    access: Access = Depends(get_access),
 ):
+    _scoped_po(db, access, po_id, "purchases.create")
     po = PurchaseService.cancel_purchase_order(
         db, user.organization_id, po_id, user.id
     )
