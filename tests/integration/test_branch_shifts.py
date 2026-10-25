@@ -28,9 +28,7 @@ def test_closing_or_moving_cash_on_a_shift_of_another_branch_is_404(
     resp = client.request(method, API + path.format(s=shifts["b1"]), json=body, headers=as_("ba_a", "A"))
     assert resp.status_code == 404
     resp = client.request(method, API + path.format(s=shifts["a2"]), json=body, headers=as_("ba_a", "A"))
-    # Past the branch check. (Closing is 500 for a reason older than 35c:
-    # ShiftRepository.sum_cash_*_movements call func.case(..., else_=0).)
-    assert resp.status_code not in (403, 404), resp.text
+    assert resp.status_code in (200, 201), resp.text
 
 
 class TestXReport:

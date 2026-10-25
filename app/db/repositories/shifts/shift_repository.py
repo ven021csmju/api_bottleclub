@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Branch, Order, Register, Shift, ShiftCashMovement
@@ -42,7 +42,7 @@ class ShiftRepository:
                 select(
                     func.coalesce(
                         func.sum(
-                            func.case(
+                            case(
                                 (ShiftCashMovement.movement_type.in_(["cash_in", "opening"]), ShiftCashMovement.amount),
                                 else_=0,
                             )
@@ -61,7 +61,7 @@ class ShiftRepository:
                 select(
                     func.coalesce(
                         func.sum(
-                            func.case(
+                            case(
                                 (ShiftCashMovement.movement_type.in_(["cash_out", "drop", "pickup"]), ShiftCashMovement.amount),
                                 else_=0,
                             )
