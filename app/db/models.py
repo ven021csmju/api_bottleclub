@@ -1131,6 +1131,8 @@ class Promotion(Base):
     badge: Mapped[str | None] = mapped_column(String(100), server_default="PROMOTION")
     discount_tag: Mapped[str | None] = mapped_column(String(100))
     valid_until: Mapped[str | None] = mapped_column(String(100))
+    # When it ends (017); NULL = no end. valid_until is only the text shown.
+    ends_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     link_url: Mapped[str | None] = mapped_column(String(255), server_default="/#products")
     cta_text: Mapped[str | None] = mapped_column(String(100), server_default="ดูสินค้าโปรโมชั่น")
     secondary_cta_text: Mapped[str | None] = mapped_column(String(100))

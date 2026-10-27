@@ -1,6 +1,8 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
+from app.shared.clock import StoreDateTime
+
 
 class PromotionCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=50)
@@ -13,6 +15,8 @@ class PromotionCreate(BaseModel):
     badge: str | None = Field("PROMOTION", max_length=100)
     discount_tag: str | None = Field(None, alias="discountTag", max_length=100)
     valid_until: str | None = Field(None, alias="validUntil", max_length=100)
+    # Without an offset: store time (STORE_TIMEZONE). None: no end.
+    ends_at: StoreDateTime | None = Field(None, alias="endsAt")
     link_url: str | None = Field("/#products", alias="linkUrl", max_length=255)
     cta_text: str | None = Field("ดูสินค้าโปรโมชั่น", alias="ctaText", max_length=100)
     secondary_cta_text: str | None = Field(None, alias="secondaryCtaText", max_length=100)
@@ -42,6 +46,8 @@ class PromotionUpdate(BaseModel):
     badge: str | None = Field(None, max_length=100)
     discount_tag: str | None = Field(None, alias="discountTag", max_length=100)
     valid_until: str | None = Field(None, alias="validUntil", max_length=100)
+    # Without an offset: store time (STORE_TIMEZONE). None: no end.
+    ends_at: StoreDateTime | None = Field(None, alias="endsAt")
     link_url: str | None = Field(None, alias="linkUrl", max_length=255)
     cta_text: str | None = Field(None, alias="ctaText", max_length=100)
     secondary_cta_text: str | None = Field(None, alias="secondaryCtaText", max_length=100)
@@ -71,6 +77,7 @@ class PromotionResponse(BaseModel):
     badge: str | None
     discount_tag: str | None = Field(alias="discountTag")
     valid_until: str | None = Field(alias="validUntil")
+    ends_at: datetime | None = Field(None, alias="endsAt")
     link_url: str | None = Field(alias="linkUrl")
     cta_text: str | None = Field(alias="ctaText")
     secondary_cta_text: str | None = Field(alias="secondaryCtaText")
