@@ -56,6 +56,7 @@ class OrderStatus(str, enum.Enum):
 
 
 class StationType(str, enum.Enum):
+    NONE = "none"
     KITCHEN = "kitchen"
     BAR = "bar"
 

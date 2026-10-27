@@ -1,8 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+#: The screen an item goes to: none (no screen), kitchen or bar (Phase 38c).
+Station = Literal["none", "kitchen", "bar"]
 
 
 # ---------------------------------------------------------------------------
@@ -13,6 +16,7 @@ class CategoryCreate(BaseModel):
     description: Optional[str] = None
     parent_id: Optional[int] = None
     sort_order: int = 0
+    station: Station = "none"
 
 
 class CategoryUpdate(BaseModel):
@@ -21,6 +25,7 @@ class CategoryUpdate(BaseModel):
     parent_id: Optional[int] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
+    station: Optional[Station] = None
 
 
 class CategoryResponse(BaseModel):
@@ -30,6 +35,7 @@ class CategoryResponse(BaseModel):
     parent_id: Optional[int] = None
     sort_order: int
     is_active: bool
+    station: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -54,6 +60,8 @@ class ProductCreate(BaseModel):
     track_inventory: bool = True
     has_expiry: bool = False
     image_url: Optional[str] = None
+    # None: the category's station.
+    station: Optional[Station] = None
 
 
 class ProductUpdate(BaseModel):
@@ -68,6 +76,8 @@ class ProductUpdate(BaseModel):
     track_inventory: Optional[bool] = None
     has_expiry: Optional[bool] = None
     image_url: Optional[str] = None
+    # null: back to the category's station.
+    station: Optional[Station] = None
 
 
 class ProductResponse(BaseModel):
@@ -83,6 +93,7 @@ class ProductResponse(BaseModel):
     track_inventory: bool
     has_expiry: bool
     image_url: Optional[str] = None
+    station: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

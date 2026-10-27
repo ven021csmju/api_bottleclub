@@ -256,8 +256,9 @@ class Category(Base):
     description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    # The screen its products go to: none (no screen), kitchen or bar (016).
     station: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="kitchen"
+        String(20), nullable=False, server_default="none"
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -269,7 +270,7 @@ class Category(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "name", name="uq_category_org_name"),
         CheckConstraint(
-            "station IN ('kitchen', 'bar')",
+            "station IN ('none', 'kitchen', 'bar')",
             name="ck_category_station",
         ),
     )
@@ -299,6 +300,8 @@ class Product(Base):
     track_inventory: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     has_expiry: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     image_url: Mapped[str | None] = mapped_column(Text)
+    # NULL: the category's station; otherwise it overrides it (016).
+    station: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -309,6 +312,10 @@ class Product(Base):
 
     __table_args__ = (
         UniqueConstraint("organization_id", "sku", name="uq_product_org_sku"),
+        CheckConstraint(
+            "station IS NULL OR station IN ('none', 'kitchen', 'bar')",
+            name="ck_product_station",
+        ),
         Index(
             "uq_product_org_barcode",
             "organization_id",
@@ -919,7 +926,7 @@ class OrderItem(Base):
     # unlinked in ORM metadata rather than creating an incompatible FK.
     promotion_id: Mapped[int | None] = mapped_column(BigInteger)
     station: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default="kitchen"
+        String(20), nullable=False, server_default="none"
     )
     item_status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="pending"
@@ -935,7 +942,7 @@ class OrderItem(Base):
         CheckConstraint("unit_price >= 0", name="ck_order_item_unit_price_non_negative"),
         CheckConstraint("line_total >= 0", name="ck_order_item_line_total_non_negative"),
         CheckConstraint(
-            "station IN ('kitchen', 'bar')",
+            "station IN ('none', 'kitchen', 'bar')",
             name="ck_order_item_station",
         ),
         CheckConstraint(

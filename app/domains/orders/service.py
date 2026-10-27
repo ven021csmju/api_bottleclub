@@ -213,7 +213,7 @@ class OrderService:
                 discount_amount=item_discount,
                 tax_amount=Decimal("0"),
                 line_total=line_total,
-                station=stations.get(product.id, "kitchen"),
+                station=stations.get(product.id, "none"),
                 item_status="pending",
             )
             order_items.append(order_item)

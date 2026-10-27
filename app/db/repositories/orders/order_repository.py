@@ -44,15 +44,12 @@ class OrderRepository:
     def get_stations_for_products(
         db: Session, org_id: int, product_ids: list[int]
     ) -> dict[int, str]:
-        """Return a {product_id: station} map derived from each product's category.
-
-        Products without a category (or with an uncategorised parent) fall back to
-        their own station. Defaults to 'kitchen'.
-        """
+        """Return a {product_id: station} map: the product's own station, else
+        its category's, else 'none' (no screen)."""
         rows = db.execute(
             select(
                 Product.id,
-                Category.station,
+                func.coalesce(Product.station, Category.station, "none"),
             )
             .join(Category, Category.id == Product.category_id, isouter=True)
             .where(
@@ -60,7 +57,7 @@ class OrderRepository:
                 Product.id.in_(product_ids),
             )
         ).all()
-        return {product_id: (station or "kitchen") for product_id, station in rows}
+        return dict(rows)
 
     @staticmethod
     def add_order(db: Session, order: Order) -> Order:

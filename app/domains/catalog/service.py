@@ -64,6 +64,7 @@ class CatalogService:
             description=data.description,
             parent_id=data.parent_id,
             sort_order=data.sort_order,
+            station=data.station,
         )
         CatalogRepository.add_category(db, category)
         db.commit()
@@ -79,6 +80,8 @@ class CatalogService:
             raise NotFoundException(detail="Category not found")
 
         update_data = data.model_dump(exclude_unset=True)
+        if update_data.get("station", "") is None:
+            raise BadRequestException(detail="station must be none, kitchen or bar", code="VALIDATION_ERROR")
 
         if "name" in update_data and update_data["name"] != category.name:
             conflict = CatalogRepository.find_category_name_conflict(
@@ -191,6 +194,7 @@ class CatalogService:
             track_inventory=data.track_inventory,
             has_expiry=data.has_expiry,
             image_url=data.image_url,
+            station=data.station,
         )
         CatalogRepository.add_product(db, product)
         db.commit()
