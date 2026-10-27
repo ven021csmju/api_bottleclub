@@ -36,9 +36,16 @@ def _target() -> dict[str, set[str]]:
     return target
 
 
+#: Permissions later migrations grant on top of 009: (code, roles).
+LATER = [("orders.discount", {"Manager"})]  # 013
+
+
 def test_009_target_equals_seed_for_every_role_but_superadmin():
     _, roles = _seed()
     listed = {name: set(ast.literal_eval(v)) for name, v in roles.items() if name != "Superadmin"}
+    for code, holders in LATER:
+        for name in holders:
+            listed[name].discard(code)
     assert _target() == listed
 
 

@@ -9,9 +9,14 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[2]
-MIGRATION = ROOT / "migrations" / "008_add_orders_read_branch_permission.sql"
-ROLLBACK = ROOT / "migrations" / "008_add_orders_read_branch_permission.rollback.sql"
+#: version -> file stem of every migration that adds one permission.
+MIGRATIONS = {
+    "008": "008_add_orders_read_branch_permission",
+    "013": "013_add_orders_discount_permission",
+}
 
 
 def _seed() -> tuple[list[tuple[str, str, str]], dict[str, list[str]]]:
@@ -31,8 +36,14 @@ def _seed() -> tuple[list[tuple[str, str, str]], dict[str, list[str]]]:
     return permissions, roles
 
 
-def _migration() -> tuple[tuple[str, str, str], set[str]]:
-    sql = MIGRATION.read_text(encoding="utf-8")
+def _files(version: str) -> tuple[str, str]:
+    stem = ROOT / "migrations" / MIGRATIONS[version]
+    return (stem.with_suffix(".sql").read_text(encoding="utf-8"),
+            Path(f"{stem}.rollback.sql").read_text(encoding="utf-8"))
+
+
+def _migration(version: str) -> tuple[tuple[str, str, str], set[str]]:
+    sql, _ = _files(version)
     (values,) = re.findall(
         r"INSERT INTO permissions \(code, module, description\)\s+VALUES \('([^']+)', '([^']+)', '([^']+)'\)", sql
     )
@@ -40,23 +51,25 @@ def _migration() -> tuple[tuple[str, str, str], set[str]]:
     return values, set(re.findall(r"'([^']+)'", names))
 
 
-def test_permission_of_008_is_in_seed_with_the_same_module_and_description():
+@pytest.mark.parametrize("version", MIGRATIONS)
+def test_the_permission_is_in_seed_with_the_same_module_and_description(version):
     permissions, _ = _seed()
-    added, _ = _migration()
+    added, _ = _migration(version)
     assert added in permissions
 
 
-def test_008_gives_it_to_exactly_the_seed_roles_that_hold_it():
+@pytest.mark.parametrize("version", MIGRATIONS)
+def test_it_goes_to_exactly_the_seed_roles_that_hold_it(version):
     _, roles = _seed()
-    (code, _, _), granted = _migration()
+    (code, _, _), granted = _migration(version)
     assert granted == {name for name, codes in roles.items() if code in codes} == {"Superadmin", "Manager"}
 
 
-def test_008_records_itself_and_its_rollback_undoes_it():
-    sql = MIGRATION.read_text(encoding="utf-8")
-    rollback = ROLLBACK.read_text(encoding="utf-8")
-    (code, _, _), _ = _migration()
-    assert "INSERT INTO schema_migrations (version, note)" in sql and "'008'" in sql
+@pytest.mark.parametrize("version", MIGRATIONS)
+def test_it_records_itself_and_its_rollback_undoes_it(version):
+    sql, rollback = _files(version)
+    (code, _, _), _ = _migration(version)
+    assert "INSERT INTO schema_migrations (version, note)" in sql and f"'{version}'" in sql
     assert "SET LOCAL lock_timeout" in sql and "SET LOCAL lock_timeout" in rollback
     assert f"DELETE FROM permissions WHERE code = '{code}'" in rollback
-    assert "DELETE FROM schema_migrations WHERE version = '008'" in rollback
+    assert f"DELETE FROM schema_migrations WHERE version = '{version}'" in rollback
