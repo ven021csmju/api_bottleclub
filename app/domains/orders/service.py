@@ -25,6 +25,7 @@ from app.shared.exceptions import (
     InvalidOrderStateException,
     NotFoundException,
 )
+from app.domains.shifts.drawer import CASH, current_shift
 from app.shared.ordering import generate_order_number
 
 
@@ -377,6 +378,7 @@ class OrderService:
                     "id": p.id,
                     "payment_method": p.payment_method,
                     "amount": p.amount,
+                    "tendered_amount": p.tendered_amount,
                     "status": p.status,
                     "external_reference": p.external_reference,
                     "provider": p.provider,
@@ -567,16 +569,49 @@ class OrderService:
         if not payments:
             raise BadRequestException(detail="At least one payment is required")
 
-        recorded: list[Payment] = []
-        paid_total = Decimal("0")
+        handed = []
         for pay in payments:
             amount = Decimal(str(pay["amount"]))
             if amount <= 0:
                 raise BadRequestException(detail="Payment amount must be positive")
+            handed.append((pay, amount))
+        paid_total = sum((a for _, a in handed), Decimal("0"))
+        if paid_total < due:
+            raise BadRequestException(
+                detail=f"Payments ({paid_total}) less than amount due ({due})"
+            )
+        non_cash = sum((a for p, a in handed if p["payment_method"] != CASH), Decimal("0"))
+        if non_cash > due:
+            raise BadRequestException(
+                detail=f"Non-cash payments ({non_cash}) exceed the amount due ({due}); only cash gives change",
+                code="OVERPAYMENT",
+            )
+
+        # Change comes out of the cash, the last cash payment first; each
+        # payment keeps what it settled (amount) and cash what was handed over.
+        change = paid_total - due
+        nets = [a for _, a in handed]
+        for i in reversed(range(len(handed))):
+            if change == 0:
+                break
+            if handed[i][0]["payment_method"] == CASH:
+                take = min(change, nets[i])
+                nets[i] -= take
+                change -= take
+        if any(n == 0 for n in nets):
+            raise BadRequestException(
+                detail="A payment would settle nothing: send only what is needed", code="OVERPAYMENT",
+            )
+
+        shift = current_shift(db, order.branch_id, user_id, order.register_id)
+        recorded: list[Payment] = []
+        for (pay, amount), net in zip(handed, nets):
             payment = Payment(
                 order_id=order.id,
                 payment_method=pay["payment_method"],
-                amount=amount,
+                amount=net,
+                tendered_amount=amount if pay["payment_method"] == CASH else None,
+                shift_id=shift.id if shift else None,
                 status="completed",
                 external_reference=pay.get("external_reference"),
                 provider=pay.get("provider"),
@@ -585,12 +620,6 @@ class OrderService:
             )
             PaymentRepository.add_payment(db, payment)
             recorded.append(payment)
-            paid_total += amount
-
-        if paid_total < due:
-            raise BadRequestException(
-                detail=f"Payments ({paid_total}) less than amount due ({due})"
-            )
 
         order.amount_paid = paid_total
         order.change_amount = paid_total - due
@@ -625,6 +654,7 @@ class OrderService:
                 order.loyalty_points_earned = points_earned
 
         order.status = "paid"
+        order.paid_at = datetime.now(timezone.utc)
 
         db.flush()
         return recorded

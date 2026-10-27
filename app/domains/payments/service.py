@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Payment, Refund
 from app.db.repositories.payments import PaymentRepository
+from app.domains.orders.service import OrderService
+from app.domains.shifts.drawer import CASH, current_shift, paid_net
 from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
@@ -30,10 +32,29 @@ class PaymentService:
         if order.status == "cancelled":
             raise BadRequestException(detail="Cannot add payment to a cancelled order")
 
+        # Same rules as checkout: a payment records what it settles; cash
+        # beyond the remaining due is change (tendered_amount), any other
+        # method beyond it is refused. The payment that covers the total
+        # makes the order paid.
+        amount = Decimal(str(data["amount"]))
+        method = data["payment_method"]
+        remaining = Decimal(str(order.grand_total)) - paid_net(db, order.id)
+        if remaining <= 0:
+            raise BadRequestException(detail="The order is already fully paid", code="OVERPAYMENT")
+        if amount > remaining and method != CASH:
+            raise BadRequestException(
+                detail=f"{method} payment ({amount}) exceeds the remaining due ({remaining}); only cash gives change",
+                code="OVERPAYMENT",
+            )
+        net = min(amount, remaining)
+        shift = current_shift(db, order.branch_id, user_id, order.register_id)
+
         payment = Payment(
             order_id=order_id,
-            payment_method=data["payment_method"],
-            amount=Decimal(str(data["amount"])),
+            payment_method=method,
+            amount=net,
+            tendered_amount=amount if method == CASH else None,
+            shift_id=shift.id if shift else None,
             status="completed",
             external_reference=data.get("external_reference"),
             notes=data.get("notes"),
@@ -41,9 +62,11 @@ class PaymentService:
         )
         PaymentRepository.add_payment(db, payment)
 
-        order.amount_paid = Decimal(str(order.amount_paid)) + payment.amount
-        if order.amount_paid > order.grand_total:
-            order.change_amount = order.amount_paid - order.grand_total
+        order.amount_paid = Decimal(str(order.amount_paid)) + amount
+        order.change_amount = Decimal(str(order.change_amount)) + (amount - net)
+        if net == remaining and order.status in OrderService.CHECKOUTABLE_STATUSES:
+            order.status = "paid"
+            order.paid_at = datetime.now(timezone.utc)
         db.flush()
         db.commit()
 

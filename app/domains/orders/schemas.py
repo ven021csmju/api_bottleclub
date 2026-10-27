@@ -167,7 +167,10 @@ class ReceiptItem(BaseModel):
 class ReceiptPayment(BaseModel):
     id: int
     payment_method: str
+    # What the payment settled; for cash, tendered_amount is what was handed
+    # over (tendered_amount - amount = change).
     amount: Decimal
+    tendered_amount: Optional[Decimal] = None
     status: str
     external_reference: Optional[str] = None
     provider: Optional[str] = None

@@ -17,7 +17,10 @@ class PaymentResponse(BaseModel):
     id: int
     order_id: int
     payment_method: str
+    # What the payment settled (net of change); tendered_amount: cash handed over.
     amount: Decimal
+    tendered_amount: Optional[Decimal] = None
+    shift_id: Optional[int] = None
     status: str
     external_reference: Optional[str] = None
     created_at: datetime
