@@ -7,7 +7,7 @@ from app.db.models import Shift, ShiftCashMovement
 from app.db.repositories.branches import BranchRepository
 from app.db.repositories.shifts import ShiftRepository
 from app.domains.shifts.drawer import shift_totals
-from app.shared.exceptions import BadRequestException, NotFoundException
+from app.shared.exceptions import AppException, BadRequestException, NotFoundException
 
 
 def _org_shift(db: Session, org_id: int, shift_id: int) -> Shift:
@@ -68,6 +68,18 @@ class ShiftService:
 
         if shift.status != "open":
             raise BadRequestException(detail="Shift is not open")
+
+        pending = ShiftRepository.unpaid_orders(db, shift.id)
+        if pending:
+            raise AppException(
+                status_code=409,
+                detail=f"{len(pending)} order(s) of this shift are not paid: settle or cancel them first",
+                code="SHIFT_HAS_PENDING_ORDERS",
+                extra={"orders": [
+                    {"id": o.id, "order_number": o.order_number, "status": o.status, "grand_total": str(o.grand_total)}
+                    for o in pending
+                ]},
+            )
 
         # Added up from the shift's payments, refunds and movements; the
         # columns keep what they were at closing.

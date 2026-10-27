@@ -1,10 +1,22 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Branch, Register, Shift, ShiftCashMovement
+from app.db.models import Branch, Order, Register, Shift, ShiftCashMovement
+
+
+#: Orders not paid yet (and not cancelled): they block closing their shift (38b).
+UNPAID_STATUSES = ("pending", "confirmed", "preparing", "ready", "held")
 
 
 class ShiftRepository:
+    @staticmethod
+    def unpaid_orders(db: Session, shift_id: int) -> list[Order]:
+        return list(db.scalars(
+            select(Order)
+            .where(Order.shift_id == shift_id, Order.status.in_(UNPAID_STATUSES))
+            .order_by(Order.id)
+        ))
+
     @staticmethod
     def find_open_shift(
         db: Session, branch_id: int, register_id: int

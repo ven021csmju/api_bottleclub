@@ -11,10 +11,13 @@ class AppException(Exception):
         status_code: int = 500,
         detail: str = "Internal server error",
         code: str | None = None,
+        extra: dict | None = None,
     ) -> None:
         self.status_code = status_code
         self.detail = detail
         self.code = code
+        #: More fields of the error body (e.g. the orders that block a shift close).
+        self.extra = extra or {}
         super().__init__(self.detail)
 
 

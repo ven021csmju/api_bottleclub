@@ -158,6 +158,14 @@ class OrderService:
 
         OrderService._check_discounts(data, products_map, can_discount)
 
+        # A POS sale belongs to the drawer it is rung up at: the cashier's open
+        # shift at the branch (or the register's), unless the client names one.
+        # Its unpaid orders keep that shift from closing (38b).
+        shift_id = data.get("shift_id")
+        if shift_id is None and order_source == "pos":
+            shift = current_shift(db, branch_id, user_id, data.get("register_id"))
+            shift_id = shift.id if shift else None
+
         order_number = generate_order_number(db, branch.code)
 
         order = Order(
@@ -167,7 +175,7 @@ class OrderService:
             status="pending",
             customer_id=data.get("customer_id"),
             user_id=user_id,
-            shift_id=data.get("shift_id"),
+            shift_id=shift_id,
             register_id=data.get("register_id"),
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
