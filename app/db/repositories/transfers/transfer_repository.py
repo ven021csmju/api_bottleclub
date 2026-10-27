@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
@@ -85,45 +85,41 @@ class TransferRepository:
         ).unique().scalar_one_or_none()
 
     @staticmethod
-    def get_inventory(
-        db: Session, branch_id: int, product_id: int
-    ) -> Inventory | None:
-        return db.execute(
-            select(Inventory).where(
-                Inventory.branch_id == branch_id,
-                Inventory.product_id == product_id,
+    def lock_org_transfer(
+        db: Session, org_id: int, transfer_id: int
+    ) -> StockTransfer | None:
+        transfer = db.execute(
+            select(StockTransfer)
+            .where(
+                StockTransfer.id == transfer_id,
+                StockTransfer.organization_id == org_id,
             )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
+        if transfer is not None:
+            db.refresh(transfer, ["items"])
+        return transfer
 
     @staticmethod
-    def deduct_stock(
-        db: Session, branch_id: int, product_id: int, quantity: int
-    ) -> int:
-        result = db.execute(
-            update(Inventory)
+    def lock_inventory(
+        db: Session, branch_id: int, product_id: int
+    ) -> Inventory | None:
+        """The row locked until commit and re-read: a sale or another transfer
+        of the same product waits instead of overwriting on_hand."""
+        return db.execute(
+            select(Inventory)
             .where(
                 Inventory.branch_id == branch_id,
                 Inventory.product_id == product_id,
-                Inventory.on_hand >= quantity,
             )
-            .values(on_hand=Inventory.on_hand - quantity)
-        )
-        return result.rowcount or 0
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
 
     @staticmethod
     def add_stock_movement(db: Session, movement: StockMovement) -> None:
         db.add(movement)
-
-    @staticmethod
-    def get_dest_inventory(
-        db: Session, branch_id: int, product_id: int
-    ) -> Inventory | None:
-        return db.execute(
-            select(Inventory).where(
-                Inventory.branch_id == branch_id,
-                Inventory.product_id == product_id,
-            )
-        ).scalar_one_or_none()
 
     @staticmethod
     def add_inventory(db: Session, inv: Inventory) -> None:

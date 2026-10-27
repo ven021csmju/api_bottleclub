@@ -1,4 +1,5 @@
 """Migration 014 and app/db/models.py agree on the stock transfer states (offline)."""
+import re
 from pathlib import Path
 
 from app.db.models import StockTransfer
@@ -20,6 +21,12 @@ def test_model_and_migration_allow_the_same_states():
     assert f"CHECK (status IN ({states}))" in MIGRATION
     assert StockTransfer.__table__.c["status"].server_default.arg == "pending"
     assert "ALTER COLUMN status SET DEFAULT 'pending'" in MIGRATION
+
+
+def test_the_code_writes_only_states_the_check_allows():
+    service = (ROOT / "app" / "domains" / "transfers" / "service.py").read_text(encoding="utf-8")
+    written = set(re.findall(r'status = "(\w+)"', service)) | set(re.findall(r'status="(\w+)"', service))
+    assert written and written <= set(STATES), written
 
 
 def test_existing_rows_are_moved_not_guessed():

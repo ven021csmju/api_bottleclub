@@ -5,12 +5,25 @@ from sqlalchemy.orm import Session
 from app.db.models import Inventory, StockMovement, StockTransfer, StockTransferItem
 from app.db.repositories.transfers import TransferRepository
 from app.shared.exceptions import (
+    AppException,
     BadRequestException,
-    InsufficientStockException,
     InvalidOrderStateException,
     NotFoundException,
 )
 from app.shared.ordering import generate_transfer_number
+
+
+#: pending -> approved -> shipped -> received; cancelled from pending or approved
+#: (Phase 38b, the states of ck_stock_transfer_status).
+CANCELLABLE = ("pending", "approved")
+
+
+def _move(transfer: StockTransfer, action: str, allowed: tuple[str, ...]) -> None:
+    if transfer.status not in allowed:
+        raise InvalidOrderStateException(
+            detail=f"Cannot {action} transfer in '{transfer.status}' status",
+            code="INVALID_TRANSFER_STATE",
+        )
 
 
 class TransferService:
@@ -41,7 +54,7 @@ class TransferService:
             source_branch_id=source_branch_id,
             dest_branch_id=dest_branch_id,
             transfer_number=transfer_number,
-            status="draft",
+            status="pending",
             notes=data.get("notes"),
             requested_by=user_id,
         )
@@ -94,20 +107,25 @@ class TransferService:
         return transfer
 
     @staticmethod
+    def _locked(db: Session, org_id: int, transfer_id: int) -> StockTransfer:
+        """The transfer, its row locked until commit: a second approve, ship,
+        receive or cancel of it waits and then sees the new status."""
+        transfer = TransferRepository.lock_org_transfer(db, org_id, transfer_id)
+        if not transfer:
+            raise NotFoundException(detail="Transfer not found")
+        return transfer
+
+    @staticmethod
     def approve_transfer(
         db: Session,
         org_id: int,
         transfer_id: int,
         user_id: int,
     ) -> StockTransfer:
-        transfer = TransferService.get_transfer(db, org_id, transfer_id)
+        transfer = TransferService._locked(db, org_id, transfer_id)
+        _move(transfer, "approve", ("pending",))
 
-        if transfer.status != "draft":
-            raise InvalidOrderStateException(
-                detail=f"Cannot approve transfer in '{transfer.status}' status"
-            )
-
-        transfer.status = "pending"
+        transfer.status = "approved"
         transfer.approved_by = user_id
         transfer.approved_at = datetime.now(timezone.utc)
         db.flush()
@@ -123,12 +141,10 @@ class TransferService:
         user_id: int,
         data: dict,
     ) -> StockTransfer:
-        transfer = TransferService.get_transfer(db, org_id, transfer_id)
-
-        if transfer.status != "pending":
-            raise InvalidOrderStateException(
-                detail=f"Cannot ship transfer in '{transfer.status}' status"
-            )
+        """Stock leaves the source: each inventory row is locked, and a quantity
+        above what is free there (on hand less reserved) is 422."""
+        transfer = TransferService._locked(db, org_id, transfer_id)
+        _move(transfer, "ship", ("approved",))
 
         items_map = {item.id: item for item in transfer.items}
 
@@ -148,18 +164,19 @@ class TransferService:
             product_id = transfer_item.product_id
             lot_id = ship_item_data.get("lot_id")
 
-            source_inv = TransferRepository.get_inventory(
-                db, transfer.source_branch_id, product_id
-            )
-            on_hand_before = source_inv.on_hand if source_inv else 0
-
-            rowcount = TransferRepository.deduct_stock(
-                db, transfer.source_branch_id, product_id, qty_shipped
-            )
-            if rowcount == 0:
-                raise InsufficientStockException(
-                    detail=f"Insufficient stock for product id={product_id} at source branch"
+            source_inv = TransferRepository.lock_inventory(db, transfer.source_branch_id, product_id)
+            free = source_inv.on_hand - source_inv.reserved if source_inv else 0
+            if qty_shipped > free:
+                raise AppException(
+                    status_code=422,
+                    detail=(
+                        f"Insufficient stock for product id={product_id} at the source branch: "
+                        f"{free} free, {qty_shipped} to ship"
+                    ),
+                    code="INSUFFICIENT_STOCK",
                 )
+            on_hand_before = source_inv.on_hand
+            source_inv.on_hand = on_hand_before - qty_shipped
 
             TransferRepository.add_stock_movement(
                 db,
@@ -181,7 +198,7 @@ class TransferService:
             if lot_id:
                 transfer_item.lot_id = lot_id
 
-        transfer.status = "in_transit"
+        transfer.status = "shipped"
         transfer.shipped_by = user_id
         transfer.shipped_at = datetime.now(timezone.utc)
         db.flush()
@@ -197,74 +214,67 @@ class TransferService:
         user_id: int,
         data: dict,
     ) -> StockTransfer:
-        transfer = TransferService.get_transfer(db, org_id, transfer_id)
-
-        if transfer.status != "in_transit":
-            raise InvalidOrderStateException(
-                detail=f"Cannot receive transfer in '{transfer.status}' status"
-            )
+        """One receipt of everything shipped: for each shipped item, received
+        plus damaged equals shipped (else 422 RECEIVE_INCOMPLETE). The
+        destination's ledger shows all of it arriving (transfer_in) and the
+        damaged part written off there (damage); on hand grows by the received."""
+        transfer = TransferService._locked(db, org_id, transfer_id)
+        _move(transfer, "receive", ("shipped",))
 
         items_map = {item.id: item for item in transfer.items}
-
+        counted: dict[int, tuple[int, int]] = {}
         for recv_item_data in data["items"]:
-            transfer_item = items_map.get(recv_item_data["transfer_item_id"])
-            if not transfer_item:
-                raise NotFoundException(
-                    detail=f"Transfer item {recv_item_data['transfer_item_id']} not found"
+            item_id = recv_item_data["transfer_item_id"]
+            if item_id not in items_map:
+                raise NotFoundException(detail=f"Transfer item {item_id} not found")
+            if item_id in counted:
+                raise BadRequestException(detail=f"Transfer item {item_id} is listed twice")
+            counted[item_id] = (recv_item_data["quantity_received"], recv_item_data.get("quantity_damaged", 0))
+
+        for transfer_item in transfer.items:
+            qty_received, qty_damaged = counted.get(transfer_item.id, (0, 0))
+            if qty_received + qty_damaged != transfer_item.quantity_shipped:
+                raise AppException(
+                    status_code=422,
+                    detail=(
+                        f"Item {transfer_item.id}: received {qty_received} + damaged {qty_damaged} "
+                        f"must equal the {transfer_item.quantity_shipped} shipped"
+                    ),
+                    code="RECEIVE_INCOMPLETE",
                 )
 
-            qty_received = recv_item_data["quantity_received"]
-            qty_damaged = recv_item_data.get("quantity_damaged", 0)
-
-            if qty_received + qty_damaged > transfer_item.quantity_shipped - transfer_item.quantity_received:
-                raise BadRequestException(
-                    detail=f"Received + damaged quantity exceeds shipped for item {transfer_item.id}"
-                )
-
+        for transfer_item in transfer.items:
+            qty_received, qty_damaged = counted.get(transfer_item.id, (0, 0))
+            arrived = qty_received + qty_damaged
+            if arrived == 0:
+                continue
             product_id = transfer_item.product_id
 
-            on_hand_after_transfer_in = None
-
-            if qty_received > 0:
-                dest_inv = TransferRepository.get_dest_inventory(
-                    db, transfer.dest_branch_id, product_id
+            dest_inv = TransferRepository.lock_inventory(db, transfer.dest_branch_id, product_id)
+            if dest_inv is None:
+                dest_inv = Inventory(
+                    branch_id=transfer.dest_branch_id, product_id=product_id, on_hand=0, reserved=0
                 )
-                on_hand_before = dest_inv.on_hand if dest_inv else 0
+                TransferRepository.add_inventory(db, dest_inv)
+            on_hand_before = dest_inv.on_hand
+            dest_inv.on_hand = on_hand_before + qty_received
 
-                if dest_inv:
-                    dest_inv.on_hand += qty_received
-                else:
-                    TransferRepository.add_inventory(
-                        db,
-                        Inventory(
-                            branch_id=transfer.dest_branch_id,
-                            product_id=product_id,
-                            on_hand=qty_received,
-                            reserved=0,
-                        ),
-                    )
-
-                on_hand_after_transfer_in = on_hand_before + qty_received
-
-                TransferRepository.add_stock_movement(
-                    db,
-                    StockMovement(
-                        branch_id=transfer.dest_branch_id,
-                        product_id=product_id,
-                        movement_type="transfer_in",
-                        quantity_change=qty_received,
-                        quantity_before=on_hand_before,
-                        quantity_after=on_hand_after_transfer_in,
-                        reference_type="stock_transfer",
-                        reference_id=transfer.id,
-                        user_id=user_id,
-                    ),
-                )
-
-            if qty_damaged > 0:
-                damaged_before = (
-                    on_hand_after_transfer_in if on_hand_after_transfer_in is not None else 0
-                )
+            TransferRepository.add_stock_movement(
+                db,
+                StockMovement(
+                    branch_id=transfer.dest_branch_id,
+                    product_id=product_id,
+                    movement_type="transfer_in",
+                    quantity_change=arrived,
+                    quantity_before=on_hand_before,
+                    quantity_after=on_hand_before + arrived,
+                    reference_type="stock_transfer",
+                    reference_id=transfer.id,
+                    lot_id=transfer_item.lot_id,
+                    user_id=user_id,
+                ),
+            )
+            if qty_damaged:
                 TransferRepository.add_stock_movement(
                     db,
                     StockMovement(
@@ -272,10 +282,12 @@ class TransferService:
                         product_id=product_id,
                         movement_type="damage",
                         quantity_change=-qty_damaged,
-                        quantity_before=damaged_before,
-                        quantity_after=damaged_before - qty_damaged,
+                        quantity_before=on_hand_before + arrived,
+                        quantity_after=on_hand_before + qty_received,
                         reference_type="stock_transfer",
                         reference_id=transfer.id,
+                        lot_id=transfer_item.lot_id,
+                        notes="Damaged in transit",
                         user_id=user_id,
                     ),
                 )
@@ -283,7 +295,7 @@ class TransferService:
             transfer_item.quantity_received += qty_received
             transfer_item.quantity_damaged += qty_damaged
 
-        transfer.status = "completed"
+        transfer.status = "received"
         transfer.received_by = user_id
         transfer.received_at = datetime.now(timezone.utc)
         db.flush()
@@ -298,12 +310,9 @@ class TransferService:
         transfer_id: int,
         user_id: int,
     ) -> StockTransfer:
-        transfer = TransferService.get_transfer(db, org_id, transfer_id)
-
-        if transfer.status not in ("draft", "pending"):
-            raise InvalidOrderStateException(
-                detail=f"Cannot cancel transfer in '{transfer.status}' status"
-            )
+        """Before shipping only; no stock has moved yet, so none is touched."""
+        transfer = TransferService._locked(db, org_id, transfer_id)
+        _move(transfer, "cancel", CANCELLABLE)
 
         transfer.status = "cancelled"
         db.flush()
