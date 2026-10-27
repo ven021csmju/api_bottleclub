@@ -134,6 +134,8 @@ class ReportRepository:
             Order.organization_id == organization_id,
             Order.status == "completed",
             *in_store_days(Refund.created_at, target_date, target_date),
+            # Money actually returned: not pending, not failed.
+            Refund.status == "completed",
         ]
         if branch_id:
             refund_filter.append(Order.branch_id == branch_id)
@@ -230,6 +232,8 @@ class ReportRepository:
             Order.organization_id == organization_id,
             Order.status == "completed",
             *in_store_days(Refund.created_at, date_from, date_to),
+            # Money actually returned: not pending, not failed.
+            Refund.status == "completed",
         ]
         if branch_id:
             refund_filter.append(Order.branch_id == branch_id)

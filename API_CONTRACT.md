@@ -242,7 +242,7 @@ No migration: stored timestamps (`timestamptz`) are instants and do not change.
 |---|---|---|
 | `GET /reports/sales`, `/daily-summary`, `/financial`, `/loyalty`, `group_by=category`, e-commerce dashboard | a day was New York's: `date=D` counted D 11:00 to D+1 10:59 Bangkok time (12:00–11:59 from 1 Nov) | Bangkok sales day; **past daily figures change** (sales from 00:00 to about 11:00 move to their own day) |
 | `GET /reports/sales` `sales_by_hour` | New York hour (08:30 Bangkok → 21) | Bangkok hour (8) |
-| `GET /reports/daily-summary` `total_refunds`, `/financial` `refunds` and `daily[].refunds` | refunds of the orders **completed** that day | refunds **made** that day (`refunds.created_at`), whatever the order's date |
+| `GET /reports/daily-summary` `total_refunds`, `/financial` `refunds` and `daily[].refunds` | refunds of the orders **completed** that day, any refund status | `completed` refunds **made** that day (`refunds.created_at`), whatever the order's date; `pending`/`failed` are not counted |
 | `GET /reports/sales?group_by=category` | 500 `DATABASE_ERROR` on every call | 200 |
 | `GET /purchases`, `GET /inventory/movements` `date_from`/`date_to` | New York dates | Bangkok sales days |
 | `date_from`/`date_to` without offset (orders, refunds, shifts, audit, loyalty); coupon `start_date`/`end_date` | New York time: `2026-11-01T00:00` = 11:00 Bangkok | Bangkok time |
@@ -256,16 +256,18 @@ These steps make psql, backups, logs and timers use Bangkok time too.
 
 1. Deploy the code (no migration; 010 and 011 must already be applied, see
    above), restart `fastapi.service`, check `GET /health` and one report.
-2. PostgreSQL (the prod cluster, 14-main), no restart:
-   ```sql
-   ALTER SYSTEM SET timezone = 'Asia/Bangkok';
-   ALTER SYSTEM SET log_timezone = 'Asia/Bangkok';
-   SELECT pg_reload_conf();
-   SHOW timezone;  -- in a new session: Asia/Bangkok
+2. PostgreSQL **prod is cluster 16/main on port 5433**, no restart:
+   ```sh
+   sudo -u postgres psql -p 5433 -c "ALTER SYSTEM SET timezone='Asia/Bangkok'"
+   sudo -u postgres psql -p 5433 -c "ALTER SYSTEM SET log_timezone='Asia/Bangkok'"
+   sudo -u postgres psql -p 5433 -c "SELECT pg_reload_conf()"
+   sudo -u postgres psql -p 5433 -c "SHOW timezone"      # Asia/Bangkok
+   sudo -u postgres psql -p 5433 -c "SHOW log_timezone"  # Asia/Bangkok
    ```
    This affects psql, `pg_dump` and any other client; the API sets its own
-   session time zone already. Do the same on another cluster only if it is
-   used.
+   session time zone already. 14/main (dev) and 14/phase22test (tests) may be
+   changed the same way or left as they are: neither affects prod (the tests
+   pass in every time zone).
 3. The machine: `sudo timedatectl set-timezone Asia/Bangkok`, then
    `timedatectl` (Time zone: Asia/Bangkok (+07, +0700)).
 4. Timers follow local time: `bottleclub-backup.timer` (`OnCalendar=03:15`)
@@ -1054,7 +1056,7 @@ Query: `?date=2026-09-01&branch_id=`
 ```json
 { "date": "2026-09-01", "branch_id": null, "total_orders": 50, "total_revenue": 25000.0, "total_refunds": 500.0, "net_sales": 24500.0 }
 ```
-`total_refunds`: refunds made that day, whichever day the order was sold.
+`total_refunds`: `completed` refunds made that day, whichever day the order was sold (`pending`/`failed` are not counted).
 
 ### GET `/reports/inventory`
 Query: `?branch_id=&category_id=`

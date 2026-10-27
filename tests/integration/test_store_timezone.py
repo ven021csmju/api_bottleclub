@@ -81,6 +81,19 @@ def edges(session: Session, world) -> None:
     session.commit()
 
 
+@pytest.fixture()
+def unsettled_refunds(session: Session, world, edges) -> None:
+    """A pending (30) and a failed (60) refund made on the 27th: no money left the shop."""
+    from app.db.models import Order, Refund
+
+    old = session.query(Order).filter_by(order_number="TZ-OLD").one()
+    for n, (status, amount) in enumerate((("pending", "30"), ("failed", "60"))):
+        session.add(Refund(order_id=old.id, refund_number=f"REF-TZ-U{n}", refund_amount=Decimal(amount),
+                           refund_method="cash", status=status, processed_by=world.users["sa"],
+                           created_at=utc("2026-10-27T05:00:00")))
+    session.commit()
+
+
 def _get(client: TestClient, as_, path: str, who: str = "sa", where: str | None = "A") -> dict:
     resp = client.get(API + path, headers=as_(who, where))
     assert resp.status_code == 200, resp.text
@@ -112,6 +125,14 @@ class TestSales:
         sales = _get(client, as_, f"/reports/sales?date_from={D27}&date_to={D28}")
         assert sales["total_sales"] == 70
         assert [(h["hour"], h["sales"]) for h in sales["sales_by_hour"]] == [(0, 50), (23, 20)]
+
+
+def test_only_completed_refunds_are_counted(client, world, unsettled_refunds, as_):
+    day = _get(client, as_, f"/reports/daily-summary?date={D27}")
+    assert (day["total_refunds"], day["net_sales"]) == (5, 25)
+    report = _get(client, as_, f"/reports/financial?date_from={D27}&date_to={D28}")
+    assert [(d["date"], d["refunds"]) for d in report["daily"]] == [(D27, 5), (D28, 0)]
+    assert (report["refunds"], report["net_sales"]) == (5, 65)
 
 
 def test_financial_days_and_refunds(client, world, edges, as_):
