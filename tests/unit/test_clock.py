@@ -142,7 +142,16 @@ def test_coupon_dates_without_offset_are_bangkok_midnight():
     assert coupon.end_date == utc("2026-11-30T16:59:59")
 
 
-def test_every_database_connection_uses_the_store_time_zone():
-    from app.db.session import connect_args
+def test_every_new_database_connection_sets_the_store_time_zone():
+    from unittest.mock import MagicMock
 
-    assert connect_args() == {"options": "-c timezone=Asia/Bangkok"}
+    from sqlalchemy import event
+
+    from app.db.session import _set_store_timezone, engine
+
+    assert event.contains(engine, "connect", _set_store_timezone)
+    dbapi = MagicMock()
+    _set_store_timezone(dbapi, None)
+    cursor = dbapi.cursor.return_value.__enter__.return_value
+    cursor.execute.assert_called_once_with("SELECT set_config('timezone', %s, false)", ("Asia/Bangkok",))
+    dbapi.commit.assert_called_once()
