@@ -10,7 +10,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Results must not depend on the machine's or PostgreSQL's time zone
+        # (STORE_TIMEZONE decides). America/New_York is the prod machine's.
+        tz: [America/New_York, Asia/Bangkok, UTC]
+    name: test (TZ=${{ matrix.tz }})
     env:
+      TZ: ${{ matrix.tz }}
+      PGTZ: ${{ matrix.tz }}
       # Offline unit tests: every external service points at an unused port.
       ENVIRONMENT: test
       PYTHONDONTWRITEBYTECODE: "1"
