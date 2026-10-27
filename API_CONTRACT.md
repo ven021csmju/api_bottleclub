@@ -391,6 +391,83 @@ the admin UI once it has the page). Existing registers (if any were added in
 SQL) keep working. Tell accounting: past daily figures now include the
 orders paid but never completed, and the cash column drops the change.
 
+### Branches, transfers and repeated requests (Phase 38b)
+
+**Deploy order: apply migration 014, then 015, then deploy the code at
+once.** Rollback: the code, then `015_..._rollback.sql`, then
+`014_..._rollback.sql`.
+
+| | 014 + 015 not applied | 014 + 015 applied |
+|---|---|---|
+| code before 38b | as now (approving a transfer is already a 500) | **creating a transfer → 500** (it writes `draft`); the rest as now |
+| 38b code | **every transfer step → 500**; two users with one key on one route → the second order is made, then 500 | correct |
+
+- **014** replaces `ck_stock_transfer_status`: `pending → approved → shipped →
+  received`, `cancelled` from `pending`/`approved`; default `pending`.
+  Rows move `draft → pending`, `in_transit → shipped`; a `partially_received`
+  row (no code ever wrote one) stops the migration. Rollback moves them back.
+- **015** makes `idempotency_keys` unique per `(user_id, endpoint,
+  idempotency_key)` (was `(idempotency_key, endpoint)`). Nothing wrote the
+  table before; the rollback empties it.
+
+Check before applying (read-only): `SELECT status, count(*) FROM
+stock_transfers GROUP BY 1;` (any `partially_received` → settle by hand).
+
+**Rules**
+
+- **Idempotency-Key** (header) on `POST /orders/`, `POST
+  /orders/{id}/checkout`, `POST /payments/`, `POST /returns/`; on the two
+  order routes the body's `idempotency_key` also counts (if both are sent
+  they must be equal, else 422 `IDEMPOTENCY_KEY_MISMATCH`). One key per user
+  action (a UUID made when the cashier presses the button, reused for every
+  retry of that action).
+  - none → **422 `IDEMPOTENCY_KEY_REQUIRED`**, nothing written;
+  - the same key, path, `X-Branch-Id` and body again → the first answer,
+    unchanged, with header `Idempotent-Replayed: true`. The order's
+    `tracking_token` is `null` in a replay (it is shown once);
+  - the same key with anything different → **409 `IDEMPOTENCY_KEY_REUSED`**;
+  - a key is the sender's, per route, for **24 hours**; an error answer is
+    not kept (fix the request and send it again with the same key);
+  - two sends at the same moment: the second waits for the first and
+    replays it (one order, stock taken once).
+- **Cancel** `POST /orders/{id}/cancel`: `orders.cancel` at the order's branch
+  → any unpaid order there; `orders.create` only (a cashier) → the caller's
+  own unpaid orders, someone else's **403 `ORDER_NOT_YOURS`**. Cancellable =
+  `pending`, `confirmed`, `preparing`, `held` (a `ready` order is not, as
+  before: it is paid). An order with any payment is **400
+  `ORDER_ALREADY_PAID`** for everyone: return it with `POST /returns/`. Stock
+  comes back.
+- **Closing a shift** with an unpaid order of that shift is **409
+  `SHIFT_HAS_PENDING_ORDERS`**; the body lists them (`"orders": [{"id",
+  "order_number", "status", "grand_total"}]`). A POS order sent without
+  `shift_id` now belongs to the cashier's open shift at the branch.
+- **Transfers:** each step only from the state before it, else **400
+  `INVALID_TRANSFER_STATE`**. Ship (at the source, `transfers.ship`) takes the
+  stock off the source; more than is free there (on hand − reserved) is
+  **422 `INSUFFICIENT_STOCK`**. Receive (at the destination,
+  `transfers.receive`) is one receipt: per shipped item `quantity_received +
+  quantity_damaged` must equal `quantity_shipped`, else **422
+  `RECEIVE_INCOMPLETE`**; the destination gets the received bottles, its
+  ledger shows `transfer_in` for all that arrived and `damage` for the
+  broken ones. Cancel moves no stock.
+- **Branches:** `GET /branches/` lists the caller's branches only (every
+  branch for a Superadmin or a role held organization-wide); `GET
+  /branches/{id}` of another branch is **404**.
+- **Orders list:** `date_field=paid_at` makes `date_from`/`date_to` compare
+  when the order was paid (default `created_at`).
+
+**Breaking changes for the frontend**
+
+| Call | Before 38b | 38b |
+|---|---|---|
+| `POST /orders/`, `POST /orders/{id}/checkout`, `POST /payments/`, `POST /returns/` | key optional; a retry made a second order | `Idempotency-Key` required (422); same key → same answer; other body → 409 |
+| `POST /orders/{id}/cancel` | `orders.cancel` only; partly paid orders could be cancelled | cashiers cancel their own unpaid orders; any payment → 400 `ORDER_ALREADY_PAID` |
+| `PUT /shifts/{id}/close` | closed with unpaid orders | 409 `SHIFT_HAS_PENDING_ORDERS` + list |
+| `/transfers/*` statuses | `draft`, `pending`, `in_transit`, `completed` (approve → 500) | `pending`, `approved`, `shipped`, `received`, `cancelled` |
+| `PUT /transfers/{id}/receive` | partial receipts | everything shipped in one receipt (422 `RECEIVE_INCOMPLETE`) |
+| `GET /branches/`, `GET /branches/{id}` | every branch of the organization | the caller's branches; another → 404 |
+| `POST /orders/` (POS) without `shift_id` | no shift | the cashier's open shift |
+
 ---
 
 ## Authentication
@@ -602,7 +679,9 @@ Roles are not changed here; `branch_ids` → 422; `password` → 422 (use
 ## Branches `/branches`
 
 ### GET `/branches/`
+The caller's branches (every branch for a Superadmin or an organization-wide role).
 ### GET `/branches/{branch_id}`
+Another branch than the caller's → 404 (38b).
 
 ### POST `/branches/` — Superadmin only
 ```json
@@ -750,9 +829,10 @@ Query: `?branch_id=&threshold=10`
   "idempotency_key": "string" | null
 }
 ```
+Header `Idempotency-Key` required (or the body's `idempotency_key`); see Phase 38b.
 
 ### GET `/orders/`
-Query: `?page=&per_page=&status=&date_from=&date_to=&customer_id=&user_id=`
+Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=`
 
 ### GET `/orders/{reference}` — ID หรือ order_number
 
@@ -773,6 +853,8 @@ Query: `?page=&per_page=&status=&date_from=&date_to=&customer_id=&user_id=`
 ```json
 { "reason": "string" | null }
 ```
+`orders.cancel` (any unpaid order of the branch) or `orders.create` (the caller's own
+unpaid orders; another's → 403 `ORDER_NOT_YOURS`). Any payment → 400 `ORDER_ALREADY_PAID`.
 
 ### PUT `/orders/{order_id}/complete`
 
@@ -844,6 +926,7 @@ Rate limited like the staff route; over the limit →
   "notes": "string" | null
 }
 ```
+Header `Idempotency-Key` required (38b).
 
 ### GET `/payments/{order_id}`
 Order of another organization → 404.
@@ -924,6 +1007,8 @@ Query: `?page=&per_page=&source_branch_id=&dest_branch_id=&status=`
 
 ### GET `/transfers/{transfer_id}`
 
+`status`: `pending` → `approved` → `shipped` → `received`; `cancelled` from `pending`/`approved` (38b).
+
 ### PUT `/transfers/{transfer_id}/approve`
 ### PUT `/transfers/{transfer_id}/ship`
 ```json
@@ -941,6 +1026,7 @@ Query: `?page=&per_page=&source_branch_id=&dest_branch_id=&status=`
   ]
 }
 ```
+Every shipped item, received + damaged = shipped (else 422 `RECEIVE_INCOMPLETE`).
 ### PUT `/transfers/{transfer_id}/cancel`
 
 ---
@@ -957,6 +1043,7 @@ Query: `?page=&per_page=&source_branch_id=&dest_branch_id=&status=`
   "reason": "string" | null
 }
 ```
+Header `Idempotency-Key` required (38b).
 
 ### GET `/returns/`  `?page=&per_page=`
 ### GET `/returns/{return_id}`
@@ -1102,6 +1189,8 @@ must belong to `branch_id`; the list holds only the caller's organization.
 ```json
 { "closing_cash": 15000.00 }
 ```
+
+An unpaid order of the shift → 409 `SHIFT_HAS_PENDING_ORDERS` with `"orders": [...]` (38b).
 
 ### POST `/shifts/{shift_id}/cash-movements`
 ```json
