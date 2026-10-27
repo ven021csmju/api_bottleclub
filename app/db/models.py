@@ -852,6 +852,9 @@ class Order(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the order was fully paid (checkout, slip approval, or the payment
+    # that covered the total); reports count sales on this day (migration 012).
+    paid_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
 
     items: Mapped[list["OrderItem"]] = relationship(
@@ -873,6 +876,7 @@ class Order(Base):
         ),
         CheckConstraint("shipping_fee >= 0", name="ck_order_shipping_fee_non_negative"),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
+        Index("ix_orders_org_paid_at", "organization_id", "paid_at"),
         Index("ix_orders_status", "status"),
         Index(
             "uq_orders_idempotency_key",
@@ -952,7 +956,14 @@ class Payment(Base):
         BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
     )
     payment_method: Mapped[str] = mapped_column(String(30), nullable=False)
+    # What the payment settled (net of change). Cash handed over beyond it is
+    # tendered_amount - amount, given back as change (migration 012).
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    tendered_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # The open shift whose drawer took the money; NULL when none was open.
+    shift_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("shifts.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     external_reference: Mapped[str | None] = mapped_column(String(255))
     provider: Mapped[str | None] = mapped_column(String(50))
@@ -969,6 +980,11 @@ class Payment(Base):
 
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_payment_amount_positive"),
+        CheckConstraint(
+            "tendered_amount IS NULL OR tendered_amount >= amount",
+            name="ck_payment_tendered_covers_amount",
+        ),
+        Index("ix_payments_shift", "shift_id"),
         CheckConstraint(
             "status IN ('pending', 'completed', 'failed', 'refunded')",
             name="ck_payment_status",
@@ -999,6 +1015,10 @@ class Refund(Base):
     )
     external_reference: Mapped[str | None] = mapped_column(String(255))
     reason: Mapped[str | None] = mapped_column(Text)
+    # The open shift whose drawer paid a cash refund (migration 012).
+    shift_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("shifts.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1008,6 +1028,7 @@ class Refund(Base):
 
     __table_args__ = (
         CheckConstraint("refund_amount > 0", name="ck_refund_amount_positive"),
+        Index("ix_refunds_shift", "shift_id"),
         CheckConstraint(
             "status IN ('pending', 'completed', 'failed')",
             name="ck_refund_status",
