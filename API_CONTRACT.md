@@ -107,7 +107,7 @@ Managers see only their own orders).
 | `DELETE /users/{id}/roles/{role_id}` | did not exist | **new**: removes the role given at every branch (`branch_id` null) |
 | `GET /slip-verify/list`, `/{id}`, `/order/{id}`, `/approve`, `/reject` | every slip of the organization | through the order's branch (list filtered, others 404) |
 | `POST /slip-verify/upload`, `/checkslip` | `payments.create` anywhere | `payments.create` at the order's branch, or the caller's own order (403) |
-| `POST /payments/`, `GET /payments/{order_id}`, `POST /payments/{order_id}/refund`, `POST /refunds/` | any order of the organization | the permission at the order's branch, else 404 |
+| `POST /payments/`, `GET /payments/{order_id}`, `POST /payments/{order_id}/refund`, `POST /refunds/` (removed in 38a) | any order of the organization | the permission at the order's branch, else 404 |
 | `GET /refunds/`, `/refunds/{id}` | every branch; `{id}` of **any organization** | the caller's branches; else 404 |
 | `GET /returns/{id}`, `PUT /returns/{id}/process`, `POST /returns/` | `{id}` of **any organization**; an order of any branch | the permission at the return's / order's branch, else 404 |
 | `DELETE /roles/{id}` | blocked by assignments of deleted users | only live users count |
@@ -291,8 +291,12 @@ SELECT pg_reload_conf();`, `timedatectl set-timezone America/New_York`).
 
 ### Money integrity (Phase 38a)
 
-**Deploy order: apply migration 012 first, then deploy the code, then
-create the registers.**
+**Deploy order: apply migration 012, then 013, then deploy the code, then
+create the registers.** 013 adds the permission `orders.discount` to the
+system roles Superadmin and Manager of every organization; without it the
+38a code refuses every typed-in discount (also for Managers). Both can be
+applied ahead of the code: the code before 38a ignores them. Rollback: the
+code, then `013_..._rollback.sql`, then `012_..._rollback.sql`.
 
 | | 012 not applied | 012 applied |
 |---|---|---|
@@ -323,6 +327,15 @@ Rollback in the reverse order: the code first, then
 - **Price:** every order sells at the catalog price. `items[].unit_price` is
   optional; one that differs from the catalog is **422 `PRICE_MISMATCH`**
   and nothing is written.
+- **Discounts** typed in at the till (`items[].discount_amount`, the order's
+  `discount_amount`) need **`orders.discount`** at the branch (Manager,
+  Superadmin): without it **403 `DISCOUNT_NOT_ALLOWED`**. A line discount
+  may not exceed catalog price × quantity (**422 `DISCOUNT_EXCEEDS_LINE`**),
+  the order discount the subtotal after line discounts (**422
+  `DISCOUNT_EXCEEDS_TOTAL`**). Each accepted discount writes an
+  `ORDER.DISCOUNT` row to `audit_logs` (user, order, every discount, totals;
+  `GET /audit/?action=ORDER.DISCOUNT`). Points redeemed at checkout are not a
+  typed-in discount and need no permission.
 - **Payments** record what they settled (`amount`); cash also keeps what was
   handed over (`tendered_amount`; change = `tendered_amount - amount`).
   Change comes out of cash only: a non-cash payment beyond the amount due,
@@ -345,7 +358,13 @@ Rollback in the reverse order: the code first, then
   can be returned; per line, everything returned ≤ what was bought; all
   refunds of an order (returns and `POST /payments/{id}/refund`) ≤ what its
   payments settled. A unit refunds its share of the line scaled to what the
-  order took (order discount, redeemed points).
+  order took (order discount, redeemed points). Two returns processed at
+  the same moment wait for each other (the order row is locked), and the
+  restock locks the inventory row, so a sale of the same product meanwhile
+  is not lost.
+- **`POST /refunds/` is removed** (it answered with refunds left `pending`
+  that nothing completed): a POST there is **405**; `GET /refunds/` and
+  `GET /refunds/{id}` stay.
 - **Registers:** `GET /registers/` (`shifts.read`), `POST /registers/`,
   `PUT /registers/{id}` (`branches.update`: a Branch Admin at their branches).
 
@@ -360,6 +379,8 @@ Rollback in the reverse order: the code first, then
 | `PUT /returns/{id}/process` | only changed the status | refunds and restocks; 400 `RETURN_QUANTITY_EXCEEDED` / `REFUND_EXCEEDS_PAID` / `REFUND_METHOD_REQUIRED` |
 | `POST /payments/{order_id}/refund` | any order; each refund ≤ `amount_paid` | paid orders only (400 `ORDER_NOT_PAID`); all refunds ≤ settled (400 `REFUND_EXCEEDS_PAID`) |
 | `/reports/*` (daily-summary, sales, hours, category, financial, loyalty orders), e-commerce dashboard | `completed` orders on `completed_at`; cash = tendered | `paid` + `completed` on `paid_at`; cash net; slip = `bank_transfer` |
+| `POST /orders/` with a discount | anyone with `orders.create`, any amount, not recorded | `orders.discount` needed (403 `DISCOUNT_NOT_ALLOWED`); ≤ line / bill (422); audited |
+| `POST /refunds/` | created a `pending` refund | **405** (removed) |
 | `POST /shifts/open` | — | 400 `REGISTER_INACTIVE` on a closed register |
 | `/registers/` | did not exist | new |
 
@@ -945,16 +966,8 @@ Query: `?page=&per_page=&source_branch_id=&dest_branch_id=&status=`
 
 ## Refunds `/refunds`
 
-### POST `/refunds/`
-```json
-{
-  "order_id": 1,
-  "refund_amount": 100.00,
-  "refund_method": "cash",
-  "reason": "string" | null,
-  "external_reference": "string" | null
-}
-```
+`POST /refunds/` was removed in 38a (405). A refund is made by
+`PUT /returns/{id}/process` or `POST /payments/{order_id}/refund`.
 
 ### GET `/refunds/`  `?page=&per_page=&date_from=&date_to=&order_id=&status=`
 ### GET `/refunds/{refund_id}`
