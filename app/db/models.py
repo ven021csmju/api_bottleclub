@@ -635,7 +635,7 @@ class StockTransfer(Base):
         BigInteger, ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False
     )
     transfer_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="draft")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="pending")
     notes: Mapped[str | None] = mapped_column(Text)
     requested_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -669,7 +669,7 @@ class StockTransfer(Base):
     __table_args__ = (
         CheckConstraint("source_branch_id != dest_branch_id", name="ck_transfer_different_branches"),
         CheckConstraint(
-            "status IN ('draft', 'approved', 'in_transit', 'partially_received', 'received', 'cancelled')",
+            "status IN ('pending', 'approved', 'shipped', 'received', 'cancelled')",
             name="ck_stock_transfer_status",
         ),
     )
