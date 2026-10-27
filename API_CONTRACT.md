@@ -158,6 +158,44 @@ roles are not touched.
 | `POST /purchases` | any `branch_id`, even of another organization | `purchases.create` at `branch_id`; another branch or organization → **404** |
 | `POST /shifts/{id}/cash-movements` with `movement_type` other than `cash_in`/`cash_out` (`drop`, `pickup`, `opening`, ...) | **500** (database CHECK) | **422** |
 
+### Staff passwords and sessions (Phase 35e)
+
+**Deploy order: apply migration 010 first, then deploy the code.** The code
+reads `users.must_change_password`, `password_changed_at` and
+`temp_password_expires_at` on every login and every authenticated request;
+without 010 each of them is 500. The v0.1.7 code runs unchanged on the 010
+schema (it never names the new columns; new rows get `false` / `NULL`), so 010
+can be applied ahead of time. 010 sets `false` / `NULL` / `NULL` on every
+existing user: nobody is logged out or asked to change their password.
+Rollback: code first, then `010_..._rollback.sql`.
+
+| Route | Before (v0.1.7) | Now |
+|---|---|---|
+| `POST /users/` | `password` chosen by the admin, any length, even empty | **`password` → 422**; the response has `temporary_password` (shown once); the user must change it at the first login; it expires after `TEMP_PASSWORD_EXPIRE_HOURS` (72) |
+| `PUT /users/{id}` | — | `password` → 422 (use `POST /users/{id}/reset-password`) |
+| `POST /auth/login` | an inactive account got tokens | `status` not `active` → 401 `ACCOUNT_INACTIVE`, no token (checked after the password); expired temporary password → 401 `TEMPORARY_PASSWORD_EXPIRED`; new field `password_change_required` |
+| `POST /auth/logout` | answered 204 but revoked nothing: the refresh token worked 7 more days | body `{refresh_token}` revokes that token; **no body revokes every refresh token of the user** (logged out on every device) |
+| `POST /auth/register` | password up to 128 characters; over 72 bytes → 500 | 8 characters to 72 bytes (UTF-8); over → 422 |
+| Any route with `Authorization: Bearer`, `POST /auth/refresh` | a token kept working until it expired | a token issued before the user's last password change or reset → 401 `TOKEN_REVOKED`; while the user must change their password → 403 `PASSWORD_CHANGE_REQUIRED` (except change-password and logout) |
+| `POST /purchases/{id}/receive` | 500 after committing; an item could be received beyond what was ordered | 200 with `items`; beyond the quantity still due (also one item on two lines) → 400 `OVER_RECEIPT`, nothing written: correct the purchase order first |
+
+Frontend flow for a new or reset staff account:
+1. The admin creates the user (`POST /users/`) or resets them
+   (`POST /users/{id}/reset-password`) and hands over `temporary_password`
+   (never stored or shown again).
+2. The user logs in with it: `password_change_required: true`. Every other
+   call answers 403 `PASSWORD_CHANGE_REQUIRED`; show the change-password form.
+3. `POST /auth/change-password` answers a new token pair; use it from now on
+   (the tokens of step 2 are no longer needed; their refresh token is revoked).
+4. After `temp_password_expires_at` login is 401 `TEMPORARY_PASSWORD_EXPIRED`:
+   ask an admin for a new reset.
+
+`iat` (issue time) has whole seconds: a token is refused when its `iat` is
+before `password_changed_at` rounded down to the second. The pair answering a
+change is therefore valid; an access token issued in that same second before
+the change also stays valid until it expires (15 minutes at most); its refresh
+token is revoked in any case.
+
 ---
 
 ## Authentication
@@ -174,9 +212,18 @@ roles are not touched.
   "access_token": "string",
   "token_type": "bearer",
   "expires_in": 3600,
-  "refresh_token": "string"
+  "refresh_token": "string",
+  "password_change_required": false
 }
 ```
+- Wrong username or password, or a username used in two organizations → 401
+  `Invalid username or password`; 5 wrong passwords lock the account 30 minutes.
+- `status` not `active` → 401 `ACCOUNT_INACTIVE` (only after a correct password).
+- `password_change_required: true`: the password is temporary. Every route but
+  `POST /auth/change-password` and `POST /auth/logout` answers 403
+  `PASSWORD_CHANGE_REQUIRED`, `/auth/refresh` too.
+- Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED` (only
+  after a correct password); an admin resets it.
 
 ### GET `/auth/google` → 302 to Google, then GET `/auth/google/callback`
 Temporary rules until Google accounts are linked by their subject:
@@ -191,7 +238,7 @@ Temporary rules until Google accounts are linked by their subject:
 ### POST `/auth/register`
 ```json
 // Request
-{ "username": "string", "email": "user@example.com", "password": "min 8", "display_name": "string", "phone": null, "organization_id": null }
+{ "username": "string", "email": "user@example.com", "password": "8 characters to 72 bytes", "display_name": "string", "phone": null, "organization_id": null }
 
 // Response 201 → { "id", "username", "email", "display_name", "phone", "status", "created_at" }
 ```
@@ -206,11 +253,42 @@ elsewhere). 5 requests per hour per client IP (`RATE_LIMIT_REGISTER`), then 429.
 
 // Response 200 → same as login response
 ```
+401 `TOKEN_REVOKED` for a refresh token issued before the last password change;
+403 `PASSWORD_CHANGE_REQUIRED` while the password is temporary.
+
+### POST `/auth/change-password`
+Allowed while `password_change_required` (that is what it is for).
+10 per minute per IP (`RATE_LIMIT_CHANGE_PASSWORD`).
+```json
+// Request
+{ "current_password": "string", "new_password": "string" }
+
+// Response 200 → same as login response (password_change_required: false)
+```
+- `new_password`: 12 characters or more and at most 72 bytes (UTF-8; a Thai
+  character is 3 bytes) → else 422 `VALIDATION_ERROR`; equal to the username
+  (any case) → 422 `WEAK_PASSWORD`; equal to the current password → 422
+  `PASSWORD_REUSED`.
+- Wrong `current_password` → 400 `INVALID_CURRENT_PASSWORD`; it counts as a
+  failed login: after 5 the account is locked 30 minutes → 400 `ACCOUNT_LOCKED`
+  (login is locked too).
+- Account without a password (signs in with a social account) → 400 `NO_PASSWORD`.
+- Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED`.
+- On success every refresh token of the user is revoked and every access token
+  issued before is refused (401 `TOKEN_REVOKED`), on every device. Use the
+  returned pair.
 
 ### POST `/auth/logout`
 ```json
+// Request (optional)
+{ "refresh_token": "string" }
+
 // Response 204 No Content
 ```
+With `refresh_token`: that token is revoked (only if it is the caller's own).
+Without a body: **every** refresh token of the caller is revoked. The access
+token itself stays valid until it expires (at most 15 minutes); discard it.
+Allowed while `password_change_required`.
 
 ### GET `/auth/me`
 ```json
@@ -263,6 +341,7 @@ Query: `?page=&per_page=&search=&status=active`
 {
   "id": 1, "username": "string", "email": "string", "display_name": "string",
   "phone": "string" | null, "status": "active", "is_superadmin": false,
+  "must_change_password": false, "temp_password_expires_at": "..." | null,
   "roles": [{ "role_id": 2, "branch_id": 1 | null }],
   "created_at": "...", "updated_at": "..."
 }
@@ -271,16 +350,36 @@ Query: `?page=&per_page=&search=&status=active`
 
 ### POST `/users/`
 ```json
+// Request
 {
   "username": "string",
   "email": "user@example.com",
-  "password": "string",
   "display_name": "string",
   "phone": "0812345678" | null,
   "roles": [{ "role_id": 3, "branch_id": 1 | null }]
 }
+
+// Response 201 → the user (as GET) and, once only:
+{ ..., "must_change_password": true, "temp_password_expires_at": "...", "temporary_password": "string" }
 ```
 `branch_ids` was removed (422): a branch is part of a role assignment.
+`password` → 422: the server sets a random temporary password (16 characters),
+answered only here (`Cache-Control: no-store`); hand it to the user, who must
+change it at the first login. It expires after `TEMP_PASSWORD_EXPIRE_HOURS`
+(default 72).
+
+### POST `/users/{user_id}/reset-password`
+Permission `users.update` at a branch where the user has a role (else 404), and
+the same target rule as `PUT` (403 `PERMISSION_ESCALATION`); one's own account
+→ 403 `SELF_CHANGE` (use `POST /auth/change-password`).
+```json
+// Response 200 (Cache-Control: no-store)
+{ "user_id": 5, "temporary_password": "string", "temp_password_expires_at": "..." }
+```
+The old password stops working; every session of the user ends (refresh tokens
+revoked, access tokens 401 `TOKEN_REVOKED`); failed attempts and the lock are
+cleared. The user must change the temporary password at the next login. Also
+the way out of an expired temporary password.
 
 ### PUT `/users/{user_id}`
 ```json
@@ -291,7 +390,8 @@ Query: `?page=&per_page=&search=&status=active`
   "status": "active" | "inactive" | "suspended" | "locked"
 }
 ```
-Roles are not changed here; `branch_ids` → 422.
+Roles are not changed here; `branch_ids` → 422; `password` → 422 (use
+`POST /users/{user_id}/reset-password`).
 
 ### DELETE `/users/{user_id}` → 204
 
@@ -601,6 +701,12 @@ Only purchase orders of branches where `purchases.read` is held. Every route wit
   ]
 }
 ```
+Response 200: the receiving with its `items`. Every line is checked before
+anything is written: an item not in this purchase order → 404; more than the
+quantity still due (ordered − received; also the same item on two lines) → 400
+`OVER_RECEIPT`; nothing is written in either case. If the supplier delivered
+more than ordered, correct the purchase order first. A fully received order →
+400.
 ### POST `/purchases/{po_id}/cancel`
 
 ---
