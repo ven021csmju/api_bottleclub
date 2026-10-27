@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.db.models import Branch, Order, Organization, Return, User
+from tests.integration.conftest import idem
 from tests.integration.scope_fixtures import API, as_, orders, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -49,9 +50,9 @@ def test_a_return_of_another_branch_or_organization_is_404(client: TestClient, w
 
 def test_a_return_for_an_order_of_another_branch_is_404(client: TestClient, world, orders, as_):
     body = {"order_id": orders["b1"], "items": [{"order_item_id": 1, "product_id": 1, "quantity": 1}]}
-    resp = client.post(f"{API}/returns/", json=body, headers=as_("ba_a", "A"))
+    resp = client.post(f"{API}/returns/", json=body, headers=idem(as_("ba_a", "A")))
     assert (resp.status_code, resp.json()["detail"]) == (404, "Order not found")
     body["order_id"] = orders["a1"]
-    resp = client.post(f"{API}/returns/", json=body, headers=as_("ba_a", "A"))
+    resp = client.post(f"{API}/returns/", json=body, headers=idem(as_("ba_a", "A")))
     # Past the branch check; the made-up item is then refused by the service.
     assert resp.json()["detail"] != "Order not found"

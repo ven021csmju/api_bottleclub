@@ -14,6 +14,7 @@ whole run via ``pytest.exit`` before a single statement is executed.
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Generator, NoReturn
 
 import pytest
@@ -158,6 +159,13 @@ def client(session: Session, rate_limit_disabled: None) -> Generator[TestClient,
 # ---------------------------------------------------------------------------
 # Seed data helpers
 # ---------------------------------------------------------------------------
+def idem(headers: dict) -> dict:
+    """``headers`` and a fresh Idempotency-Key unless they have one: POST
+    /orders/, checkout, /payments/ and /returns/ refuse a request without one
+    (Phase 38b)."""
+    return {"Idempotency-Key": uuid.uuid4().hex, **headers}
+
+
 def grant(session: Session, user_id: int, org_id: int, codes: list[str], branch_id: int | None = None) -> None:
     """Give the user a role holding ``codes`` at ``branch_id`` (None: every branch).
 

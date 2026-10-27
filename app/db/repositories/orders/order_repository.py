@@ -14,17 +14,6 @@ from app.db.models import (
 
 class OrderRepository:
     @staticmethod
-    def find_by_idempotency_key(
-        db: Session, org_id: int, idempotency_key: str
-    ) -> Order | None:
-        return db.execute(
-            select(Order).where(
-                Order.idempotency_key == idempotency_key,
-                Order.organization_id == org_id,
-            )
-        ).scalar_one_or_none()
-
-    @staticmethod
     def get_branch(db: Session, org_id: int, branch_id: int) -> Branch | None:
         return db.execute(
             select(Branch).where(Branch.id == branch_id, Branch.organization_id == org_id)

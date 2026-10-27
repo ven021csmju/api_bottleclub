@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from tests.integration.conftest import idem
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 WINE_PRICE = Decimal("350.00")
@@ -58,12 +59,12 @@ def open_shift(client: TestClient, headers: dict, branch_id: int, register_id: i
 
 def new_order(client: TestClient, headers: dict, branch_id: int, items: list[tuple[int, int]], **extra) -> dict:
     """``items``: (product_id, quantity); prices come from the catalog."""
-    resp = client.post(f"{API}/orders/", headers=headers, json={
+    resp = client.post(f"{API}/orders/", headers=idem(headers), json={
         "branch_id": branch_id, "items": [{"product_id": p, "quantity": q} for p, q in items], **extra})
     assert resp.status_code in (200, 201), resp.text
     return resp.json()["data"]
 
 
 def checkout(client: TestClient, headers: dict, order_id: int, *payments: tuple[str, str], **extra):
-    return client.post(f"{API}/orders/{order_id}/checkout", headers=headers, json={
+    return client.post(f"{API}/orders/{order_id}/checkout", headers=idem(headers), json={
         "payments": [{"payment_method": m, "amount": a} for m, a in payments], **extra})

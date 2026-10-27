@@ -36,10 +36,6 @@ def test_replace_response_has_token_and_order_id():
 
 class _StubRepo:
     @staticmethod
-    def find_by_idempotency_key(db, org_id, key):
-        return None
-
-    @staticmethod
     def get_branch(db, org_id, branch_id):
         branch = MagicMock()
         branch.code = "MBR"
@@ -99,28 +95,6 @@ def test_create_returns_plaintext_token_and_hash_only(monkeypatch):
         token.encode("utf-8")
     ).hexdigest()
     assert order.tracking_token_hash != token
-
-
-def test_idempotency_replay_returns_existing_without_token(monkeypatch):
-    import app.domains.orders.service as svc
-
-    existing = MagicMock()
-    existing.tracking_token_hash = "old-hash"
-
-    class StubRepo(_StubRepo):
-        @staticmethod
-        def find_by_idempotency_key(db, org_id, key):
-            return existing
-
-    monkeypatch.setattr(svc, "OrderRepository", StubRepo)
-    monkeypatch.setattr(svc, "generate_order_number", lambda db, code: "ORD-001")
-    fake_db = MagicMock()
-    order, token = OrderService.create_order(
-        fake_db, org_id=1, branch_id=1, user_id=1,
-        data={"items": [], "idempotency_key": "replay-key"}, request_id="",
-    )
-    assert order is existing
-    assert token is None  # original plaintext unrecoverable on replay
 
 
 # ---------------------------------------------------------------------------

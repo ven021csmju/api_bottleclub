@@ -19,7 +19,7 @@ from app.domains.slip_verify import service as slip_svc
 from app.services import user_events
 from app.services.ocr_service import OCRResult
 from app.shared.security import create_access_token
-from tests.integration.conftest import grant
+from tests.integration.conftest import grant, idem
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ def _seed_product(session, org_id: int, sku: str, name: str = "Beer Bottle", bra
 def _create_order(client, headers, branch_id, product, qty=3, unit="50.00"):
     resp = client.post(
         "/api/v1/orders/",
-        headers=headers,
+        headers=idem(headers),
         json={
             "branch_id": branch_id,
             "items": [{"product_id": product.id, "quantity": qty, "unit_price": unit}],
@@ -132,7 +132,7 @@ def _create_order(client, headers, branch_id, product, qty=3, unit="50.00"):
 def _checkout(client, headers, order_id, amount):
     resp = client.post(
         f"/api/v1/orders/{order_id}/checkout",
-        headers=headers,
+        headers=idem(headers),
         json={"payments": [{"payment_method": "cash", "amount": amount}]},
     )
     assert resp.status_code == 200, resp.text
@@ -304,7 +304,7 @@ class TestOrderEvents:
 
         resp = client.post(
             "/api/v1/orders/",
-            headers=multiperm_headers,
+            headers=idem(multiperm_headers),
             json={
                 "branch_id": seed_branch,
                 "items": [{"product_id": product.id, "quantity": 5, "unit_price": "50.00"}],
@@ -530,13 +530,13 @@ class TestRefundReturnEvents:
         order = session.get(Order, order_id)
         order_item = order.items[0]
         # Only a paid order can be returned (38a).
-        paid = client.post(f"/api/v1/orders/{order_id}/checkout", headers=multiperm_headers,
+        paid = client.post(f"/api/v1/orders/{order_id}/checkout", headers=idem(multiperm_headers),
                            json={"payments": [{"payment_method": "cash", "amount": "100.00"}]})
         assert paid.status_code == 200, paid.text
 
         resp = client.post(
             "/api/v1/returns/",
-            headers=multiperm_headers,
+            headers=idem(multiperm_headers),
             json={
                 "order_id": order_id,
                 "items": [

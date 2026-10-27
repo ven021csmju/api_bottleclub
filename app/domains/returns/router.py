@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.middleware.access import Access, order_branch
 from app.middleware.auth import get_access, get_current_branch, require_permission
 from app.shared.exceptions import NotFoundException
+from app.shared.idempotency import run_idempotent
 from app.db.models import User
 
 from .schemas import (
@@ -38,15 +39,20 @@ def create_return(
 ) -> ReturnResponse:
     # The order must be of a branch where the caller may take returns too.
     access.ensure_at("returns.create", order_branch(db, access.org_id, body.order_id), "Order")
-    ret = ReturnService.create_return(
-        db=db,
-        org_id=user.organization_id,
-        branch_id=branch_id,
-        user_id=user.id,
-        data=body.model_dump(),
-        request_id=getattr(request.state, "request_id", ""),
-    )
-    return ReturnResponse.model_validate(ret)
+
+    def run() -> ReturnResponse:
+        ret = ReturnService.create_return(
+            db=db,
+            org_id=user.organization_id,
+            branch_id=branch_id,
+            user_id=user.id,
+            data=body.model_dump(),
+            request_id=getattr(request.state, "request_id", ""),
+        )
+        return ReturnResponse.model_validate(ret)
+
+    # Needs an Idempotency-Key (app/shared/idempotency.py).
+    return run_idempotent(request, db, user.id, body, run)
 
 
 @router.get("/", response_model=ReturnListResponse)

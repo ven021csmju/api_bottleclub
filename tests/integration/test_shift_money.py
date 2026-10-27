@@ -10,6 +10,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import checkout, new_order, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -35,7 +36,7 @@ def day(client: TestClient, world, shop, as_) -> dict:
     o2 = new_order(client, pos, world.A, [(shop.wine, 1), (shop.cheese, 1)], shift_id=shift)
     assert checkout(client, pos, o2["id"], ("credit_card", "530.00")).status_code == 200
     o3 = new_order(client, pos, world.A, [(shop.wine, 1)], shift_id=shift)
-    resp = client.post(f"{API}/payments/", headers=as_("ba_a", "A"),
+    resp = client.post(f"{API}/payments/", headers=idem(as_("ba_a", "A")),
                        json={"order_id": o3["id"], "payment_method": "bank_transfer", "amount": "350.00"})
     assert resp.status_code in (200, 201), resp.text
     for kind, amount in (("cash_in", "200.00"), ("cash_out", "50.00")):

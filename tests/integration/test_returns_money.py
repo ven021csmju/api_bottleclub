@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import checkout, new_order, on_hand, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -27,7 +28,7 @@ def _refunds(session, order_id):
 
 
 def _return(client, as_, order, line, qty, restock=True):
-    return client.post(f"{API}/returns/", headers=as_("ba_a", "A"), json={
+    return client.post(f"{API}/returns/", headers=idem(as_("ba_a", "A")), json={
         "order_id": order["id"], "reason": "corked",
         "items": [{"order_item_id": line["id"], "product_id": line["product_id"], "quantity": qty, "restock": restock}]})
 

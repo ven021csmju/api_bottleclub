@@ -18,7 +18,7 @@ from app.services import user_events
 from app.services.fraud_detection import FraudAssessment
 from app.services.ocr_service import OCRResult
 from app.shared.security import create_access_token
-from tests.integration.conftest import grant
+from tests.integration.conftest import grant, idem
 
 SLIP_PERMS = [
     "orders.create",
@@ -120,7 +120,7 @@ def _order(client, headers, session, seed_user, sku: str, price: str = "100.00")
     session.commit()
     resp = client.post(
         "/api/v1/orders/",
-        headers=headers,
+        headers=idem(headers),
         json={
             "branch_id": seed_user["branch_id"],
             "items": [{"product_id": product.id, "quantity": 1, "unit_price": price}],

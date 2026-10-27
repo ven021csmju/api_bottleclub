@@ -12,6 +12,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import checkout, new_order, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -44,7 +45,7 @@ def sales(client: TestClient, session, world, shop, as_) -> None:
     _stamp(session, o1["id"], PAID_27)
 
     o2 = new_order(client, pos, world.A, [(shop.wine, 1)], order_source="ecommerce")
-    resp = client.post(f"{API}/payments/", headers=ba,
+    resp = client.post(f"{API}/payments/", headers=idem(ba),
                        json={"order_id": o2["id"], "payment_method": "bank_transfer", "amount": "350.00"})
     assert resp.status_code in (200, 201), resp.text
     _stamp(session, o2["id"], PAID_27)
@@ -95,7 +96,7 @@ def test_financial_payment_methods_are_net_and_name_the_transfer(client, world, 
 def test_ecommerce_dashboard_counts_the_paid_transfer(client, session, world, shop, as_):
     """'Today' of the dashboard: an e-commerce order paid by transfer just now."""
     o = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)], order_source="ecommerce")
-    resp = client.post(f"{API}/payments/", headers=as_("ba_a", "A"),
+    resp = client.post(f"{API}/payments/", headers=idem(as_("ba_a", "A")),
                        json={"order_id": o["id"], "payment_method": "bank_transfer", "amount": "350.00"})
     assert resp.status_code in (200, 201), resp.text
     dash = client.get(f"{API}/reports/ecommerce/dashboard", headers=as_("orgmgr")).json()["data"]

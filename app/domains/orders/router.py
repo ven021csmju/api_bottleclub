@@ -18,6 +18,7 @@ from app.config.settings import settings
 from app.shared.audit import AuditContext
 from app.shared.clock import StoreDateTime
 from app.shared.exceptions import ForbiddenException, NotFoundException
+from app.shared.idempotency import run_idempotent
 
 from .schemas import (
     CheckoutRequest,
@@ -73,20 +74,26 @@ def create_order(
     audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> OrderCreationResponse:
-    order, tracking_token = OrderService.create_order(
-        db=db,
-        org_id=user.organization_id,
-        branch_id=branch_id,
-        user_id=user.id,
-        data=body.model_dump(),
-        request_id=getattr(request.state, "request_id", ""),
-        can_discount=access.can_at("orders.discount", branch_id),
-        audit=audit,
-    )
-    order_response = OrderResponse.model_validate(order)
-    return OrderCreationResponse(
-        **order_response.model_dump(), tracking_token=tracking_token
-    )
+    """Needs an Idempotency-Key (app/shared/idempotency.py); a replay shows
+    the tracking token as null (it is shown once)."""
+
+    def run() -> OrderCreationResponse:
+        order, tracking_token = OrderService.create_order(
+            db=db,
+            org_id=user.organization_id,
+            branch_id=branch_id,
+            user_id=user.id,
+            data=body.model_dump(),
+            request_id=getattr(request.state, "request_id", ""),
+            can_discount=access.can_at("orders.discount", branch_id),
+            audit=audit,
+        )
+        order_response = OrderResponse.model_validate(order)
+        return OrderCreationResponse(
+            **order_response.model_dump(), tracking_token=tracking_token
+        )
+
+    return run_idempotent(request, db, user.id, body, run, secret_fields=("tracking_token",))
 
 
 @router.post(
@@ -325,16 +332,21 @@ def checkout_order(
     access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> CheckoutResponse:
+    """Needs an Idempotency-Key (app/shared/idempotency.py)."""
     _scoped_order(db, access, order_id, "payments.create")
-    order = OrderService.checkout_order(
-        db=db,
-        org_id=user.organization_id,
-        order_id=order_id,
-        user_id=user.id,
-        data=body.model_dump(),
-        request_id=getattr(request.state, "request_id", ""),
-    )
-    return CheckoutResponse.model_validate(order)
+
+    def run() -> CheckoutResponse:
+        order = OrderService.checkout_order(
+            db=db,
+            org_id=user.organization_id,
+            order_id=order_id,
+            user_id=user.id,
+            data=body.model_dump(),
+            request_id=getattr(request.state, "request_id", ""),
+        )
+        return CheckoutResponse.model_validate(order)
+
+    return run_idempotent(request, db, user.id, body, run)
 
 
 # ---------------------------------------------------------------------------

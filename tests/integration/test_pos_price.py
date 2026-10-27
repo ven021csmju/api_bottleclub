@@ -10,6 +10,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import WINE_PRICE, on_hand, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -20,7 +21,7 @@ def _post(client, as_, world, product: int, price: str | None, source: str = "po
     item = {"product_id": product, "quantity": 2}
     if price is not None:
         item["unit_price"] = price
-    return client.post(f"{API}/orders/", headers=as_("pos_a", "A"),
+    return client.post(f"{API}/orders/", headers=idem(as_("pos_a", "A")),
                        json={"branch_id": world.A, "order_source": source, "items": [item]})
 
 

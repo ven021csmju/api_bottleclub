@@ -10,6 +10,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import checkout, new_order, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -67,13 +68,13 @@ def test_overpaying_without_cash_change_is_400_and_records_nothing(client: TestC
 def test_post_payments_settles_only_the_rest_and_marks_the_order_paid(client: TestClient, session, world, shop, as_):
     order = _order(client, as_, world, shop)
     headers = as_("pos_a", "A")
-    first = client.post(f"{API}/payments/", headers=headers,
+    first = client.post(f"{API}/payments/", headers=idem(headers),
                         json={"order_id": order["id"], "payment_method": "cash", "amount": "500.00"})
     assert first.status_code in (200, 201), first.text
-    card = client.post(f"{API}/payments/", headers=headers,
+    card = client.post(f"{API}/payments/", headers=idem(headers),
                        json={"order_id": order["id"], "payment_method": "credit_card", "amount": "500.00"})
     assert (card.status_code, card.json()["code"]) == (400, "OVERPAYMENT")
-    second = client.post(f"{API}/payments/", headers=headers,
+    second = client.post(f"{API}/payments/", headers=idem(headers),
                          json={"order_id": order["id"], "payment_method": "cash", "amount": "500.00"})
     assert second.status_code in (200, 201), second.text
     assert _payments(session, order["id"]) == [
@@ -82,6 +83,6 @@ def test_post_payments_settles_only_the_rest_and_marks_the_order_paid(client: Te
     from app.db.models import Order
     o = session.get(Order, order["id"])
     assert (o.status, Decimal(o.change_amount), o.paid_at is not None) == ("paid", Decimal("120.00"), True)
-    again = client.post(f"{API}/payments/", headers=headers,
+    again = client.post(f"{API}/payments/", headers=idem(headers),
                         json={"order_id": order["id"], "payment_method": "cash", "amount": "1.00"})
     assert (again.status_code, again.json()["code"]) == (400, "OVERPAYMENT")

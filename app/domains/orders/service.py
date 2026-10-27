@@ -123,14 +123,6 @@ class OrderService:
     ) -> tuple[Order, str | None]:
         """``can_discount``: the caller holds orders.discount at the branch;
         a discount typed in by anyone else is 403 (``audit`` records each one)."""
-        idempotency_key = data.get("idempotency_key")
-        if idempotency_key:
-            existing = OrderRepository.find_by_idempotency_key(
-                db, org_id, idempotency_key
-            )
-            if existing:
-                return existing, None
-
         branch = OrderRepository.get_branch(db, org_id, branch_id)
         if not branch:
             raise NotFoundException(detail="Branch not found")
@@ -178,7 +170,6 @@ class OrderService:
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
             order_source=order_source,
-            idempotency_key=idempotency_key,
         )
         # Issue a public-tracking capability token at order creation. Only the
         # SHA-256 digest is stored; the plaintext is returned once in the

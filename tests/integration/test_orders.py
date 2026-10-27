@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from app.db.models import Inventory, Order, Product
 from app.middleware.rate_limit import limiter
 from app.shared.security import create_access_token, hash_password
-from tests.integration.conftest import grant
+from tests.integration.conftest import grant, idem
 
 
 def _make_tracking_order(session, org_id: int, branch_id: int, user_id: int, tracking_number: str, order_number: str) -> Order:
@@ -143,7 +143,7 @@ class TestCreateOrder:
 
         resp = client.post(
             "/api/v1/orders/",
-            headers=auth_headers,
+            headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
                 "order_source": "ecommerce",
@@ -175,7 +175,7 @@ class TestCreateOrder:
 
         resp = client.post(
             "/api/v1/orders/",
-            headers=auth_headers,
+            headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
                 "order_source": "ecommerce",
@@ -213,7 +213,7 @@ class TestCreateOrder:
 
         resp = client.post(
             "/api/v1/orders/",
-            headers=auth_headers,
+            headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
                 "items": [
@@ -255,7 +255,7 @@ class TestCreateOrder:
 
         resp = client.post(
             "/api/v1/orders/",
-            headers=auth_headers,
+            headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
                 "items": [
@@ -294,7 +294,7 @@ class TestCancelOrder:
 
         create_resp = client.post(
             "/api/v1/orders/",
-            headers=auth_headers,
+            headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
                 "items": [
@@ -738,7 +738,7 @@ class TestTrackingTokenInvalidation:
 
         create_resp = client.post(
             "/api/v1/orders/",
-            headers=staff_headers,
+            headers=idem(staff_headers),
             json={
                 "branch_id": seed_branch,
                 "items": [

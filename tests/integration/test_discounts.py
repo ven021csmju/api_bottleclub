@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.integration.conftest import idem
 from tests.integration.money_fixtures import on_hand, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
@@ -19,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 def _order(client, headers, world, shop, wine_discount="0", order_discount="0"):
     """2 wine (700) + 1 cheese (180)."""
-    return client.post(f"{API}/orders/", headers=headers, json={
+    return client.post(f"{API}/orders/", headers=idem(headers), json={
         "branch_id": world.A, "discount_amount": order_discount,
         "items": [{"product_id": shop.wine, "quantity": 2, "discount_amount": wine_discount},
                   {"product_id": shop.cheese, "quantity": 1}]})

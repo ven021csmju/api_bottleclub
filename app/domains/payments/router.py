@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.middleware.access import Access, order_branch
 from app.middleware.auth import get_access, require_permission
 from app.db.models import User
+from app.shared.idempotency import run_idempotent
 
 from .schemas import PaymentCreate, PaymentRefundRequest, PaymentResponse
 from .service import PaymentService
@@ -15,20 +16,26 @@ router = APIRouter()
 
 @router.post("/", response_model=PaymentResponse)
 def create_payment(
+    request: Request,
     body: PaymentCreate,
     user: User = Depends(require_permission("payments.create", scope="any")),
     access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> PaymentResponse:
+    """Needs an Idempotency-Key (app/shared/idempotency.py)."""
     access.ensure_at("payments.create", order_branch(db, access.org_id, body.order_id), "Order")
-    payment = PaymentService.create_payment(
-        db=db,
-        org_id=user.organization_id,
-        order_id=body.order_id,
-        user_id=user.id,
-        data=body.model_dump(),
-    )
-    return PaymentResponse.model_validate(payment)
+
+    def run() -> PaymentResponse:
+        payment = PaymentService.create_payment(
+            db=db,
+            org_id=user.organization_id,
+            order_id=body.order_id,
+            user_id=user.id,
+            data=body.model_dump(),
+        )
+        return PaymentResponse.model_validate(payment)
+
+    return run_idempotent(request, db, user.id, body, run)
 
 
 @router.get("/{order_id}", response_model=list[PaymentResponse])

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.db.models import Inventory, Order, Product
 from app.shared.security import create_access_token
-from tests.integration.conftest import grant
+from tests.integration.conftest import grant, idem
 
 ALL_PERMS = [
     "orders.read",
@@ -62,7 +62,7 @@ class TestOrderSourceCreate:
         }
         if order_source is not None:
             payload["order_source"] = order_source
-        return client.post("/api/v1/orders/", headers=auth, json=payload)
+        return client.post("/api/v1/orders/", headers=idem(auth), json=payload)
 
     def test_default_is_pos(self, client, session, auth, seed_branch, seed_user):
         product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)

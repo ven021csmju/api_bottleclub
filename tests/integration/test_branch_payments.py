@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.db.models import Branch, Order, Organization, Refund, User
+from tests.integration.conftest import idem
 from tests.integration.scope_fixtures import API, as_, orders, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -46,7 +47,7 @@ def test_payments_of_an_order_of_another_branch_are_404(client: TestClient, worl
 
 def test_paying_or_refunding_an_order_of_another_branch_is_404(client: TestClient, world, orders, as_):
     pay = {"order_id": orders["b1"], "payment_method": "cash", "amount": "10"}
-    assert client.post(f"{API}/payments/", json=pay, headers=as_("pos_a", "A")).status_code == 404
+    assert client.post(f"{API}/payments/", json=pay, headers=idem(as_("pos_a", "A"))).status_code == 404
     refund = {"refund_amount": "1", "refund_method": "cash", "reason": "x"}
     assert client.post(f"{API}/payments/{orders['b1']}/refund", json=refund, headers=as_("ba_a", "A")).status_code == 404
     body = {"order_id": orders["b1"], "refund_amount": "1", "refund_method": "cash"}
@@ -54,7 +55,7 @@ def test_paying_or_refunding_an_order_of_another_branch_is_404(client: TestClien
     assert client.post(f"{API}/refunds/", json=body, headers=as_("ba_a", "A")).status_code == 405
 
     pay["order_id"] = orders["a1"]
-    assert client.post(f"{API}/payments/", json=pay, headers=as_("pos_a", "A")).status_code == 200
+    assert client.post(f"{API}/payments/", json=pay, headers=idem(as_("pos_a", "A"))).status_code == 200
 
 
 def test_refunds_list_and_read_only_within_the_callers_branches(client: TestClient, world, refunds, as_):
