@@ -35,7 +35,7 @@ def _order(session: Session, world, number: str, at: str, total: str, **extra):
 
     order = Order(
         organization_id=world.org, branch_id=world.A, order_number=number, user_id=world.users["sa"],
-        status="completed", created_at=utc(at), completed_at=utc(at),
+        status="completed", created_at=utc(at), completed_at=utc(at), paid_at=utc(at),
         subtotal=Decimal(total), grand_total=Decimal(total), amount_paid=Decimal(total), **extra,
     )
     session.add(order)

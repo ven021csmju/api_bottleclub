@@ -162,7 +162,7 @@ def _category_breakdown(
     branch_id: Optional[int],
     order_source: Optional[str] = None,
 ) -> list[dict]:
-    from app.db.repositories.reports.report_repository import ReportRepository
+    from app.db.repositories.reports.report_repository import SOLD_STATUSES
     from app.db.models import Category, Product, OrderItem, Order
     from sqlalchemy import func, select
 
@@ -170,8 +170,8 @@ def _category_breakdown(
 
     order_filter = [
         Order.organization_id == organization_id,
-        Order.status == "completed",
-        *in_store_days(Order.completed_at, date_from, date_to),
+        Order.status.in_(SOLD_STATUSES),
+        *in_store_days(Order.paid_at, date_from, date_to),
     ]
     if branch_id:
         order_filter.append(Order.branch_id == branch_id)

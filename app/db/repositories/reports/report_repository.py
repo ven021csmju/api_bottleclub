@@ -16,6 +16,9 @@ from app.db.models import (
 )
 from app.shared.clock import in_store_days, store_hour, store_sales_day
 
+#: A sale counts once it is paid, on the day it was paid (orders.paid_at).
+SOLD_STATUSES = ("paid", "completed")
+
 
 class ReportRepository:
     @staticmethod
@@ -28,8 +31,8 @@ class ReportRepository:
     ):
         order_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
-            *in_store_days(Order.completed_at, date_from, date_to),
+            Order.status.in_(SOLD_STATUSES),
+            *in_store_days(Order.paid_at, date_from, date_to),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
@@ -93,8 +96,8 @@ class ReportRepository:
         order_filter = ReportRepository._order_filter(
             organization_id, date_from, date_to, branch_id, order_source
         )
-        # The hour on the shop's wall clock (STORE_TIMEZONE).
-        hour = store_hour(Order.created_at)
+        # The hour (shop's wall clock, STORE_TIMEZONE) the sale was paid.
+        hour = store_hour(Order.paid_at)
         return db.execute(
             select(
                 hour.label("hour"),
@@ -112,8 +115,8 @@ class ReportRepository:
     ):
         order_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
-            *in_store_days(Order.completed_at, target_date, target_date),
+            Order.status.in_(SOLD_STATUSES),
+            *in_store_days(Order.paid_at, target_date, target_date),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
@@ -132,7 +135,7 @@ class ReportRepository:
         # Counted on the day the money was refunded, not the day of the sale.
         refund_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
+            Order.status.in_(SOLD_STATUSES),
             *in_store_days(Refund.created_at, target_date, target_date),
             # Money actually returned: not pending, not failed.
             Refund.status == "completed",
@@ -201,13 +204,13 @@ class ReportRepository:
     ) -> list[tuple]:
         order_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
-            *in_store_days(Order.completed_at, date_from, date_to),
+            Order.status.in_(SOLD_STATUSES),
+            *in_store_days(Order.paid_at, date_from, date_to),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
 
-        sales_day = store_sales_day(Order.completed_at)
+        sales_day = store_sales_day(Order.paid_at)
         return list(
             db.execute(
                 select(
@@ -230,7 +233,7 @@ class ReportRepository:
         # Counted on the day the money was refunded, not the day of the sale.
         refund_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
+            Order.status.in_(SOLD_STATUSES),
             *in_store_days(Refund.created_at, date_from, date_to),
             # Money actually returned: not pending, not failed.
             Refund.status == "completed",
@@ -257,8 +260,8 @@ class ReportRepository:
     ) -> list[tuple]:
         order_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
-            *in_store_days(Order.completed_at, date_from, date_to),
+            Order.status.in_(SOLD_STATUSES),
+            *in_store_days(Order.paid_at, date_from, date_to),
             Payment.status == "completed",
         ]
         if branch_id:
@@ -315,9 +318,9 @@ class ReportRepository:
     ) -> list[tuple]:
         order_filter = [
             Order.organization_id == organization_id,
-            Order.status == "completed",
+            Order.status.in_(SOLD_STATUSES),
             Order.customer_id.isnot(None),
-            *in_store_days(Order.completed_at, date_from, date_to),
+            *in_store_days(Order.paid_at, date_from, date_to),
         ]
         return list(
             db.execute(

@@ -137,6 +137,7 @@ class TestReportsOrderSourceFilter:
             amount_paid=amount,
             change_amount=0,
             completed_at=datetime.now(timezone.utc),
+            paid_at=datetime.now(timezone.utc),
         )
         session.add(order)
         session.flush()

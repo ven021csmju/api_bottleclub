@@ -178,7 +178,7 @@ def sales(session: Session, world: World) -> str:
     for where, total in (("A", "100"), ("B", "250")):
         session.add(Order(
             organization_id=world.org, branch_id=world.branch[where], order_number=f"SALE-{where}",
-            user_id=world.users["sa"], status="completed", completed_at=at,
+            user_id=world.users["sa"], status="completed", completed_at=at, paid_at=at,
             subtotal=Decimal(total), grand_total=Decimal(total), amount_paid=Decimal(total),
         ))
     session.commit()
