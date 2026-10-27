@@ -5,6 +5,7 @@ duplicate checks, settlement (``OrderService.settle_order``) and moderation
 run for real.
 """
 import io
+from datetime import date, time
 from decimal import Decimal
 
 import pytest
@@ -68,6 +69,7 @@ class FakeSlip:
         self.fail = False
         self.risk = 0.05  # < 0.20 -> verified, 0.20..0.50 -> review
         self.receiver: str | None = None
+        self.when: str | None = None  # the date/time line of the slip
         self.real_assess = False  # True: FraudDetectionService.assess runs for real
 
         def fake_extract_text(image_bytes, **kwargs):
@@ -78,6 +80,8 @@ class FakeSlip:
                 texts.append(f"รหัสอ้างอิง {self.reference}")
             if self.receiver:
                 texts += ["ไปยัง", self.receiver]
+            if self.when:
+                texts.append(self.when)
             if self.amount is not None:
                 texts += [f"{self.amount:,.2f}", "บาท", "จำนวนเงิน"]  # 1,250.00 as on the slip
             return OCRResult(texts=texts, confidences=[0.99] * len(texts))
@@ -642,3 +646,30 @@ class TestSlipOwnership:
 
         assert resp.status_code == 200, resp.text
         assert _status(resp) == "verified"
+
+
+class TestSlipDateAndTime:
+    """The OCR reads the slip's date and time (Phase 36h: ocr_time was a
+    timestamp column refusing the time, so such an upload was 500)."""
+
+    @pytest.mark.parametrize(
+        ("line", "expected_date", "expected_time"),
+        [
+            ("15 ม.ค. 69 14:05 น.", date(2026, 1, 15), time(14, 5)),  # invented
+            ("03/02/2026 09:07:45", date(2026, 2, 3), time(9, 7, 45)),  # invented
+        ],
+    )
+    def test_upload_stores_the_date_and_time_read(
+        self, client, session, headers, seed_user, slip, line, expected_date, expected_time
+    ):
+        order_id, total = _order(client, headers, session, seed_user, f"SLIP-WHEN-{expected_time.second}")
+        slip.amount, slip.reference, slip.when = total, f"REFWHEN{expected_time.second:04d}", line
+
+        resp = _upload(client, headers, order_id, _image(70 + expected_time.second))
+
+        assert resp.status_code == 200, resp.text
+        assert _status(resp) == "verified"
+        session.expire_all()
+        verification = session.get(PaymentVerification, _verification_id(session, order_id, "verified"))
+        assert verification.ocr_date == expected_date
+        assert verification.ocr_time == expected_time

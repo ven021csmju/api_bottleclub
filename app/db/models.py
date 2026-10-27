@@ -16,6 +16,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
     text,
@@ -1499,7 +1500,8 @@ class PaymentVerification(Base):
     ocr_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     ocr_reference: Mapped[str | None] = mapped_column(String(255))
     ocr_date: Mapped[datetime.date | None] = mapped_column(Date)
-    ocr_time: Mapped[datetime.time | None] = mapped_column(DateTime)
+    # The time of day read from the slip; its date is ocr_date (migration 011).
+    ocr_time: Mapped[datetime.time | None] = mapped_column(Time)
     ocr_sender_name: Mapped[str | None] = mapped_column(String(255))
     ocr_receiver_name: Mapped[str | None] = mapped_column(String(255))
     ocr_sender_account: Mapped[str | None] = mapped_column(String(50))
