@@ -100,6 +100,13 @@ class User(Base):
     locked_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_ip: Mapped[str | None] = mapped_column(String(45))
+    # Migration 010. must_change_password: every route but change-password is
+    # 403 until the user sets their own password; temp_password_expires_at: a
+    # temporary password cannot log in after it; password_changed_at: access
+    # tokens issued before this second are refused.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    password_changed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    temp_password_expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
