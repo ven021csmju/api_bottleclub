@@ -188,7 +188,9 @@ def _category_breakdown(
         .join(Product, Product.id == OrderItem.product_id)
         .outerjoin(Category, Category.id == Product.category_id)
         .where(*order_filter)
-        .group_by(func.coalesce(Category.name, "Uncategorized"))
+        # Category.name, not the coalesce(): its bound "Uncategorized" would be
+        # a different parameter in SELECT and GROUP BY (GroupingError, 500).
+        .group_by(Category.name)
         .order_by(func.coalesce(Category.name, "Uncategorized"))
     ).all()
 

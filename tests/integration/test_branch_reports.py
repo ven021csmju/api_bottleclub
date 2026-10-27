@@ -31,6 +31,15 @@ class TestSales:
         assert _sales(client, sales, as_("mixed", "A")).status_code == 200
 
 
+def test_sales_by_category_is_200(client: TestClient, world, sales, as_):
+    """group_by=category was a GroupingError (500) on every call up to v0.1.9."""
+    resp = client.get(f"{API}/reports/sales?date_from={sales}&date_to={sales}&group_by=category",
+                      headers=as_("sa", "A"))
+    assert resp.status_code == 200, resp.text
+    # The fixture's orders have no items.
+    assert resp.json()["data"]["sales_by_category"] == []
+
+
 @pytest.mark.parametrize("path", [
     "/reports/daily-summary?date={d}",
     "/reports/financial?date_from={d}&date_to={d}",
