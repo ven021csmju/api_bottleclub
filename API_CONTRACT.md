@@ -289,6 +289,87 @@ Rollback: the previous release; steps 2–3 are independent of the code and
 can stay (or `ALTER SYSTEM RESET timezone; ALTER SYSTEM RESET log_timezone;
 SELECT pg_reload_conf();`, `timedatectl set-timezone America/New_York`).
 
+### Money integrity (Phase 38a)
+
+**Deploy order: apply migration 012 first, then deploy the code, then
+create the registers.**
+
+| | 012 not applied | 012 applied |
+|---|---|---|
+| code before 38a | as now | as now (it never names the new columns); the financial report shows net cash for backfilled payments |
+| 38a code | **every checkout, payment, refund and report → 500** | correct |
+
+012 adds `orders.paid_at`, `payments.tendered_amount`, `payments.shift_id`,
+`refunds.shift_id` and backfills (see the header of
+`migrations/012_money_integrity.sql`): `paid_at` from the first completed
+payment; a sole cash payment larger than the change becomes net
+(`tendered_amount` keeps what was handed over); payments linked to their
+order's shift. Orders with change and another payment shape are only
+counted in a NOTICE; list them before and after with (read-only):
+
+```sql
+SELECT o.id, o.order_number, o.change_amount,
+       json_agg(json_build_object('method', p.payment_method, 'amount', p.amount, 'tendered', p.tendered_amount))
+  FROM orders o JOIN payments p ON p.order_id = o.id AND p.status = 'completed'
+ WHERE o.change_amount > 0
+ GROUP BY o.id ORDER BY o.id;
+```
+
+Rollback in the reverse order: the code first, then
+`012_money_integrity.rollback.sql` (amounts go back to the tendered cash).
+
+**Rules**
+
+- **Price:** every order sells at the catalog price. `items[].unit_price` is
+  optional; one that differs from the catalog is **422 `PRICE_MISMATCH`**
+  and nothing is written.
+- **Payments** record what they settled (`amount`); cash also keeps what was
+  handed over (`tendered_amount`; change = `tendered_amount - amount`).
+  Change comes out of cash only: a non-cash payment beyond the amount due,
+  or a payment that would settle nothing, is **400 `OVERPAYMENT`**.
+  `orders.amount_paid` / `change_amount` keep the tendered total and the
+  change (for the receipt).
+- **A sale counts** once the order is `paid` or `completed`, on the day it
+  was paid (`paid_at`): checkout, slip approval, or the `POST /payments/`
+  that covers the total (which now marks the order `paid`).
+- **Shift:** a payment or refund belongs to the drawer that took or paid it:
+  the receiver's open shift at the branch, else the shift open on the
+  order's register, else the order's own shift if it is still open. The
+  x-report adds up those rows:
+  `expected_cash = opening_cash + net cash sales − cash refunds + cash_in − cash_out`.
+  Closing stores the same totals on the shift.
+- **Returns:** `POST /returns/` creates a **pending** return; nothing is
+  refunded or restocked. `PUT /returns/{id}/process` (optional body
+  `{"refund_method": "original" | "cash" | ...}`) locks the order, restocks
+  the `restock` lines and writes one completed refund. Only a paid order
+  can be returned; per line, everything returned ≤ what was bought; all
+  refunds of an order (returns and `POST /payments/{id}/refund`) ≤ what its
+  payments settled. A unit refunds its share of the line scaled to what the
+  order took (order discount, redeemed points).
+- **Registers:** `GET /registers/` (`shifts.read`), `POST /registers/`,
+  `PUT /registers/{id}` (`branches.update`: a Branch Admin at their branches).
+
+| Route | Before (v0.1.10) | Now |
+|---|---|---|
+| `POST /orders/` | POS: the sent `unit_price` was used (1.00 for a 350 wine); e-commerce: a different price was 400 | catalog price always; different → **422** `PRICE_MISMATCH` (e-commerce too); `unit_price` optional |
+| `POST /orders/{id}/checkout` | a card could overpay (the excess became "change") | 400 `OVERPAYMENT`; payment `amount` is net, `tendered_amount` added |
+| `POST /payments/` | stored the tendered amount; never marked the order paid | stores what it settles (cash beyond the due → change; other methods → 400 `OVERPAYMENT`); the payment that covers the total marks the order `paid` |
+| `GET /payments/{order_id}`, receipt `payments[]` | `amount` = handed over | `amount` = settled; new `tendered_amount`, `shift_id` |
+| `GET /shifts/{id}/x-report`, `PUT /shifts/{id}/close` | `total_*` always 0; `expected_cash` without sales | from the shift's payments/refunds; new `total_cash_refunds`; `order_count` = orders paid in the shift |
+| `POST /returns/` | refunded and restocked at once; any order; no limit across returns | **pending** only; 400 `ORDER_NOT_PAID`, 400 `RETURN_QUANTITY_EXCEEDED` |
+| `PUT /returns/{id}/process` | only changed the status | refunds and restocks; 400 `RETURN_QUANTITY_EXCEEDED` / `REFUND_EXCEEDS_PAID` / `REFUND_METHOD_REQUIRED` |
+| `POST /payments/{order_id}/refund` | any order; each refund ≤ `amount_paid` | paid orders only (400 `ORDER_NOT_PAID`); all refunds ≤ settled (400 `REFUND_EXCEEDS_PAID`) |
+| `/reports/*` (daily-summary, sales, hours, category, financial, loyalty orders), e-commerce dashboard | `completed` orders on `completed_at`; cash = tendered | `paid` + `completed` on `paid_at`; cash net; slip = `bank_transfer` |
+| `POST /shifts/open` | — | 400 `REGISTER_INACTIVE` on a closed register |
+| `/registers/` | did not exist | new |
+
+**After deploy (owner):** create at least one register per branch before
+the first shift: a Superadmin or that branch's Branch Admin calls
+`POST /api/v1/registers/ {"branch_id": <id>, "name": "Register 1"}` (or in
+the admin UI once it has the page). Existing registers (if any were added in
+SQL) keep working. Tell accounting: past daily figures now include the
+orders paid but never completed, and the cash column drops the change.
+
 ---
 
 ## Authentication
@@ -1017,6 +1098,43 @@ Any other `movement_type` → 422.
 
 ### GET `/shifts/`  `?page=&per_page=&branch_id=&status=&date=`
 ### GET `/shifts/{shift_id}/x-report`
+```json
+{
+  "shift_id": 1, "opening_cash": "1000.00", "closing_cash": null,
+  "expected_cash": "2030.00", "cash_difference": null,
+  "total_sales": "1760.00", "total_cash_sales": "880.00", "total_card_sales": "530.00",
+  "total_other_sales": "350.00", "total_refunds": "0.00", "total_cash_refunds": "0.00",
+  "cash_movements_in": "200.00", "cash_movements_out": "50.00", "order_count": 3
+}
+```
+Added up from the payments and refunds of the shift (see
+[Money integrity](#money-integrity-phase-38a)); while the shift is open,
+`expected_cash` is what the drawer should hold now.
+
+---
+
+## Registers `/registers`
+
+### GET `/registers/`  `?branch_id=&include_inactive=false`
+`shifts.read` at the branch (default: the `X-Branch-Id` branch).
+```json
+{ "registers": [{ "id": 1, "branch_id": 1, "name": "Register 1", "is_active": true, "created_at": "..." }], "total": 1 }
+```
+
+### POST `/registers/` → 201
+`branches.update` at the branch (Branch Admin, Superadmin); another branch → 404.
+```json
+{ "branch_id": 1, "name": "Register 1" }
+```
+Same name at the branch → 409 `REGISTER_NAME_TAKEN`.
+
+### PUT `/registers/{register_id}`
+```json
+{ "name": "Front counter" | null, "is_active": false | null }
+```
+`is_active: false` closes it (409 `REGISTER_HAS_OPEN_SHIFT` while a shift is
+open on it); `POST /shifts/open` on a closed register → 400
+`REGISTER_INACTIVE`. Registers are never deleted (shifts refer to them).
 
 ---
 
