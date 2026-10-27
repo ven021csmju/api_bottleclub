@@ -192,6 +192,7 @@ def create_app() -> FastAPI:
     from app.domains.customers.router import router as customers_router
     from app.domains.loyalty.router import router as loyalty_router
     from app.domains.shifts.router import router as shifts_router
+    from app.domains.registers.router import router as registers_router
     from app.domains.settings.router import router as settings_router
     from app.domains.reports.router import router as reports_router
     from app.domains.audit.router import router as audit_router
@@ -306,6 +307,12 @@ def create_app() -> FastAPI:
         shifts_router,
         prefix="/api/v1/shifts",
         tags=["Shifts"],
+    )
+
+    app.include_router(
+        registers_router,
+        prefix="/api/v1/registers",
+        tags=["Registers"],
     )
 
     app.include_router(

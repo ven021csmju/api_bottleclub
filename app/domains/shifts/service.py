@@ -33,8 +33,11 @@ class ShiftService:
     ) -> Shift:
         if not BranchRepository.get_org_branch(db, org_id, branch_id):
             raise NotFoundException(detail="Branch not found")
-        if not ShiftRepository.get_branch_register(db, branch_id, register_id):
+        register = ShiftRepository.get_branch_register(db, branch_id, register_id)
+        if not register:
             raise NotFoundException(detail="Register not found")
+        if not register.is_active:
+            raise BadRequestException(detail="This register is closed", code="REGISTER_INACTIVE")
         existing_open = ShiftRepository.find_open_shift(db, branch_id, register_id)
         if existing_open:
             raise BadRequestException(
