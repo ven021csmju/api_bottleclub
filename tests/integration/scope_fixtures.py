@@ -55,6 +55,7 @@ USERS: dict[str, list[tuple[str, str | None]]] = {
     "mixed": [("Manager", "A"), ("Cashier", "B")],
     "orgmgr": [("Manager", None)],
     "kitchen_a": [("Kitchen", "A")],
+    "bar_a": [("Bar", "A")],
 }
 
 

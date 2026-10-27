@@ -145,11 +145,11 @@ async def require_station_item_permission(
             Order.organization_id == user.organization_id,
         )
     ).first()
-    if row is None:
+    if row is None or row.station not in ("kitchen", "bar"):
+        # An item with station 'none' is on no screen: nobody advances it.
         raise NotFoundException(detail="Order item not found")
 
-    station = row.station or "kitchen"
-    required = f"kds.{station}.update"
+    required = f"kds.{row.station}.update"
     if not access.can_anywhere(required):
         raise ForbiddenException(detail=f"Missing required permission: {required}")
     access.ensure_at(required, row.branch_id, "Order item")

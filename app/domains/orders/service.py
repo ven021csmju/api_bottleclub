@@ -866,7 +866,8 @@ class OrderService:
         page: int = 1,
         per_page: int = 20,
     ) -> tuple[list[tuple[Order, OrderItem]], int]:
-        """List open orders' items that belong to a given station (kitchen/bar)."""
+        """List the items of a station (kitchen/bar) of orders still on screen:
+        not completed, cancelled or refunded."""
         return OrderRepository.list_station_items(
             db,
             org_id,
@@ -884,20 +885,22 @@ class OrderService:
         per_page: int,
     ) -> dict:
         rows, total = result
-        orders = {}
-        for order, item in rows:
-            bucket = orders.setdefault(order.id, {"order": order, "items": []})
+        orders: dict[int, dict] = {}
+        for row_order, item in rows:
+            bucket = orders.setdefault(row_order.id, {"order": row_order, "items": []})
             bucket["items"].append(item)
+        # Each header comes from its own bucket (it used to come from the last
+        # row of the loop above, so every order showed the last one's header).
         return {
             "orders": [
                 {
-                    "id": order.id,
-                    "order_id": order.id,
-                    "order_number": order.order_number,
-                    "branch_id": order.branch_id,
-                    "status": order.status,
-                    "notes": order.notes,
-                    "created_at": order.created_at,
+                    "id": bucket["order"].id,
+                    "order_id": bucket["order"].id,
+                    "order_number": bucket["order"].order_number,
+                    "branch_id": bucket["order"].branch_id,
+                    "status": bucket["order"].status,
+                    "notes": bucket["order"].notes,
+                    "created_at": bucket["order"].created_at,
                     "items": [
                         {
                             "id": it.id,

@@ -17,7 +17,7 @@ def _listed(client: TestClient, headers) -> set[str]:
 
 
 def test_branch_manager_lists_the_people_of_their_branch(client: TestClient, world, as_):
-    assert _listed(client, as_("ba_a", "A")) == {"sa", "ba_a", "pos_a", "pos_a2", "mixed", "kitchen_a"}
+    assert _listed(client, as_("ba_a", "A")) == {"sa", "ba_a", "pos_a", "pos_a2", "mixed", "kitchen_a", "bar_a"}
     assert {"pos_b", "orgmgr"} <= _listed(client, as_("orgmgr"))
 
 

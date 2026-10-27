@@ -1,5 +1,5 @@
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
     Branch,
@@ -207,6 +207,9 @@ class OrderRepository:
             .where(Order.order_number == order_number, Order.organization_id == org_id)
         ).unique().scalar_one_or_none()
 
+    #: An order leaves the kitchen and bar screens once it is done with.
+    OFF_SCREEN_STATUSES = ("completed", "cancelled", "refunded")
+
     @staticmethod
     def list_station_items(
         db: Session,
@@ -220,45 +223,28 @@ class OrderRepository:
         """Return ``(order, item)`` pairs for items at a given station.
 
         Ordered by order creation time (oldest first) so kitchen/bar work the
-        queue in FIFO order. Uses an alias so we can reference the joined items
-        table in BOTH the select column list and the where clause.
+        queue in FIFO order. ``total`` counts the same items as the pages.
         """
-        item_alias = aliased(OrderItem)
-        order_alias = aliased(Order)
-
-        stmt = (
-            select(order_alias, item_alias)
-            .join(item_alias, item_alias.order_id == order_alias.id)
-            .where(
-                order_alias.organization_id == org_id,
-                order_alias.status.notin_(["cancelled"]),
-                item_alias.station == station,
-            )
-        )
-
+        conditions = [
+            Order.organization_id == org_id,
+            Order.status.notin_(OrderRepository.OFF_SCREEN_STATUSES),
+            OrderItem.station == station,
+        ]
         if branch_id is not None:
-            stmt = stmt.where(order_alias.branch_id == branch_id)
+            conditions.append(Order.branch_id == branch_id)
         if item_status is not None:
-            stmt = stmt.where(item_alias.item_status == item_status)
+            conditions.append(OrderItem.item_status == item_status)
 
         total = db.scalar(
-            select(func.count())
-            .select_from(
-                select(order_alias.id)
-                .join(item_alias, item_alias.order_id == order_alias.id)
-                .where(
-                    order_alias.organization_id == org_id,
-                    order_alias.status.notin_(["cancelled"]),
-                    item_alias.station == station,
-                )
-                .correlate(None)
-                .subquery()
-            )
+            select(func.count()).select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
+            .where(*conditions)
         ) or 0
-
         rows = list(
             db.execute(
-                stmt.order_by(order_alias.created_at.asc(), item_alias.id.asc())
+                select(Order, OrderItem)
+                .join(OrderItem, OrderItem.order_id == Order.id)
+                .where(*conditions)
+                .order_by(Order.created_at.asc(), OrderItem.id.asc())
                 .offset((page - 1) * per_page)
                 .limit(per_page)
             ).all()
