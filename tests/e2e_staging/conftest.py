@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,8 +99,15 @@ def rec() -> Recorder:
     return Recorder(path)
 
 
+#: Routes that need an Idempotency-Key (Phase 38b).
+IDEMPOTENT = re.compile(r"^/api/v1/(orders/|orders/\d+/checkout|payments/|returns/)$")
+
+
 class Api:
-    """httpx client that remembers each user's token and working branch."""
+    """httpx client that remembers each user's token and working branch.
+
+    A POST to an IDEMPOTENT route gets a fresh Idempotency-Key, as a till
+    would send; ``key=`` sends that one instead, ``key=None`` none at all."""
 
     def __init__(self, base_url: str) -> None:
         import httpx
@@ -108,7 +117,8 @@ class Api:
         self.tokens: dict[str, str] = {}
         self.branch: dict[str, int | None] = {}
 
-    def request(self, method: str, path: str, who: str | None = None, branch: Any = "default", **kw):
+    def request(self, method: str, path: str, who: str | None = None, branch: Any = "default",
+                key: Any = "fresh", **kw):
         headers = dict(kw.pop("headers", {}) or {})
         if who is not None:
             headers["Authorization"] = f"Bearer {self.tokens[who]}"
@@ -116,6 +126,8 @@ class Api:
             if b is not None:
                 headers["X-Branch-Id"] = str(b)
         url = path if path.startswith("/api/") or path.startswith("/health") else "/api/v1" + path
+        if method == "POST" and IDEMPOTENT.match(url) and key is not None:
+            headers["Idempotency-Key"] = uuid.uuid4().hex if key == "fresh" else key
         return self.http.request(method, url, headers=headers, **kw)
 
     def get(self, path, who=None, **kw):

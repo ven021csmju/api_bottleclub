@@ -209,29 +209,32 @@ def test_d_pos_sale(api, rec, flow):
     flow["o1"], flow["o1_items"], flow["o1_token"] = order.get("id"), order.get("items", []), order.get("tracking_token")
     rec.eq(s, "stock p1 −2 at order creation", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
-    again = api.post("/orders/", "cashier", json=body)
-    dup = data(again)
-    rec.note(s, "same body sent again (no idempotency_key): second order?",
-             f"{again.status_code}: new order {dup.get('order_number')} (id {dup.get('id')})"
-             if dup.get("id") != flow["o1"] else "same order returned", again.status_code)
-    if created(again) and dup.get("id") != flow["o1"]:
-        rec.note(s, "stock after the duplicate", on_hand(api, A, flow["p1"]), expected=flow["stock"]["p1"] - 2)
-        resp = api.post(f"/orders/{dup['id']}/cancel", "cashier", json={"reason": "E2E duplicate"})
-        rec.note(s, "POS staff cancels its own duplicate", resp.status_code, resp.status_code,
-                 expected="Cashier has no orders.cancel; the Branch Admin must void it")
-        resp = api.post(f"/orders/{dup['id']}/cancel", "manager", json={"reason": "E2E duplicate"})
-        rec.eq(s, "Branch Admin cancels the duplicate", 200, resp.status_code, resp.status_code)
-        rec.eq(s, "cancel returns the duplicate's stock", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
+    resp = api.post("/orders/", "cashier", json=body, key=None)
+    rec.eq(s, "no Idempotency-Key → 422", (422, "IDEMPOTENCY_KEY_REQUIRED"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    rec.eq(s, "stock unchanged by the refused order", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
     key = f"e2e-{RUN}-idem"
-    k1 = api.post("/orders/", "cashier", json={**body, "idempotency_key": key})
-    k2 = api.post("/orders/", "cashier", json={**body, "idempotency_key": key})
-    rec.eq(s, "same idempotency_key twice → one order", data(k1).get("id"), data(k2).get("id"),
+    k1 = api.post("/orders/", "cashier", json=body, key=key)
+    k2 = api.post("/orders/", "cashier", json=body, key=key)
+    rec.eq(s, "same key twice → one order, the second a replay", (200, 200, data(k1).get("id"), "true"),
+           (k1.status_code, k2.status_code, data(k2).get("id"), k2.headers.get("Idempotent-Replayed")),
            f"{k1.status_code}/{k2.status_code}")
+    rec.eq(s, "stock p1 taken once for the two sends", flow["stock"]["p1"] - 4, on_hand(api, A, flow["p1"]))
+    resp = api.post("/orders/", "cashier", json={**body, "notes": "other"}, key=key)
+    rec.eq(s, "same key, other body → 409", (409, "IDEMPOTENCY_KEY_REUSED"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
     if created(k1):
-        resp = api.post(f"/orders/{data(k1)['id']}/cancel", "manager", json={"reason": "E2E idempotency probe"})
-        rec.eq(s, "cancel the idempotency probe", 200, resp.status_code, resp.status_code)
-    rec.eq(s, "stock p1 back to −2 after the probes", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
+        resp = api.post(f"/orders/{data(k1)['id']}/cancel", "cashier", json={"reason": "E2E idempotency probe"})
+        rec.eq(s, "POS staff cancels its own unpaid order", (200, "cancelled"),
+               (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "cancel returns its stock", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
+    resp = api.post("/orders/", "manager", json={**body, "items": [{"product_id": flow["p1"], "quantity": 1}]})
+    if created(resp):
+        other = api.post(f"/orders/{data(resp)['id']}/cancel", "cashier", json={"reason": "E2E not mine"})
+        rec.eq(s, "POS staff cannot cancel someone else's order", (403, "ORDER_NOT_YOURS"),
+               (other.status_code, other.json().get("code")), other.status_code)
+        api.post(f"/orders/{data(resp)['id']}/cancel", "manager", json={"reason": "E2E not mine"})
 
     for price in ("1.00", "999.00"):
         probe = api.post("/orders/", "cashier", json={**body, "items": [
@@ -521,18 +524,19 @@ def test_i_transfer(api, rec, flow):
     resp = api.post("/transfers/", "sa", branch=A, json={
         "dest_branch_id": B, "items": [{"product_id": flow["p1"], "quantity_requested": 3}], "notes": "E2E"})
     tr = data(resp)
-    rec.check(s, "create transfer A→B 3×p1", resp.status_code in (200, 201) and tr.get("status") == "draft",
-              "200/201 draft", (resp.status_code, tr.get("status")), resp.status_code)
+    rec.check(s, "create transfer A→B 3×p1", resp.status_code in (200, 201) and tr.get("status") == "pending",
+              "200/201 pending", (resp.status_code, tr.get("status")), resp.status_code)
     tid, item_id = tr.get("id"), (tr.get("items") or [{}])[0].get("id")
     resp = api.put(f"/transfers/{tid}/approve", "sa", branch=A)
-    rec.eq(s, "approve", (200, "pending"), (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "approve", (200, "approved"), (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "approving moves no stock", a_before, on_hand(api, A, flow["p1"]))
     resp = api.put(f"/transfers/{tid}/ship", "sa", branch=A,
                    json={"items": [{"transfer_item_id": item_id, "quantity_shipped": 3}]})
-    rec.eq(s, "ship", (200, "in_transit"), (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "ship", (200, "shipped"), (resp.status_code, data(resp).get("status")), resp.status_code)
     rec.eq(s, "A −3 when shipped", a_before - 3, on_hand(api, A, flow["p1"]))
     resp = api.put(f"/transfers/{tid}/receive", "sa", branch=B,
                    json={"items": [{"transfer_item_id": item_id, "quantity_received": 3, "quantity_damaged": 0}]})
-    rec.eq(s, "receive at B", (200, "completed"), (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "receive at B", (200, "received"), (resp.status_code, data(resp).get("status")), resp.status_code)
     rec.eq(s, "A after", a_before - 3, on_hand(api, A, flow["p1"]))
     rec.eq(s, "B after", b_before + 3, on_hand(api, B, flow["p1"]))
     flow["stock"]["p1"] = on_hand(api, A, flow["p1"])  # what really happened, for the reports in k
@@ -553,6 +557,16 @@ def test_j_shift(api, rec, flow):
         rec.check(s, f"{kind} {amount}", created(resp), "200/201", resp.status_code, resp.status_code)
     cash_sales = flow["sales"]["o1"] + D(400)  # order 1 cash, order 3 cash after points; order 2 by slip
     expected_cash = D(1000) + cash_sales + D(200) - D(50) - flow.get("refunds", D(0))
+    resp = api.post("/orders/", "cashier", json={"branch_id": flow["A"], "items": [{"product_id": flow["p1"], "quantity": 1}]})
+    pending = data(resp)
+    rec.eq(s, "an order left unpaid joins the cashier's shift", (200, sid), (resp.status_code, pending.get("shift_id")),
+           resp.status_code)
+    resp = api.put(f"/shifts/{sid}/close", "cashier", json={"closing_cash": str(expected_cash)})
+    rec.eq(s, "close with an unpaid order → 409 listing it", (409, "SHIFT_HAS_PENDING_ORDERS", [pending.get("id")]),
+           (resp.status_code, resp.json().get("code"), [o.get("id") for o in resp.json().get("orders", [])]),
+           resp.status_code)
+    resp = api.post(f"/orders/{pending.get('id')}/cancel", "cashier", json={"reason": "E2E left unpaid"})
+    rec.eq(s, "POS staff cancels it", 200, resp.status_code, resp.status_code)
     resp = api.put(f"/shifts/{sid}/close", "cashier", json={"closing_cash": str(expected_cash)})
     closed = data(resp)
     rec.eq(s, "close shift with the counted cash", 200, resp.status_code, resp.status_code)
