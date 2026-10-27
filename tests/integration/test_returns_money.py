@@ -146,3 +146,9 @@ def test_a_mixed_payment_needs_a_refund_method(client: TestClient, session, worl
     assert _process(client, as_, ret["id"], refund_method="credit_card").status_code == 200
     assert _refunds(session, order["id"])[0][:2] == (Decimal("350.00"), "credit_card")
 
+
+def test_post_refunds_is_405_and_writes_nothing(client: TestClient, session, world, shop, as_, sale):
+    resp = client.post(f"{API}/refunds/", headers=as_("ba_a", "A"),
+                       json={"order_id": sale["id"], "refund_amount": "10.00", "refund_method": "cash"})
+    assert resp.status_code == 405
+    assert _refunds(session, sale["id"]) == []

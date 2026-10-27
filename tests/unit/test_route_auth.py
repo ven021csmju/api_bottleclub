@@ -160,3 +160,10 @@ def test_branch_update_is_checked_at_the_branch_of_the_path():
         if isinstance(r, APIRoute) and r.path == f"{PREFIX}/branches/{{branch_id}}" and "PUT" in r.methods
     ]
     assert _permission_checks(route) == [("branches.update", "any")]
+
+
+def test_post_refunds_is_gone():
+    """38a: refunds come from returns and POST /payments/{order_id}/refund only."""
+    routes = _routes()
+    assert ("POST", "/refunds/") not in routes
+    assert ("GET", "/refunds/") in routes

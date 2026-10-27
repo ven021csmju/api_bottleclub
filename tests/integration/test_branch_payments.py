@@ -50,7 +50,8 @@ def test_paying_or_refunding_an_order_of_another_branch_is_404(client: TestClien
     refund = {"refund_amount": "1", "refund_method": "cash", "reason": "x"}
     assert client.post(f"{API}/payments/{orders['b1']}/refund", json=refund, headers=as_("ba_a", "A")).status_code == 404
     body = {"order_id": orders["b1"], "refund_amount": "1", "refund_method": "cash"}
-    assert client.post(f"{API}/refunds/", json=body, headers=as_("ba_a", "A")).status_code == 404
+    # POST /refunds/ is gone (38a): 405 for every order.
+    assert client.post(f"{API}/refunds/", json=body, headers=as_("ba_a", "A")).status_code == 405
 
     pay["order_id"] = orders["a1"]
     assert client.post(f"{API}/payments/", json=pay, headers=as_("pos_a", "A")).status_code == 200
