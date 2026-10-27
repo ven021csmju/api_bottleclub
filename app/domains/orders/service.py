@@ -14,6 +14,7 @@ from app.db.models import (
     Payment,
     StockMovement,
 )
+from app.db.repositories.coupons import CouponRepository
 from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.orders import OrderRepository
 from app.db.repositories.payments import PaymentRepository
@@ -22,11 +23,13 @@ from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
     AppException,
     BadRequestException,
+    ConflictException,
     ForbiddenException,
     InsufficientStockException,
     InvalidOrderStateException,
     NotFoundException,
 )
+from app.domains.coupons.service import CouponService
 from app.domains.shifts.drawer import CASH, current_shift, paid_net
 from app.shared.ordering import generate_order_number
 
@@ -255,6 +258,9 @@ class OrderService:
         order.grand_total = grand_total
         order.amount_paid = Decimal("0")
         order.change_amount = Decimal("0")
+        if data.get("coupon_code"):
+            db.flush()
+            CouponService.redeem(db, order, data["coupon_code"])
 
         item_discounts = [
             {"product_id": i.product_id, "discount_amount": str(i.discount_amount)}
@@ -410,6 +416,8 @@ class OrderService:
                 "customer_id": order.customer_id,
                 "subtotal": order.subtotal,
                 "discount_amount": order.discount_amount,
+                "coupon_id": order.coupon_id,
+                "coupon_discount": order.coupon_discount,
                 "tax_amount": order.tax_amount,
                 "grand_total": order.grand_total,
                 "amount_paid": order.amount_paid,
@@ -507,6 +515,7 @@ class OrderService:
                     ),
                 )
 
+        CouponService.release(db, order)
         order.status = "cancelled"
         order.cancelled_at = datetime.now(timezone.utc)
         db.flush()
@@ -559,6 +568,9 @@ class OrderService:
         if idempotency_key and order.status in ("paid", "completed", "refunded"):
             return order
 
+        if data.get("coupon_code"):
+            OrderService._coupon_at_checkout(db, order, data["coupon_code"])
+
         OrderService.settle_order(
             db,
             order,
@@ -576,6 +588,22 @@ class OrderService:
             {"order_id": order.id, "amount_paid": str(order.amount_paid)},
         )
         return order
+
+    @staticmethod
+    def _coupon_at_checkout(db: Session, order: Order, code: str) -> None:
+        """A coupon given at checkout: the same one again changes nothing,
+        another one is 409; none once money is on the order."""
+        if order.coupon_id is not None:
+            if CouponRepository.get_org_coupon(db, order.organization_id, order.coupon_id).code == code:
+                return
+            raise ConflictException(detail="The order already has a coupon", code="COUPON_ALREADY_APPLIED")
+        if order.status not in OrderService.CHECKOUTABLE_STATUSES:
+            return  # settle_order refuses it
+        if paid_net(db, order.id) > 0:
+            raise BadRequestException(
+                detail="A coupon cannot be added once the order is partly paid", code="COUPON_AFTER_PAYMENT"
+            )
+        CouponService.redeem(db, order, code)
 
     @staticmethod
     def settle_order(

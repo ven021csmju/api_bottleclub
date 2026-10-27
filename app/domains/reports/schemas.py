@@ -62,7 +62,10 @@ class InventoryReportResponse(BaseModel):
 class FinancialSummaryRow(BaseModel):
     date: date
     gross_sales: float
+    # Typed in (orders.discount_amount) and computed from a coupon
+    # (orders.coupon_discount), apart; grand_total already has both off.
     discounts: float
+    coupon_discounts: float = 0.0
     net_sales: float
     tax: float
     refunds: float
@@ -75,7 +78,10 @@ class FinancialReportResponse(BaseModel):
     date_to: date
     branch_id: Optional[int] = None
     gross_sales: float
+    # Typed in (orders.discount_amount) and computed from a coupon
+    # (orders.coupon_discount), apart; grand_total already has both off.
     discounts: float
+    coupon_discounts: float = 0.0
     net_sales: float
     tax: float
     refunds: float

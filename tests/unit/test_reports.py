@@ -43,12 +43,14 @@ def patched_repo(monkeypatch):
                     date=date(2026, 1, 2),
                     gross_sales=100.0,
                     discounts=10.0,
+                    coupon_discounts=7.0,
                     tax=7.0,
                 ),
                 SimpleNamespace(
                     date=date(2026, 1, 3),
                     gross_sales=50.0,
                     discounts=5.0,
+                    coupon_discounts=0.0,
                     tax=3.5,
                 ),
             ]
@@ -115,6 +117,7 @@ class TestFinancialReport:
         result = ReportService.get_financial_report(None, 1, date(2026, 1, 1), date(2026, 1, 31))
         assert result["gross_sales"] == 150.0
         assert result["discounts"] == 15.0
+        assert result["coupon_discounts"] == 7.0  # apart, not taken off again
         assert result["tax"] == 10.5
         assert result["refunds"] == 4.0
         assert result["net_sales"] == 131.0

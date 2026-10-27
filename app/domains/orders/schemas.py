@@ -25,6 +25,8 @@ class OrderCreate(BaseModel):
     register_id: Optional[int] = None
     items: list[OrderItemCreate] = Field(..., min_length=1)
     discount_amount: Decimal = Field(Decimal("0"), ge=0, decimal_places=2)
+    # The system computes what it takes off (not with a typed-in discount).
+    coupon_code: Optional[str] = Field(None, min_length=1, max_length=100)
     notes: Optional[str] = None
     idempotency_key: Optional[str] = None
     order_source: OrderSource = Field(OrderSource.POS, description="Sales channel that created the order")
@@ -56,6 +58,8 @@ class OrderResponse(BaseModel):
     shift_id: Optional[int] = None
     subtotal: Decimal
     discount_amount: Decimal
+    coupon_id: Optional[int] = None
+    coupon_discount: Decimal = Decimal("0")
     tax_amount: Decimal
     grand_total: Decimal
     shipping_fee: Decimal = Decimal("0")
@@ -121,6 +125,8 @@ class CheckoutRequest(BaseModel):
     payments: list[CheckoutPayment] = Field(..., min_length=1)
     redeem_points: int = Field(0, ge=0)
     earn_points: bool = True
+    # A coupon not given when the order was made (Phase 38c).
+    coupon_code: Optional[str] = Field(None, min_length=1, max_length=100)
     idempotency_key: Optional[str] = Field(None, max_length=255)
 
 
@@ -131,6 +137,8 @@ class CheckoutResponse(BaseModel):
     customer_id: Optional[int] = None
     subtotal: Decimal
     discount_amount: Decimal
+    coupon_id: Optional[int] = None
+    coupon_discount: Decimal = Decimal("0")
     tax_amount: Decimal
     grand_total: Decimal
     loyalty_points_redeemed: int
@@ -190,6 +198,8 @@ class ReceiptOrder(BaseModel):
     customer_id: Optional[int] = None
     subtotal: Decimal
     discount_amount: Decimal
+    coupon_id: Optional[int] = None
+    coupon_discount: Decimal = Decimal("0")
     tax_amount: Decimal
     grand_total: Decimal
     amount_paid: Decimal

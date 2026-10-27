@@ -239,6 +239,7 @@ class ReportService:
 
         gross_sales = float(totals.total_sales)
         discounts = 0.0
+        coupon_discounts = 0.0
         tax = 0.0
         order_count = 0
         daily: list[dict] = []
@@ -249,6 +250,7 @@ class ReportService:
                     "date": row_date,
                     "gross_sales": float(row.gross_sales),
                     "discounts": float(row.discounts),
+                    "coupon_discounts": float(row.coupon_discounts),
                     "net_sales": float(row.gross_sales) - float(row.discounts)
                     - float(refund_by_date.get(row_date, 0)),
                     "tax": float(row.tax),
@@ -258,6 +260,7 @@ class ReportService:
                 }
             )
             discounts += float(row.discounts)
+            coupon_discounts += float(row.coupon_discounts)
             tax += float(row.tax)
 
         total_refunds = sum(float(v) for v in refund_by_date.values())
@@ -269,6 +272,7 @@ class ReportService:
             "branch_id": branch_id,
             "gross_sales": gross_sales,
             "discounts": discounts,
+            "coupon_discounts": coupon_discounts,
             "net_sales": net_sales,
             "tax": tax,
             "refunds": total_refunds,

@@ -72,5 +72,6 @@ def validate_coupon(
         data.customer_id,
         user_id=user.id,
         request_id=getattr(request.state, "request_id", ""),
+        branch_id=data.branch_id,
     )
     return CouponValidationResult(**result)

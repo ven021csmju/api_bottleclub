@@ -217,6 +217,7 @@ class ReportRepository:
                     sales_day.label("date"),
                     func.coalesce(func.sum(Order.grand_total), 0).label("gross_sales"),
                     func.coalesce(func.sum(Order.discount_amount), 0).label("discounts"),
+                    func.coalesce(func.sum(Order.coupon_discount), 0).label("coupon_discounts"),
                     func.coalesce(func.sum(Order.tax_amount), 0).label("tax"),
                     func.count(Order.id).label("order_count"),
                 )

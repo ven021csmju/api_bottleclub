@@ -293,7 +293,7 @@ def test_coupon_dates_without_offset_are_store_midnight(client, session, world, 
     from app.db.models import Coupon
 
     resp = client.post(f"{API}/coupons/", headers=as_(owner), json={
-        "code": "TZ-NOV", "promotion_id": 1,
+        "code": "TZ-NOV", "discount_type": "fixed", "discount_value": "50",
         "start_date": "2026-11-01T00:00:00", "end_date": "2026-11-30T23:59:59+07:00",
     })
     assert resp.status_code == 201, resp.text

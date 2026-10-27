@@ -837,6 +837,12 @@ class Order(Base):
     )
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    # The coupon used and what the system computed it takes off (018), kept
+    # apart from the typed-in discount_amount.
+    coupon_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("coupons.id", ondelete="RESTRICT")
+    )
+    coupon_discount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     shipping_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
     grand_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
@@ -882,6 +888,7 @@ class Order(Base):
             name="ck_order_fulfillment_status",
         ),
         CheckConstraint("shipping_fee >= 0", name="ck_order_shipping_fee_non_negative"),
+        CheckConstraint("coupon_discount >= 0", name="ck_order_coupon_discount"),
         Index("ix_orders_branch_created", "branch_id", "created_at"),
         Index("ix_orders_org_paid_at", "organization_id", "paid_at"),
         Index("ix_orders_status", "status"),
@@ -1208,7 +1215,21 @@ class Coupon(Base):
         BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
     )
     code: Mapped[str] = mapped_column(String(100), nullable=False)
-    promotion_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # The promotion it belongs to, if any (018: was a BIGINT that could never
+    # match the VARCHAR promotions.id).
+    promotion_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("promotions.id", ondelete="SET NULL", name="fk_coupon_promotion")
+    )
+    # What it takes off an order (018); NULL on coupons made before: they
+    # cannot be used in an order until one is set.
+    discount_type: Mapped[str | None] = mapped_column(String(10))
+    discount_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    max_discount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    min_order_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    # NULL: every branch.
+    branch_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("branches.id", ondelete="RESTRICT")
+    )
     max_uses: Mapped[int | None] = mapped_column(Integer)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     max_uses_per_customer: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -1225,6 +1246,15 @@ class Coupon(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "code", name="uq_coupon_org_code"),
         CheckConstraint("end_date > start_date", name="ck_coupon_date_range"),
+        CheckConstraint(
+            "(discount_type IS NULL AND discount_value IS NULL)"
+            " OR (discount_type = 'fixed' AND discount_value IS NOT NULL AND discount_value > 0)"
+            " OR (discount_type = 'percent' AND discount_value IS NOT NULL AND discount_value > 0"
+            " AND discount_value <= 100)",
+            name="ck_coupon_discount",
+        ),
+        CheckConstraint("max_discount IS NULL OR max_discount > 0", name="ck_coupon_max_discount"),
+        CheckConstraint("min_order_amount >= 0", name="ck_coupon_min_order"),
     )
 
 
@@ -1244,9 +1274,14 @@ class CouponUsage(Base):
     order_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
     )
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    # Set when the order was cancelled: the use is given back (018).
+    released_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    __table_args__ = (UniqueConstraint("coupon_id", "order_id", name="uq_coupon_usage_order"),)
 
 
 # ---------------------------------------------------------------------------
