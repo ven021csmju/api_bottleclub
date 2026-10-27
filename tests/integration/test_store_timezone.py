@@ -279,3 +279,18 @@ def test_coupon_dates_without_offset_are_store_midnight(client, session, world, 
     coupon = session.get(Coupon, resp.json()["data"]["id"])
     assert coupon.start_date == utc("2026-10-31T17:00:00")
     assert coupon.end_date == utc("2026-11-30T16:59:59")
+
+
+# ---------------------------------------------------------------------------
+# Timestamps in responses are store time (+07:00)
+# ---------------------------------------------------------------------------
+def test_timestamps_in_responses_are_plus_0700(client, session, world, as_):
+    order = _order(session, world, "TZ-OUT", "2026-10-26T17:30:00", "10")
+    session.commit()
+    body = _get(client, as_, f"/orders/{order.id}")
+    assert body["created_at"] == "2026-10-27T00:30:00+07:00"
+    assert body["completed_at"] == "2026-10-27T00:30:00+07:00"
+
+
+def test_the_database_session_is_in_store_time(session):
+    assert session.execute(text("SHOW timezone")).scalar() == settings.STORE_TIMEZONE

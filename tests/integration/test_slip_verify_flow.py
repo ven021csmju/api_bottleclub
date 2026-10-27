@@ -174,6 +174,7 @@ class TestAutoVerify:
 
         assert resp.status_code == 200, resp.text
         assert _status(resp) == "verified"  # X1: not a duplicate of its own row
+        assert resp.json()["data"]["data"]["verified_at"].endswith("+07:00")  # store time (36b)
         session.expire_all()
         order = session.get(Order, order_id)
         assert order.status == "paid"  # X2: settled through OrderService.settle_order

@@ -15,6 +15,7 @@ from app.services.ocr_service import OCRService
 from app.services import user_events
 from app.services.slip_parser import parse_slip
 from app.shared.audit import AuditContext, log_audit
+from app.shared.clock import store_now
 from app.shared.exceptions import (
     AppException,
     BadRequestException,
@@ -322,7 +323,7 @@ class SlipVerifyService:
                     "sender_name": parsed.sender_name.value if parsed.sender_name else None,
                     "receiver_name": parsed.receiver_name.value if parsed.receiver_name else None,
                     "risk_score": assessment.total_score,
-                    "verified_at": datetime.now(timezone.utc).isoformat(),
+                    "verified_at": store_now().isoformat(),
                 },
             }
 

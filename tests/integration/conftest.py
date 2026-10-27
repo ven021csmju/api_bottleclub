@@ -106,8 +106,11 @@ def _validated_test_database_url() -> URL:
 def db_engine() -> Generator[Engine, None, None]:
     from app.db.models import Base
 
+    from app.db.session import connect_args
+
     url = _validated_test_database_url()
-    engine = create_engine(url, pool_pre_ping=True)
+    # As in production: the session time zone is STORE_TIMEZONE.
+    engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args())
     # Start from a clean schema in case a previous run crashed before teardown.
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

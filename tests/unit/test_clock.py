@@ -140,3 +140,9 @@ def test_coupon_dates_without_offset_are_bangkok_midnight():
                           start_date="2026-11-01T00:00:00", end_date="2026-11-30T23:59:59")
     assert coupon.start_date == utc("2026-10-31T17:00")
     assert coupon.end_date == utc("2026-11-30T16:59:59")
+
+
+def test_every_database_connection_uses_the_store_time_zone():
+    from app.db.session import connect_args
+
+    assert connect_args() == {"options": "-c timezone=Asia/Bangkok"}
