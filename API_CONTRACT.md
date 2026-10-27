@@ -214,6 +214,79 @@ when the slip had no date).
 |---|---|---|
 | `POST /slip-verify/upload`, `/checkslip` | a slip whose time the OCR read (most slips) → 500 `DATABASE_ERROR`, nothing saved | 200; the time is stored (`payment_verifications.ocr_time`) |
 
+### Store time zone (Phase 36b)
+
+**Every date and time in the API is store time** (`STORE_TIMEZONE`, default
+`Asia/Bangkok`, UTC+7), never the time zone of the server or of PostgreSQL.
+No migration: stored timestamps (`timestamptz`) are instants and do not change.
+
+- **Timestamps in responses** carry `+07:00`
+  (`"created_at": "2026-10-27T00:30:00+07:00"`). They were `-04:00`/`-05:00`
+  (the server's New York time); the instant is the same, only the offset
+  differs. Parse them as ISO 8601 with offset; do not cut the string.
+- **Datetimes you send** (`date_from`/`date_to` of `GET /orders/`, `/refunds/`,
+  `/shifts/`, `/audit/`, `/loyalty/transactions/{id}`; `start_date`/`end_date`
+  of `POST /coupons/`): without an offset they are store time
+  (`2026-11-01T00:00:00` = midnight in Bangkok); with one (`Z`, `+07:00`) they
+  are taken as sent.
+- **A day** (`date`, `date_from`/`date_to`, `from_date`/`to_date` of
+  `/reports/*`, `GET /purchases`, `GET /inventory/movements`; dates in
+  document numbers; "today" of the e-commerce dashboard) is a **sales day**:
+  day `D` is `[D HH:00, D+1 HH:00)` in store time, `HH` =
+  `STORE_DAY_START_HOUR` (default `0`: midnight to midnight). With `5`, a sale
+  at 04:59 belongs to the day before. `date_to` is included.
+- **`sales_by_hour.hour`** is the hour on the shop's clock (0–23), not shifted
+  by `STORE_DAY_START_HOUR`.
+
+| Route | Before (v0.1.9) | Now |
+|---|---|---|
+| `GET /reports/sales`, `/daily-summary`, `/financial`, `/loyalty`, `group_by=category`, e-commerce dashboard | a day was New York's: `date=D` counted D 11:00 to D+1 10:59 Bangkok time (12:00–11:59 from 1 Nov) | Bangkok sales day; **past daily figures change** (sales from 00:00 to about 11:00 move to their own day) |
+| `GET /reports/sales` `sales_by_hour` | New York hour (08:30 Bangkok → 21) | Bangkok hour (8) |
+| `GET /reports/daily-summary` `total_refunds`, `/financial` `refunds` and `daily[].refunds` | refunds of the orders **completed** that day | refunds **made** that day (`refunds.created_at`), whatever the order's date |
+| `GET /reports/sales?group_by=category` | 500 `DATABASE_ERROR` on every call | 200 |
+| `GET /purchases`, `GET /inventory/movements` `date_from`/`date_to` | New York dates | Bangkok sales days |
+| `date_from`/`date_to` without offset (orders, refunds, shifts, audit, loyalty); coupon `start_date`/`end_date` | New York time: `2026-11-01T00:00` = 11:00 Bangkok | Bangkok time |
+| Every timestamp in a response | `-04:00` / `-05:00` | `+07:00` |
+| Order, transfer, return and refund numbers (`…-YYYYMMDD-NNNN`; PO and receiving numbers have no date) | New York date: 00:00–10:59 Bangkok got the day before | Bangkok sales day; old numbers stay as they are, and no number repeats (the date only moves forward) |
+
+#### After deploy (owner, outside sales hours)
+
+The code alone makes everything above correct, whatever the server is set to.
+These steps make psql, backups, logs and timers use Bangkok time too.
+
+1. Deploy the code (no migration; 010 and 011 must already be applied, see
+   above), restart `fastapi.service`, check `GET /health` and one report.
+2. PostgreSQL (the prod cluster, 14-main), no restart:
+   ```sql
+   ALTER SYSTEM SET timezone = 'Asia/Bangkok';
+   ALTER SYSTEM SET log_timezone = 'Asia/Bangkok';
+   SELECT pg_reload_conf();
+   SHOW timezone;  -- in a new session: Asia/Bangkok
+   ```
+   This affects psql, `pg_dump` and any other client; the API sets its own
+   session time zone already. Do the same on another cluster only if it is
+   used.
+3. The machine: `sudo timedatectl set-timezone Asia/Bangkok`, then
+   `timedatectl` (Time zone: Asia/Bangkok (+07, +0700)).
+4. Timers follow local time: `bottleclub-backup.timer` (`OnCalendar=03:15`)
+   moves from 03:15 New York (14:15 Bangkok, during sales) to **03:15
+   Bangkok**; backup file names (`date +%Y%m%d-%H%M%S`) become Bangkok time;
+   retention (`find -mtime`) is unaffected. Check with
+   `systemctl list-timers bottleclub-backup.timer`: NEXT must be 03:15 +07.
+   If the shop is open past 03:00, move the timer. Other timers (apt, logrotate,
+   cloudflared-update at 00:00, fstrim, e2scrub) also move to Bangkok time.
+5. Restart what keeps the old time zone in its log timestamps:
+   `fastapi.service`, `log-user-bottleclub.service`,
+   `log-user-bottleclub-worker.service`, `bottleclub-ocr.service`,
+   `rsyslog.service` (and `cloudflared.service`, `rabbitmq-server`, `mongod`
+   only if their local-time logs matter). PostgreSQL needs only the reload of
+   step 2.
+6. Tell accounting: past daily figures in reports change to Bangkok days.
+
+Rollback: the previous release; steps 2–3 are independent of the code and
+can stay (or `ALTER SYSTEM RESET timezone; ALTER SYSTEM RESET log_timezone;
+SELECT pg_reload_conf();`, `timedatectl set-timezone America/New_York`).
+
 ---
 
 ## Authentication
@@ -958,6 +1031,9 @@ Any other `movement_type` → 422.
 
 ## Reports `/reports`
 
+Dates are sales days in store time and `date_to` is included; see
+[Store time zone](#store-time-zone-phase-36b).
+
 ### GET `/reports/sales`
 Query: `?date_from=2026-09-01&date_to=2026-09-30&branch_id=&group_by=category`
 
@@ -978,6 +1054,7 @@ Query: `?date=2026-09-01&branch_id=`
 ```json
 { "date": "2026-09-01", "branch_id": null, "total_orders": 50, "total_revenue": 25000.0, "total_refunds": 500.0, "net_sales": 24500.0 }
 ```
+`total_refunds`: refunds made that day, whichever day the order was sold.
 
 ### GET `/reports/inventory`
 Query: `?branch_id=&category_id=`
