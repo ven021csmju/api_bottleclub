@@ -9,6 +9,7 @@ from app.db.models import (
     StockMovement,
     User,
 )
+from app.shared.clock import in_store_days
 
 
 class InventoryRepository:
@@ -165,15 +166,8 @@ class InventoryRepository:
         if movement_type:
             stmt = stmt.where(StockMovement.movement_type == movement_type)
 
-        if date_from:
-            stmt = stmt.where(
-                func.date(StockMovement.created_at) >= date_from
-            )
-
-        if date_to:
-            stmt = stmt.where(
-                func.date(StockMovement.created_at) <= date_to
-            )
+        # Sales days in store time, not the PostgreSQL session's dates.
+        stmt = stmt.where(*in_store_days(StockMovement.created_at, date_from, date_to))
 
         total = db.scalar(
             select(func.count()).select_from(stmt.subquery())

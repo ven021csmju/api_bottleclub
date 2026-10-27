@@ -164,13 +164,14 @@ def _category_breakdown(
 ) -> list[dict]:
     from app.db.repositories.reports.report_repository import ReportRepository
     from app.db.models import Category, Product, OrderItem, Order
-    from sqlalchemy import cast, Date, func, select
+    from sqlalchemy import func, select
+
+    from app.shared.clock import in_store_days
 
     order_filter = [
         Order.organization_id == organization_id,
         Order.status == "completed",
-        cast(Order.completed_at, Date) >= date_from,
-        cast(Order.completed_at, Date) <= date_to,
+        *in_store_days(Order.completed_at, date_from, date_to),
     ]
     if branch_id:
         order_filter.append(Order.branch_id == branch_id)

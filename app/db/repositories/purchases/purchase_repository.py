@@ -13,6 +13,7 @@ from app.db.models import (
     StockMovement,
     Supplier,
 )
+from app.shared.clock import in_store_days
 
 
 class PurchaseRepository:
@@ -103,15 +104,8 @@ class PurchaseRepository:
         if supplier_id:
             stmt = stmt.where(PurchaseOrder.supplier_id == supplier_id)
 
-        if date_from:
-            stmt = stmt.where(
-                func.date(PurchaseOrder.created_at) >= date_from
-            )
-
-        if date_to:
-            stmt = stmt.where(
-                func.date(PurchaseOrder.created_at) <= date_to
-            )
+        # Sales days in store time, not the PostgreSQL session's dates.
+        stmt = stmt.where(*in_store_days(PurchaseOrder.created_at, date_from, date_to))
 
         total = db.scalar(
             select(func.count()).select_from(stmt.subquery())

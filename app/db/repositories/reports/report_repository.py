@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import case, cast, Date, extract, func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -14,6 +14,7 @@ from app.db.models import (
     Product,
     Refund,
 )
+from app.shared.clock import in_store_days, store_hour, store_sales_day
 
 
 class ReportRepository:
@@ -28,8 +29,7 @@ class ReportRepository:
         order_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
+            *in_store_days(Order.completed_at, date_from, date_to),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
@@ -93,15 +93,17 @@ class ReportRepository:
         order_filter = ReportRepository._order_filter(
             organization_id, date_from, date_to, branch_id, order_source
         )
+        # The hour on the shop's wall clock (STORE_TIMEZONE).
+        hour = store_hour(Order.created_at)
         return db.execute(
             select(
-                extract("hour", Order.created_at).label("hour"),
+                hour.label("hour"),
                 func.count(Order.id).label("order_count"),
                 func.coalesce(func.sum(Order.grand_total), 0).label("sales"),
             )
             .where(*order_filter)
-            .group_by(extract("hour", Order.created_at))
-            .order_by(extract("hour", Order.created_at))
+            .group_by(hour)
+            .order_by(hour)
         ).all()
 
     @staticmethod
@@ -111,7 +113,7 @@ class ReportRepository:
         order_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) == target_date,
+            *in_store_days(Order.completed_at, target_date, target_date),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
@@ -127,10 +129,11 @@ class ReportRepository:
     def refund_total(
         db: Session, organization_id: int, target_date: date, branch_id: int | None
     ) -> int:
+        # Counted on the day the money was refunded, not the day of the sale.
         refund_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) == target_date,
+            *in_store_days(Refund.created_at, target_date, target_date),
         ]
         if branch_id:
             refund_filter.append(Order.branch_id == branch_id)
@@ -197,24 +200,24 @@ class ReportRepository:
         order_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
+            *in_store_days(Order.completed_at, date_from, date_to),
         ]
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
 
+        sales_day = store_sales_day(Order.completed_at)
         return list(
             db.execute(
                 select(
-                    cast(Order.completed_at, Date).label("date"),
+                    sales_day.label("date"),
                     func.coalesce(func.sum(Order.grand_total), 0).label("gross_sales"),
                     func.coalesce(func.sum(Order.discount_amount), 0).label("discounts"),
                     func.coalesce(func.sum(Order.tax_amount), 0).label("tax"),
                     func.count(Order.id).label("order_count"),
                 )
                 .where(*order_filter)
-                .group_by(cast(Order.completed_at, Date))
-                .order_by(cast(Order.completed_at, Date))
+                .group_by(sales_day)
+                .order_by(sales_day)
             ).all()
         )
 
@@ -222,24 +225,25 @@ class ReportRepository:
     def refund_summary(
         db: Session, organization_id: int, date_from: date, date_to: date, branch_id: int | None
     ) -> list[tuple]:
+        # Counted on the day the money was refunded, not the day of the sale.
         refund_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
+            *in_store_days(Refund.created_at, date_from, date_to),
         ]
         if branch_id:
             refund_filter.append(Order.branch_id == branch_id)
 
+        refund_day = store_sales_day(Refund.created_at)
         return list(
             db.execute(
                 select(
-                    cast(Order.completed_at, Date).label("date"),
+                    refund_day.label("date"),
                     func.coalesce(func.sum(Refund.refund_amount), 0).label("refunds"),
                 )
                 .join(Order, Order.id == Refund.order_id)
                 .where(*refund_filter)
-                .group_by(cast(Order.completed_at, Date))
+                .group_by(refund_day)
             ).all()
         )
 
@@ -250,8 +254,7 @@ class ReportRepository:
         order_filter = [
             Order.organization_id == organization_id,
             Order.status == "completed",
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
+            *in_store_days(Order.completed_at, date_from, date_to),
             Payment.status == "completed",
         ]
         if branch_id:
@@ -278,8 +281,7 @@ class ReportRepository:
     ) -> list[tuple]:
         txn_filter = [
             Customer.organization_id == organization_id,
-            cast(LoyaltyTransaction.created_at, Date) >= date_from,
-            cast(LoyaltyTransaction.created_at, Date) <= date_to,
+            *in_store_days(LoyaltyTransaction.created_at, date_from, date_to),
         ]
         return list(
             db.execute(
@@ -311,8 +313,7 @@ class ReportRepository:
             Order.organization_id == organization_id,
             Order.status == "completed",
             Order.customer_id.isnot(None),
-            cast(Order.completed_at, Date) >= date_from,
-            cast(Order.completed_at, Date) <= date_to,
+            *in_store_days(Order.completed_at, date_from, date_to),
         ]
         return list(
             db.execute(

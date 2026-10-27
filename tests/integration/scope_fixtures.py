@@ -164,21 +164,25 @@ def orders(session: Session, world: World) -> dict[str, int]:
 
 @pytest.fixture()
 def sales(session: Session, world: World) -> str:
-    """Completed sales today: 100 at A, 250 at B. Returns today's date (ISO)."""
+    """Completed sales: 100 at A, 250 at B. Returns their sales day (ISO).
+
+    A fixed time, never "now": 2026-10-26T17:30Z is 00:30 on the 27th in
+    Bangkok and still the 26th in UTC and in New York.
+    """
     from datetime import datetime, timezone
     from decimal import Decimal
 
     from app.db.models import Order
 
-    now = datetime.now(timezone.utc)
+    at = datetime(2026, 10, 26, 17, 30, tzinfo=timezone.utc)
     for where, total in (("A", "100"), ("B", "250")):
         session.add(Order(
             organization_id=world.org, branch_id=world.branch[where], order_number=f"SALE-{where}",
-            user_id=world.users["sa"], status="completed", completed_at=now,
+            user_id=world.users["sa"], status="completed", completed_at=at,
             subtotal=Decimal(total), grand_total=Decimal(total), amount_paid=Decimal(total),
         ))
     session.commit()
-    return now.date().isoformat()
+    return "2026-10-27"
 
 
 @pytest.fixture()
