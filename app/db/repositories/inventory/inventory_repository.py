@@ -64,6 +64,26 @@ class InventoryRepository:
         ).scalar()
 
     @staticmethod
+    def add_on_hand(db: Session, branch_id: int, product_id: int, quantity: int) -> int:
+        """Add ``quantity`` (>= 0) to on_hand, creating the row if the branch
+        has none; the new on_hand. One statement: two requests adding to the
+        same new row at once both land (the row is created once), and each
+        gets the on_hand after its own addition, so its ledger line
+        (after - quantity -> after) follows the other's."""
+        return db.execute(
+            text(
+                """
+                INSERT INTO inventory (branch_id, product_id, on_hand, reserved, updated_at)
+                VALUES (:bid, :pid, :qty, 0, NOW())
+                ON CONFLICT (branch_id, product_id)
+                DO UPDATE SET on_hand = inventory.on_hand + :qty, updated_at = NOW()
+                RETURNING on_hand
+                """
+            ),
+            {"bid": branch_id, "pid": product_id, "qty": quantity},
+        ).scalar_one()
+
+    @staticmethod
     def get_inventory(
         db: Session, branch_id: int, product_id: int
     ) -> Inventory | None:

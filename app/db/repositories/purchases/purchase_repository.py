@@ -35,12 +35,6 @@ class PurchaseRepository:
         ) or 0
 
     @staticmethod
-    def count_receivings(db: Session) -> int:
-        return db.scalar(
-            select(func.count()).select_from(PurchaseReceiving)
-        ) or 0
-
-    @staticmethod
     def get_supplier(db: Session, supplier_id: int) -> Supplier | None:
         return db.get(Supplier, supplier_id)
 
@@ -159,35 +153,6 @@ class PurchaseRepository:
                 InventoryLot.product_id == product_id,
                 InventoryLot.lot_number == lot_number,
             )
-        )
-
-    @staticmethod
-    def get_inventory_on_hand(
-        db: Session, branch_id: int, product_id: int
-    ) -> int | None:
-        return db.scalar(
-            select(Inventory.on_hand).where(
-                Inventory.branch_id == branch_id,
-                Inventory.product_id == product_id,
-            )
-        )
-
-    @staticmethod
-    def upsert_inventory(
-        db: Session, branch_id: int, product_id: int, quantity: int
-    ) -> None:
-        db.execute(
-            text(
-                """
-                INSERT INTO inventory (branch_id, product_id, on_hand, reserved, updated_at)
-                VALUES (:bid, :pid, :qty, 0, NOW())
-                ON CONFLICT (branch_id, product_id)
-                DO UPDATE SET
-                    on_hand = inventory.on_hand + :qty,
-                    updated_at = NOW()
-                """
-            ),
-            {"bid": branch_id, "pid": product_id, "qty": quantity},
         )
 
     @staticmethod

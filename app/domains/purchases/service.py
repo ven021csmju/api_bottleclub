@@ -21,12 +21,14 @@ from app.db.models import (
     Product,
     StockMovement,
 )
+from app.db.repositories.inventory.inventory_repository import InventoryRepository
 from app.db.repositories.purchases import PurchaseRepository
 from app.shared.enums import POStatus, ReceivingStatus, StockMovementType
 from app.shared.exceptions import (
     BadRequestException,
     NotFoundException,
 )
+from app.shared.ordering import generate_receiving_number
 
 
 class PurchaseService:
@@ -40,8 +42,9 @@ class PurchaseService:
 
     @staticmethod
     def _generate_receiving_number(db: Session) -> str:
-        count = PurchaseRepository.count_receivings(db)
-        return f"REC-{count + 1:06d}"
+        # From document_sequences (row-locked): two receipts at once never get
+        # the same number (count + 1 did).
+        return generate_receiving_number(db)
 
     @staticmethod
     def _build_po_response(po: PurchaseOrder, db: Session) -> PurchaseOrderResponse:
@@ -322,16 +325,12 @@ class PurchaseService:
             # Update receiving item with lot reference
             receiving_item.inventory_lot_id = lot.id
 
-            # Atomic inventory balance update
-            on_hand_before = (
-                PurchaseRepository.get_inventory_on_hand(
-                    db, branch_id, po_item.product_id
-                )
-                or 0
-            )
-            PurchaseRepository.upsert_inventory(
+            # One statement: the ledger line starts where on_hand really was,
+            # even when another receipt of the product lands at the same time.
+            on_hand_after = InventoryRepository.add_on_hand(
                 db, branch_id, po_item.product_id, item_data.quantity_received
             )
+            on_hand_before = on_hand_after - item_data.quantity_received
 
             # Create stock movement
             movement = StockMovement(

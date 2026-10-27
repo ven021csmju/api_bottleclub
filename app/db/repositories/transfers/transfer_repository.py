@@ -120,7 +120,3 @@ class TransferRepository:
     @staticmethod
     def add_stock_movement(db: Session, movement: StockMovement) -> None:
         db.add(movement)
-
-    @staticmethod
-    def add_inventory(db: Session, inv: Inventory) -> None:
-        db.add(inv)

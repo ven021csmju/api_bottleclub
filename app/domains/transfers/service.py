@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.db.models import Inventory, StockMovement, StockTransfer, StockTransferItem
+from app.db.models import StockMovement, StockTransfer, StockTransferItem
+from app.db.repositories.inventory.inventory_repository import InventoryRepository
 from app.db.repositories.transfers import TransferRepository
 from app.shared.exceptions import (
     AppException,
@@ -250,14 +251,12 @@ class TransferService:
                 continue
             product_id = transfer_item.product_id
 
-            dest_inv = TransferRepository.lock_inventory(db, transfer.dest_branch_id, product_id)
-            if dest_inv is None:
-                dest_inv = Inventory(
-                    branch_id=transfer.dest_branch_id, product_id=product_id, on_hand=0, reserved=0
-                )
-                TransferRepository.add_inventory(db, dest_inv)
-            on_hand_before = dest_inv.on_hand
-            dest_inv.on_hand = on_hand_before + qty_received
+            # Creates the destination's row if it has none (two receipts at
+            # once both land); on hand grows by the received part only.
+            on_hand_after = InventoryRepository.add_on_hand(
+                db, transfer.dest_branch_id, product_id, qty_received
+            )
+            on_hand_before = on_hand_after - qty_received
 
             TransferRepository.add_stock_movement(
                 db,
