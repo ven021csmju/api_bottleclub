@@ -1427,7 +1427,7 @@ class IdempotencyKey(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("idempotency_key", "endpoint", name="uq_idempotency_key_endpoint"),
+        UniqueConstraint("user_id", "endpoint", "idempotency_key", name="uq_idempotency_user_endpoint_key"),
         Index("ix_idempotency_keys_expires_at", "expires_at"),
     )
 
