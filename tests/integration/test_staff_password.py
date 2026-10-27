@@ -38,6 +38,11 @@ class TestLoginStatus:
         session.get(User, seed_user["user_id"]).status = "inactive"
         session.commit()
 
+        # A wrong password never learns the status.
+        resp = _login(client, seed_user["username"], "wrong-password")
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Invalid username or password"
+
         resp = _login(client, seed_user["username"], seed_user["password"])
         assert resp.status_code == 401, resp.text
         assert resp.json()["code"] == "ACCOUNT_INACTIVE"
@@ -50,18 +55,11 @@ class TestLoginStatus:
         assert _login(client, seed_user["username"], seed_user["password"]).status_code == 401
         assert _refresh_tokens(session, seed_user["user_id"]) == 0
 
-    def test_wrong_password_on_inactive_account_does_not_reveal_the_status(
-        self, client: TestClient, seed_user: dict, session: Session
-    ):
-        session.get(User, seed_user["user_id"]).status = "inactive"
-        session.commit()
-        resp = _login(client, seed_user["username"], "wrong-password")
-        assert resp.status_code == 401
-        assert resp.json()["detail"] == "Invalid username or password"
-
 
 class TestPasswordLength:
-    def test_register_password_over_72_bytes_is_422(self, client: TestClient, seed_org: int, monkeypatch):
+    def test_register_password_over_72_bytes_is_422_and_72_bytes_work(
+        self, client: TestClient, seed_org: int, monkeypatch
+    ):
         monkeypatch.setattr(settings, "REGISTRATION_ENABLED", True)
         body = {"username": "longpw", "email": "longpw@test.com", "password": LONG_THAI,
                 "display_name": "Long", "organization_id": seed_org}
@@ -69,8 +67,6 @@ class TestPasswordLength:
         assert resp.status_code == 422, resp.text
         assert resp.json()["code"] == "VALIDATION_ERROR"
 
-    def test_register_password_of_72_bytes_is_accepted(self, client: TestClient, seed_org: int, monkeypatch):
-        monkeypatch.setattr(settings, "REGISTRATION_ENABLED", True)
         password = "ก" * 24  # 72 bytes
         body = {"username": "pw72", "email": "pw72@test.com", "password": password,
                 "display_name": "72", "organization_id": seed_org}
@@ -89,8 +85,22 @@ class TestLogout:
     def _refresh(client: TestClient, tokens: dict):
         return client.post(f"{API}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
 
-    def test_logout_with_its_refresh_token_revokes_that_session_only(self, client: TestClient, seed_user: dict):
+    def test_logout_with_its_refresh_token_revokes_that_session_only(
+        self, client: TestClient, seed_user: dict, seed_org: int, session: Session
+    ):
+        other = User(organization_id=seed_org, username="other", email="other@test.com",
+                     password_hash=hash_password("Other1234!"), display_name="Other", status="active")
+        session.add(other)
+        session.commit()
+        victim = _login(client, "other", "Other1234!").json()["data"]
         first, second = self._login_twice(client, seed_user)
+
+        # Another user's refresh token is left alone.
+        resp = client.post(f"{API}/auth/logout", json={"refresh_token": victim["refresh_token"]},
+                           headers={"Authorization": f"Bearer {first['access_token']}"})
+        assert resp.status_code == 204
+        assert self._refresh(client, victim).status_code == 200
+
         resp = client.post(f"{API}/auth/logout", json={"refresh_token": first["refresh_token"]},
                            headers={"Authorization": f"Bearer {first['access_token']}"})
         assert resp.status_code == 204
@@ -103,23 +113,6 @@ class TestLogout:
         assert resp.status_code == 204
         assert self._refresh(client, first).status_code == 401
         assert self._refresh(client, second).status_code == 401
-
-    def test_another_users_refresh_token_is_not_revoked(
-        self, client: TestClient, seed_user: dict, seed_org: int, session: Session
-    ):
-        from app.shared.security import create_access_token, hash_password
-
-        other = User(organization_id=seed_org, username="other", email="other@test.com",
-                     password_hash=hash_password("Other1234!"), display_name="Other", status="active")
-        session.add(other)
-        session.commit()
-        victim = _login(client, "other", "Other1234!").json()["data"]
-        token = create_access_token(user_id=seed_user["user_id"], org_id=seed_org, permissions=[], branches=[])
-
-        resp = client.post(f"{API}/auth/logout", json={"refresh_token": victim["refresh_token"]},
-                           headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 204
-        assert self._refresh(client, victim).status_code == 200
 
 
 # --- change-password -------------------------------------------------------
@@ -306,18 +299,14 @@ class TestForcedChange:
         live_sessions = session.scalar(select(func.count()).select_from(RefreshToken).where(
             RefreshToken.user_id == staff.id, RefreshToken.is_revoked == False))  # noqa: E712
 
+        # A wrong password never learns that the temporary password expired.
+        resp = _login(client, STAFF["username"], "wrong-password")
+        assert resp.status_code == 401 and resp.json()["detail"] == "Invalid username or password"
         resp = _login(client, STAFF["username"], STAFF["password"])
         assert resp.status_code == 401 and resp.json()["code"] == "TEMPORARY_PASSWORD_EXPIRED"
         assert _refresh_tokens(session, staff.id) == live_sessions  # no new token
         resp = _change(client, token, STAFF["password"], NEW_PASSWORD)
         assert resp.status_code == 401 and resp.json()["code"] == "TEMPORARY_PASSWORD_EXPIRED"
-
-    def test_wrong_password_never_reveals_an_expired_temporary_password(
-        self, client: TestClient, staff: User, session: Session
-    ):
-        self._must_change(session, staff, expires_in=-timedelta(hours=1))
-        resp = _login(client, STAFF["username"], "wrong-password")
-        assert resp.status_code == 401 and resp.json()["detail"] == "Invalid username or password"
 
 
 # --- temporary passwords: POST /users/, POST /users/{id}/reset-password -----
