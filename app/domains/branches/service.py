@@ -10,8 +10,11 @@ from .schemas import BranchCreate, BranchListResponse, BranchResponse, BranchUpd
 
 class BranchService:
     @staticmethod
-    def list_branches(db: Session, org_id: int) -> BranchListResponse:
+    def list_branches(db: Session, org_id: int, only: frozenset[int] | None = None) -> BranchListResponse:
+        """``only``: these branches (None: every branch of the organization)."""
         query = BranchRepository.list_query(db, org_id)
+        if only is not None:
+            query = query.filter(Branch.id.in_(only))
 
         items, total, _, _ = paginate(db, query, 1, 1000)
         return BranchListResponse(

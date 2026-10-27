@@ -70,6 +70,13 @@ class Access:
             return ALL_BRANCHES
         return frozenset(b for b, codes in self.by_branch.items() if code in codes)
 
+    def visible_branches(self) -> frozenset[int] | None:
+        """Branches the caller works at: every one (``ALL_BRANCHES``) for a
+        Superadmin or a role held organization-wide, else those of their roles."""
+        if self.superadmin or self.org_wide:
+            return ALL_BRANCHES
+        return frozenset(self.by_branch)
+
     def can_at(self, code: str, branch_id: int) -> bool:
         allowed = self.branches(code)
         return allowed is ALL_BRANCHES or branch_id in allowed

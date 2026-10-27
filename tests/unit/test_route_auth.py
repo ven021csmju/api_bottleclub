@@ -23,7 +23,7 @@ LOGIN_ONLY = {
     ("GET", "/auth/me"),
     ("POST", "/auth/logout"),
     ("POST", "/auth/change-password"),
-    # Branch picker after login; organization-scoped, no personal data.
+    # Branch picker after login: the caller's own branches only (38b).
     ("GET", "/branches/"),
     ("GET", "/branches/{branch_id}"),
     # Role and permission catalogue; organization-scoped, no personal data.

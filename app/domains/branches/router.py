@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.middleware.access import Access
 from app.middleware.auth import get_access, get_current_user, require_permission
-from app.shared.exceptions import ForbiddenException
+from app.shared.exceptions import ForbiddenException, NotFoundException
 from app.db.models import User
 
 from .schemas import BranchCreate, BranchListResponse, BranchResponse, BranchUpdate
@@ -23,8 +23,11 @@ def _ensure_superadmin(access: Access) -> None:
 def list_branches(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    access: Access = Depends(get_access),
 ) -> BranchListResponse:
-    return BranchService.list_branches(db, current_user.organization_id)
+    """The branches the caller works at (the picker after login); every branch
+    for a Superadmin or a role held organization-wide (Phase 38b)."""
+    return BranchService.list_branches(db, current_user.organization_id, access.visible_branches())
 
 
 @router.get("/{branch_id}", response_model=BranchResponse)
@@ -32,7 +35,12 @@ def get_branch(
     branch_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    access: Access = Depends(get_access),
 ) -> BranchResponse:
+    """404 for a branch the caller does not work at, as for a missing one."""
+    visible = access.visible_branches()
+    if visible is not None and branch_id not in visible:
+        raise NotFoundException(detail="Branch not found")
     branch = BranchService.get_branch(db, current_user.organization_id, branch_id)
     return BranchResponse.model_validate(branch)
 
