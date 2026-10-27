@@ -6,8 +6,8 @@ a loopback staging server. Production (``:8000`` or the public domain) is
 refused before any request is sent.
 
     E2E_BASE_URL=http://127.0.0.1:8100 \\
-    E2E_SA_USERNAME=e2e_sa E2E_SA_PASSWORD_FILE=~/p37-staging/sa_password \\
-    E2E_REGISTER_ID=1 E2E_RESULTS=~/p37-staging/results.jsonl \\
+    E2E_SA_USERNAME=e2e_sa E2E_SA_PASSWORD_FILE=~/p38a-staging/sa_password \\
+    E2E_RESULTS=~/p38a-staging/results.jsonl \\
     python -m pytest -p no:cacheprovider -m e2e_staging tests/e2e_staging
 
 Each check is recorded (step, PASS/FAIL/NOTE, HTTP status, expected, actual)

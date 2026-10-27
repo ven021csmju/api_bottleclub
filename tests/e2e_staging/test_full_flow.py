@@ -179,13 +179,16 @@ def test_c_staff(api, rec, flow):
 # d. POS: shift → barcode → order (twice) → cash checkout → receipt
 # ---------------------------------------------------------------------------
 def test_d_pos_sale(api, rec, flow):
-    import os
-
     s = "d"
-    needs(flow, "cashier", "p1", "p3", "stock")
+    needs(flow, "cashier", "manager", "p1", "p3", "stock")
     A = flow["A"]
-    register = int(os.environ.get("E2E_REGISTER_ID", "0") or 0)
-    rec.note(s, "register: no API creates one; E2E_REGISTER_ID was inserted by the staging setup", register)
+    resp = api.post("/registers/", "manager", json={"branch_id": A, "name": f"E2E Register {RUN}"})
+    rec.eq(s, "Branch Admin creates a register", 201, resp.status_code, resp.status_code)
+    register = flow["register"] = data(resp).get("id")
+    resp = api.post("/registers/", "cashier", json={"branch_id": A, "name": f"E2E Register {RUN} b"})
+    rec.eq(s, "POS staff cannot create one", 403, resp.status_code, resp.status_code)
+    listed = [r["id"] for r in rows(data(api.get("/registers/", "cashier")))]
+    rec.check(s, "POS staff sees it", register in listed, register, listed)
     resp = api.post("/shifts/open", "cashier", json={"branch_id": A, "register_id": register, "opening_cash": "1000.00"})
     rec.check(s, "open shift", created(resp), "200/201", resp.status_code, resp.status_code)
     flow["shift"] = data(resp).get("id")
@@ -230,14 +233,18 @@ def test_d_pos_sale(api, rec, flow):
         rec.eq(s, "cancel the idempotency probe", 200, resp.status_code, resp.status_code)
     rec.eq(s, "stock p1 back to −2 after the probes", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
-    cheap = api.post("/orders/", "cashier", json={**body, "items": [
-        {"product_id": flow["p1"], "quantity": 1, "unit_price": "1.00"}]})
-    rec.note(s, "POS may send its own unit_price (350 in the catalog, 1.00 sent)",
-             f"{cheap.status_code}: grand_total {data(cheap).get('grand_total')}", cheap.status_code,
-             expected="catalog price or 400")
-    if created(cheap):
-        resp = api.post(f"/orders/{data(cheap)['id']}/cancel", "manager", json={"reason": "E2E price probe"})
-        rec.eq(s, "cancel the price probe", 200, resp.status_code, resp.status_code)
+    for price in ("1.00", "999.00"):
+        probe = api.post("/orders/", "cashier", json={**body, "items": [
+            {"product_id": flow["p1"], "quantity": 1, "unit_price": price}]})
+        rec.eq(s, f"a price other than the catalog's ({price} for 350) is refused", (422, "PRICE_MISMATCH"),
+               (probe.status_code, probe.json().get("code")), probe.status_code)
+        if created(probe):
+            api.post(f"/orders/{data(probe)['id']}/cancel", "manager", json={"reason": "E2E price probe"})
+    plain = api.post("/orders/", "cashier", json={**body, "items": [{"product_id": flow["p1"], "quantity": 1}]})
+    rec.eq(s, "no unit_price: sold at the catalog price", (D(350),), (D(data(plain).get("grand_total", 0)),),
+           plain.status_code)
+    if created(plain):
+        api.post(f"/orders/{data(plain)['id']}/cancel", "manager", json={"reason": "E2E price probe"})
     rec.eq(s, "stock p1 back to −2 after every probe was cancelled", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
     resp = api.post(f"/orders/{flow['o1']}/checkout", "cashier",
@@ -250,7 +257,8 @@ def test_d_pos_sale(api, rec, flow):
     receipt = data(resp).get("order", {})
     rec.eq(s, "receipt", (200, D(880), 2, "paid"), (resp.status_code, D(receipt.get("grand_total", 0)),
                                                   len(receipt.get("items", [])), receipt.get("status")), resp.status_code)
-    rec.eq(s, "receipt payments", [D(1000)], [D(p["amount"]) for p in data(resp).get("payments", [])])
+    rec.eq(s, "receipt payment: 880 settled, 1000 handed over", [(D(880), D(1000))],
+           [(D(p["amount"]), D(p.get("tendered_amount") or 0)) for p in data(resp).get("payments", [])])
     flow["stock"]["p1"] -= 2
     flow["sales"] = {"o1": D(880)}
     flow["cash_in_drawer"] = D(880)
@@ -306,7 +314,8 @@ def test_e_slip(api, rec, flow):
     resp = api.get(f"/orders/{flow['o2']}", "manager")
     rec.eq(s, "order 2 is paid", "paid", data(resp).get("status"))
     pays = rows(data(api.get(f"/payments/{flow['o2']}", "manager")))
-    rec.eq(s, "one payment of 420", [D(420)], [D(p["amount"]) for p in pays])
+    rec.eq(s, "one bank_transfer of 420 in the cashier's shift", [("bank_transfer", D(420), flow["shift"])],
+           [(p["payment_method"], D(p["amount"]), p.get("shift_id")) for p in pays])
 
     audit = rows(data(api.get(f"/audit/?entity_id={vid}", "sa")))
     rec.check(s, "audit log of the approval", any("APPROVE" in (a.get("action") or "").upper() for a in audit),
@@ -380,40 +389,38 @@ def test_g_return(api, rec, flow):
     rec.check(s, "create return of 1×p1", created(resp) and ret.get("status") == "pending", "200/201 pending",
               (resp.status_code, ret.get("status")), resp.status_code)
     refunds = rows(data(api.get(f"/refunds/?order_id={flow['o1']}", "manager")))
-    rec.note(s, "refund created when the return is created (before process)",
-             [(r.get("refund_number"), r.get("status"), r.get("refund_amount")) for r in refunds])
-    rec.note(s, "stock back at create (before process)", on_hand(api, A, flow["p1"]), expected=stock_before)
+    rec.eq(s, "no refund until it is processed", [], refunds)
+    rec.eq(s, "no restock until it is processed", stock_before, on_hand(api, A, flow["p1"]))
 
     resp = api.put(f"/returns/{ret.get('id')}/process", "manager")
     rec.eq(s, "process the return", (200, "completed"), (resp.status_code, data(resp).get("status")), resp.status_code)
     refunds = rows(data(api.get(f"/refunds/?order_id={flow['o1']}", "manager")))
-    done = [D(r["refund_amount"]) for r in refunds if r.get("status") == "completed"]
-    rec.eq(s, "one completed refund of 350", [D(350)], done)
+    done = [(D(r["refund_amount"]), r.get("refund_method")) for r in refunds if r.get("status") == "completed"]
+    rec.eq(s, "one completed cash refund of 350 (paid cash)", [(D(350), "cash")], done)
     rec.eq(s, "stock p1 +1 (restock)", stock_before + 1, on_hand(api, A, flow["p1"]))
+    resp = api.put(f"/returns/{ret.get('id')}/process", "manager")
+    rec.eq(s, "processing again is refused", 400, resp.status_code, resp.status_code)
 
     resp = api.post("/returns/", "manager", json={
         "order_id": flow["o1"], "reason": "E2E second return of the same line",
         "items": [{"order_item_id": line["id"], "product_id": flow["p1"], "quantity": 2, "restock": True}]})
-    rec.note(s, "return again more than is left (2 of the 1 not yet returned)",
-             f"{resp.status_code} {'created ' + str(data(resp).get('return_number')) if created(resp) else data(resp)}",
-             resp.status_code,
-             expected="400")
+    rec.eq(s, "returning more than is left (2 of the 1 left) is refused", (400, "RETURN_QUANTITY_EXCEEDED"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
     refunds = rows(data(api.get(f"/refunds/?order_id={flow['o1']}", "manager")))
     total_refunded = sum((D(r["refund_amount"]) for r in refunds if r.get("status") == "completed"), D(0))
     rec.check(s, "refunds never exceed the sale (880)", total_refunded <= D(880), "≤ 880", total_refunded)
     flow["refunds"] = total_refunded
 
     unpaid = api.post("/orders/", "cashier", json={
-        "branch_id": A, "items": [{"product_id": flow["p3"], "quantity": 1, "unit_price": P3["selling_price"]}]})
+        "branch_id": A, "items": [{"product_id": flow["p3"], "quantity": 1}]})
     u = data(unpaid)
     if created(unpaid):
         resp = api.post("/returns/", "manager", json={
             "order_id": u["id"], "reason": "E2E return of an unpaid order",
             "items": [{"order_item_id": u["items"][0]["id"], "product_id": flow["p3"], "quantity": 1}]})
         refs = rows(data(api.get(f"/refunds/?order_id={u['id']}", "manager")))
-        rec.note(s, "return of an order that was never paid", f"{resp.status_code}; refunds "
-                 f"{[(r.get('status'), r.get('refund_amount')) for r in refs]}", resp.status_code,
-                 expected="400 (nothing was paid)")
+        rec.eq(s, "an order that was never paid cannot be returned", (400, "ORDER_NOT_PAID", []),
+               (resp.status_code, resp.json().get("code"), refs), resp.status_code)
         api.post(f"/orders/{u['id']}/cancel", "manager", json={"reason": "E2E unpaid probe"})
     flow["stock"]["p1"] = on_hand(api, A, flow["p1"])
     flow["cash_in_drawer"] -= total_refunded
@@ -531,9 +538,12 @@ def test_j_shift(api, rec, flow):
     resp = api.get(f"/shifts/{sid}/x-report", "cashier")
     x = data(resp)
     rec.eq(s, "x-report", 200, resp.status_code, resp.status_code)
-    rec.eq(s, "x-report total_sales = 880 + 420 + 420", D(1720), D(x.get("total_sales", 0)))
+    # Money taken: 880 cash, 420 by slip, 400 cash (420 less 20 points).
+    rec.eq(s, "x-report total_sales = 880 + 420 + 400", D(1700), D(x.get("total_sales", 0)))
     rec.eq(s, "x-report total_cash_sales = 880 + 400", cash_sales, D(x.get("total_cash_sales", 0)))
-    rec.eq(s, "x-report total_refunds", flow.get("refunds", D(0)), D(x.get("total_refunds", 0)))
+    rec.eq(s, "x-report other sales = the 420 transfer", D(420), D(x.get("total_other_sales", 0)))
+    rec.eq(s, "x-report refunds (all cash)", (flow.get("refunds", D(0)),) * 2,
+           (D(x.get("total_refunds", 0)), D(x.get("total_cash_refunds", 0))))
     rec.eq(s, "x-report cash in / out", (D(200), D(50)),
            (D(x.get("cash_movements_in", 0)), D(x.get("cash_movements_out", 0))))
     rec.eq(s, "expected_cash = 1000 + cash sales + 200 − 50 − refunds", expected_cash, D(x.get("expected_cash") or 0))
@@ -561,8 +571,8 @@ def test_k_reports(api, rec, flow):
     rec.eq(s, f"daily-summary revenue {sold}", sold, D(day.get("total_revenue", 0)))
     rec.eq(s, f"daily-summary refunds {refunds}", refunds, D(day.get("total_refunds", 0)))
     rec.eq(s, "daily-summary net", sold - refunds, D(day.get("net_sales", 0)))
-    rec.note(s, "status of the slip order (counted only when 'completed')",
-             data(api.get(f"/orders/{flow.get('o2')}", "sa")).get("status"))
+    rec.eq(s, "the slip order is 'paid' (not completed) and still counted", "paid",
+           data(api.get(f"/orders/{flow.get('o2')}", "sa")).get("status"))
 
     resp = api.get(f"/reports/sales?date_from={d}&date_to={d}&branch_id={A}&group_by=category", "sa")
     sales = data(resp)
