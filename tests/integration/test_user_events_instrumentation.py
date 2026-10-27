@@ -529,6 +529,10 @@ class TestRefundReturnEvents:
 
         order = session.get(Order, order_id)
         order_item = order.items[0]
+        # Only a paid order can be returned (38a).
+        paid = client.post(f"/api/v1/orders/{order_id}/checkout", headers=multiperm_headers,
+                           json={"payments": [{"payment_method": "cash", "amount": "100.00"}]})
+        assert paid.status_code == 200, paid.text
 
         resp = client.post(
             "/api/v1/returns/",

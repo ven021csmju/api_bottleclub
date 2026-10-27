@@ -23,6 +23,28 @@ class ReturnRepository:
         ).scalar_one_or_none()
 
     @staticmethod
+    def lock_org_order(db: Session, org_id: int, order_id: int) -> Order | None:
+        """The order, locked (FOR UPDATE) until the transaction ends: returns
+        and refunds of one order are processed one at a time."""
+        return db.execute(
+            select(Order)
+            .where(Order.id == order_id, Order.organization_id == org_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def returned_quantities(db: Session, order_id: int) -> dict[int, int]:
+        """order_item_id -> quantity already returned (completed returns)."""
+        rows = db.execute(
+            select(ReturnItem.order_item_id, func.coalesce(func.sum(ReturnItem.quantity), 0))
+            .join(Return, Return.id == ReturnItem.return_id)
+            .where(Return.order_id == order_id, Return.status == "completed")
+            .group_by(ReturnItem.order_item_id)
+        ).all()
+        return {item_id: int(qty) for item_id, qty in rows}
+
+    @staticmethod
     def add_return(db: Session, ret: Return) -> Return:
         db.add(ret)
         db.flush()

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,15 @@ class ReturnListResponse(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+#: How a processed return refunds; "original": the order's payment method
+#: (when it was paid by one method only).
+RefundMethod = Literal["original", "cash", "credit_card", "debit_card", "qr_code", "bank_transfer", "e_wallet"]
+
+
+class ReturnProcess(BaseModel):
+    refund_method: RefundMethod = "original"
 
 
 class ReturnStatusUpdate(BaseModel):

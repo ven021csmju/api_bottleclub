@@ -10,6 +10,7 @@ from app.db.models import User
 from .schemas import (
     ReturnCreate,
     ReturnListResponse,
+    ReturnProcess,
     ReturnResponse,
     ReturnStatusUpdate,
 )
@@ -86,6 +87,7 @@ def get_return(
 @router.put("/{return_id}/process", response_model=ReturnResponse)
 def process_return(
     return_id: int,
+    body: ReturnProcess | None = None,
     user: User = Depends(require_permission("returns.process", scope="any")),
     access: Access = Depends(get_access),
     db: Session = Depends(get_db),
@@ -95,5 +97,6 @@ def process_return(
         db=db,
         return_id=return_id,
         user_id=user.id,
+        refund_method=(body or ReturnProcess()).refund_method,
     )
     return ReturnResponse.model_validate(ret)

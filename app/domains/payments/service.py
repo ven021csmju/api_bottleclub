@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from app.db.models import Payment, Refund
 from app.db.repositories.payments import PaymentRepository
 from app.domains.orders.service import OrderService
-from app.domains.shifts.drawer import CASH, current_shift, paid_net
+from app.db.repositories.returns import ReturnRepository
+from app.domains.returns.service import PAID_STATUSES
+from app.domains.shifts.drawer import CASH, current_shift, paid_net, refunded
 from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
@@ -104,8 +106,20 @@ class PaymentService:
         refund_amount = Decimal(str(data["refund_amount"]))
         if refund_amount <= 0:
             raise BadRequestException(detail="Refund amount must be positive")
-        if refund_amount > Decimal(str(order.amount_paid)):
-            raise BadRequestException(detail="Refund amount exceeds amount paid")
+        # One refund of an order at a time; together they stay within what
+        # the order's payments settled.
+        order = ReturnRepository.lock_org_order(db, org_id, order_id)
+        if order.status not in PAID_STATUSES:
+            raise BadRequestException(
+                detail=f"Only a paid order can be refunded (this one is '{order.status}')", code="ORDER_NOT_PAID"
+            )
+        left = paid_net(db, order.id) - refunded(db, order.id)
+        if refund_amount > left:
+            raise BadRequestException(
+                detail=f"Refund ({refund_amount}) exceeds what is left to refund ({left})",
+                code="REFUND_EXCEEDS_PAID",
+            )
+        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
 
         refund_number = generate_refund_number(db)
 
@@ -117,6 +131,7 @@ class PaymentService:
             status="completed",
             processed_by=user_id,
             reason=data.get("reason"),
+            shift_id=shift.id if shift else None,
         )
         PaymentRepository.add_refund(db, refund)
 
