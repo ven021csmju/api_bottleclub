@@ -8,6 +8,8 @@ from jose import JWTError, jwt
 from app.config.settings import settings
 
 BCRYPT_ROUNDS = 12
+#: bcrypt reads at most 72 bytes; bcrypt 5 raises on a longer password.
+MAX_PASSWORD_BYTES = 72
 
 
 def hash_password(password: str) -> str:

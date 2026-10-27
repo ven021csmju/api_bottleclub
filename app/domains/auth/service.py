@@ -110,6 +110,11 @@ class AuthService:
             _record_attempt(db, username, ip_address, success=False, user_id=user.id)
             raise UnauthorizedException(detail="Invalid username or password")
 
+        # Checked after the password, so a guess never learns the status.
+        if user.status != "active":
+            _record_attempt(db, username, ip_address, success=False, user_id=user.id)
+            raise UnauthorizedException(detail="User account is inactive", code="ACCOUNT_INACTIVE")
+
         user.failed_login_attempts = 0
         user.locked_until = None
         user.last_login_at = now

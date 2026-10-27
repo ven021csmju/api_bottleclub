@@ -1,6 +1,19 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
+
+from app.shared.security import MAX_PASSWORD_BYTES
+
+
+def _fits_bcrypt(value: str) -> str:
+    if len(value.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise ValueError(f"password must be at most {MAX_PASSWORD_BYTES} bytes (UTF-8)")
+    return value
+
+
+#: A password bcrypt can hash: longer → 422, not 500.
+BcryptPassword = Annotated[str, AfterValidator(_fits_bcrypt)]
 
 
 class LoginRequest(BaseModel):
@@ -11,7 +24,7 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=1, max_length=100)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    password: BcryptPassword = Field(min_length=8, max_length=MAX_PASSWORD_BYTES)
     display_name: str = Field(min_length=1, max_length=255)
     phone: str | None = Field(default=None, max_length=50)
     organization_id: int | None = None
