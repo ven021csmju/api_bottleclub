@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.db.repositories.reports import ReportRepository
 from app.db.models import Customer, Order, PaymentVerification
+from app.shared.clock import store_today
 
 
 class ReportService:
     @staticmethod
     def get_ecommerce_dashboard(db: Session, organization_id: int) -> dict:
-        today = date.today()
+        today = store_today()
         month_start = today.replace(day=1)
 
         today_totals = ReportRepository.sales_totals(

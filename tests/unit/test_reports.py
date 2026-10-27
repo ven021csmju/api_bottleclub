@@ -135,3 +135,38 @@ class TestLoyaltyReport:
         assert len(result["customers"]) == 2
         assert result["customers"][0]["orders"] == 3
         assert result["customers"][1]["orders"] == 0
+
+class TestEcommerceDashboardToday:
+    def test_today_and_this_month_are_bangkok_dates(self, monkeypatch):
+        from datetime import datetime, timezone
+        from unittest.mock import MagicMock
+
+        from app.domains.reports import service as service_module
+        from app.shared import clock
+
+        # 2026-11-01 01:00 in Bangkok: still 31 October in UTC and New York.
+        moment = datetime(2026, 10, 31, 18, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(clock, "_utcnow", lambda: moment)
+        ranges = []
+
+        class StubRepo:
+            @staticmethod
+            def sales_totals(db, organization_id, date_from, date_to, branch_id=None, order_source=None):
+                ranges.append((date_from, date_to))
+                return SimpleNamespace(total_sales=0, total_orders=0)
+
+            @staticmethod
+            def top_products(db, organization_id, date_from, date_to, branch_id=None, order_source=None):
+                ranges.append((date_from, date_to))
+                return []
+
+        monkeypatch.setattr(service_module, "ReportRepository", StubRepo)
+        db = MagicMock()
+        db.scalar.return_value = 0
+        db.scalars.return_value.all.return_value = []
+        ReportService.get_ecommerce_dashboard(db, 1)
+        assert ranges == [
+            (date(2026, 11, 1), date(2026, 11, 1)),
+            (date(2026, 11, 1), date(2026, 11, 1)),
+            (date(2026, 11, 1), date(2026, 11, 1)),
+        ]
