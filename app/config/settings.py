@@ -1,6 +1,7 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -29,6 +30,14 @@ class Settings(BaseSettings):
     # A temporary password (POST /users/, POST /users/{id}/reset-password)
     # cannot log in after this many hours; an administrator resets it again.
     TEMP_PASSWORD_EXPIRE_HOURS: int = 72
+
+    # The shop's time zone (IANA name). Reports, document numbers and
+    # datetimes sent without an offset use it; it never follows the time zone
+    # of the server or of PostgreSQL. An unknown name stops the app at start.
+    STORE_TIMEZONE: str = "Asia/Bangkok"
+    # Hour (0-23, store time) at which a sales day starts: day D is
+    # [D HH:00, D+1 HH:00). 5 counts a sale at 04:59 on the day before.
+    STORE_DAY_START_HOUR: int = 0
 
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
@@ -121,6 +130,26 @@ class Settings(BaseSettings):
         if self.REGISTRATION_ENABLED is not None:
             return self.REGISTRATION_ENABLED
         return self.ENVIRONMENT.lower() not in {"production", "staging"}
+
+    @field_validator("STORE_TIMEZONE")
+    @classmethod
+    def validate_store_timezone(cls, value: str) -> str:
+        # The name is also written into SQL (AT TIME ZONE) and the libpq
+        # options string, so only plain IANA names are accepted.
+        if not value or any(not (c.isalnum() or c in "/_+-") for c in value):
+            raise ValueError(f"STORE_TIMEZONE is not a time zone name: {value!r}")
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"STORE_TIMEZONE is not a known time zone: {value!r}") from exc
+        return value
+
+    @field_validator("STORE_DAY_START_HOUR")
+    @classmethod
+    def validate_store_day_start_hour(cls, value: int) -> int:
+        if not 0 <= value <= 23:
+            raise ValueError("STORE_DAY_START_HOUR must be between 0 and 23")
+        return value
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":
