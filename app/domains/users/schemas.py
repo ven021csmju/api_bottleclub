@@ -11,6 +11,8 @@ REJECTED_FIELDS = {
     # Display only; no permission check reads it (app/domains/roles/access.py).
     "is_superadmin": "is_superadmin is read-only: Superadmin authority is the Superadmin role, "
     "assigned with POST /users/{id}/roles",
+    "password": "password is set by the server: POST /users/ answers a temporary password once, "
+    "POST /users/{id}/reset-password gives a new one; the user then sets their own",
 }
 
 
@@ -35,7 +37,6 @@ class UserRoleAssign(BaseModel):
 class UserCreate(_RejectFields):
     username: str
     email: EmailStr
-    password: str
     display_name: str
     phone: str | None = None
     roles: list[UserRoleAssign] = []
@@ -56,11 +57,25 @@ class UserResponse(BaseModel):
     phone: str | None
     status: str
     is_superadmin: bool
+    must_change_password: bool
+    temp_password_expires_at: datetime.datetime | None
     roles: list[UserRoleAssign] = Field(default=[], validation_alias="user_roles")
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class UserCreatedResponse(UserResponse):
+    #: Shown once; the user must change it at the first login.
+    temporary_password: str
+
+
+class PasswordResetResponse(BaseModel):
+    user_id: int
+    #: Shown once; the user must change it at the next login.
+    temporary_password: str
+    temp_password_expires_at: datetime.datetime
 
 
 class UserListResponse(BaseModel):

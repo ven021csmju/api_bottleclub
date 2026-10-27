@@ -1,7 +1,11 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.db.models import Role, User, UserRole
+from app.db.repositories.auth import AuthRepository
 from app.db.repositories.branches import BranchRepository
 from app.db.repositories.roles import RoleRepository
 from app.db.repositories.users import UserRepository
@@ -14,7 +18,7 @@ from app.domains.roles.access import (
 from app.middleware.access import ALL_BRANCHES, Access
 from app.shared.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.shared.pagination import paginate
-from app.shared.security import hash_password
+from app.shared.security import generate_temporary_password, hash_password
 
 from .schemas import UserCreate, UserListResponse, UserResponse, UserUpdate
 
@@ -29,6 +33,21 @@ def _ensure_branch_allowed(access: Access, code: str, branch_id: int | None) -> 
             )
     else:
         access.ensure_at(code, branch_id, "Branch")
+
+
+def _set_temporary_password(user: User) -> str:
+    """A new random password the user must change at their next login, valid
+    for TEMP_PASSWORD_EXPIRE_HOURS. Older access tokens stop working
+    (password_changed_at). Returns the password, to be shown once."""
+    now = datetime.now(timezone.utc)
+    password = generate_temporary_password()
+    user.password_hash = hash_password(password)
+    user.must_change_password = True
+    user.temp_password_expires_at = now + timedelta(hours=settings.TEMP_PASSWORD_EXPIRE_HOURS)
+    user.password_changed_at = now
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    return password
 
 
 class UserService:
@@ -71,7 +90,8 @@ class UserService:
         return user
 
     @staticmethod
-    def create_user(db: Session, access: Access, data: UserCreate) -> User:
+    def create_user(db: Session, access: Access, data: UserCreate) -> tuple[User, str]:
+        """The new user and their temporary password."""
         org_id = access.org_id
         assignments = list(dict.fromkeys((a.role_id, a.branch_id) for a in data.roles))
         if not assignments and not access.can("users.create", None):
@@ -91,10 +111,10 @@ class UserService:
             organization_id=org_id,
             username=data.username,
             email=data.email,
-            password_hash=hash_password(data.password),
             display_name=data.display_name,
             phone=data.phone,
         )
+        password = _set_temporary_password(user)
         UserRepository.add_user(db, user)
 
         for role_id, branch_id in assignments:
@@ -102,7 +122,19 @@ class UserService:
 
         db.commit()
         db.refresh(user)
-        return user
+        return user, password
+
+    @staticmethod
+    def reset_password(db: Session, access: Access, user_id: int) -> tuple[User, str]:
+        """Give the user a new temporary password and end all their sessions."""
+        user = UserService.get_visible_user(db, access, user_id, "users.update")
+        ensure_not_self(access, user, "password here: use POST /auth/change-password")
+        ensure_can_manage(db, access, user)
+        password = _set_temporary_password(user)
+        AuthRepository.revoke_refresh_tokens(db, user.id)
+        db.commit()
+        db.refresh(user)
+        return user, password
 
     @staticmethod
     def update_user(db: Session, access: Access, user_id: int, data: UserUpdate) -> User:

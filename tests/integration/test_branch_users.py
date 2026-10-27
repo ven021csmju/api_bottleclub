@@ -56,7 +56,7 @@ def test_roles_are_given_and_removed_only_at_the_callers_branches(client: TestCl
 
 def test_new_staff_get_roles_at_the_callers_branches(client: TestClient, world, as_):
     def create(name: str, roles: list, headers) -> int:
-        body = {"username": name, "email": f"{name}@example.com", "password": "Passw0rd!", "display_name": name,
+        body = {"username": name, "email": f"{name}@example.com", "display_name": name,
                 "roles": roles}
         return client.post(f"{API}/users/", json=body, headers=headers).status_code
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -6,7 +6,15 @@ from app.middleware.access import Access
 from app.middleware.auth import get_access, get_current_user, require_permission
 from app.db.models import User
 
-from .schemas import UserCreate, UserListResponse, UserRoleAssign, UserResponse, UserUpdate
+from .schemas import (
+    PasswordResetResponse,
+    UserCreate,
+    UserCreatedResponse,
+    UserListResponse,
+    UserResponse,
+    UserRoleAssign,
+    UserUpdate,
+)
 from .service import UserService
 
 router = APIRouter()
@@ -39,15 +47,17 @@ def get_user(
     return UserResponse.model_validate(user)
 
 
-@router.post("/", response_model=UserResponse, status_code=201)
+@router.post("/", response_model=UserCreatedResponse, status_code=201)
 def create_user(
     data: UserCreate,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.create", scope="any")),
     access: Access = Depends(get_access),
-) -> UserResponse:
-    user = UserService.create_user(db, access, data)
-    return UserResponse.model_validate(user)
+) -> UserCreatedResponse:
+    user, password = UserService.create_user(db, access, data)
+    response.headers["Cache-Control"] = "no-store"
+    return UserCreatedResponse(**UserResponse.model_validate(user).model_dump(), temporary_password=password)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
@@ -60,6 +70,21 @@ def update_user(
 ) -> UserResponse:
     user = UserService.update_user(db, access, user_id, data)
     return UserResponse.model_validate(user)
+
+
+@router.post("/{user_id}/reset-password", response_model=PasswordResetResponse)
+def reset_password(
+    user_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users.update", scope="any")),
+    access: Access = Depends(get_access),
+) -> PasswordResetResponse:
+    user, password = UserService.reset_password(db, access, user_id)
+    response.headers["Cache-Control"] = "no-store"
+    return PasswordResetResponse(
+        user_id=user.id, temporary_password=password, temp_password_expires_at=user.temp_password_expires_at
+    )
 
 
 @router.delete("/{user_id}", status_code=204)

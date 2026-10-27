@@ -20,6 +20,11 @@ def hash_password(password: str) -> str:
     return hashed.decode("utf-8")
 
 
+def generate_temporary_password() -> str:
+    """16 URL-safe characters (96 bits), shown once to the administrator."""
+    return secrets.token_urlsafe(12)
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return bcrypt.checkpw(

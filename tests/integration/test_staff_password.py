@@ -3,7 +3,7 @@
 Login refuses inactive accounts; a password bcrypt cannot hash is 422, not 500;
 logout revokes refresh tokens; a user changes their own password, which ends
 every older session; a user who must change their password can do nothing
-else first.
+else first; new users and resets get a temporary password from the server.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.config.settings import settings
 from app.db.models import RefreshToken, User
 from app.shared.security import hash_password, hash_token
+from tests.integration.scope_fixtures import as_, world  # noqa: F401  (fixtures)
 
 API = "/api/v1"
 #: 25 characters, 75 bytes in UTF-8: within a character limit, beyond bcrypt's 72 bytes.
@@ -317,3 +318,107 @@ class TestForcedChange:
         self._must_change(session, staff, expires_in=-timedelta(hours=1))
         resp = _login(client, STAFF["username"], "wrong-password")
         assert resp.status_code == 401 and resp.json()["detail"] == "Invalid username or password"
+
+
+# --- temporary passwords: POST /users/, POST /users/{id}/reset-password -----
+def _new_cashier(client: TestClient, world, headers: dict, name: str = "newhire"):
+    body = {"username": name, "email": f"{name}@example.com", "display_name": "New hire",
+            "roles": [{"role_id": world.roles["Cashier"], "branch_id": world.A}]}
+    return client.post(f"{API}/users/", json=body, headers=headers)
+
+
+def _about(moment: str, expected: datetime) -> bool:
+    return abs(datetime.fromisoformat(moment.replace("Z", "+00:00")) - expected) < timedelta(minutes=1)
+
+
+class TestNewUser:
+    def test_server_sets_a_temporary_password_shown_once(self, client: TestClient, world, as_, session: Session):
+        resp = _new_cashier(client, world, as_("ba_a", "A"))
+        assert resp.status_code == 201, resp.text
+        assert resp.headers["Cache-Control"] == "no-store"
+        body = resp.json()["data"]
+        temporary = body["temporary_password"]
+        assert len(temporary) >= 12
+        assert body["must_change_password"] is True
+        assert _about(body["temp_password_expires_at"], datetime.now(timezone.utc) + timedelta(hours=72))
+
+        user = session.get(User, body["id"])
+        assert user.password_hash != temporary and user.password_changed_at is not None
+        shown = client.get(f"{API}/users/{body['id']}", headers=as_("ba_a", "A")).json()["data"]
+        assert "temporary_password" not in shown and shown["must_change_password"] is True
+
+        # First login: the temporary password, then nothing but the change.
+        resp = _login(client, "newhire", temporary)
+        assert resp.status_code == 200 and resp.json()["data"]["password_change_required"] is True
+        tokens = resp.json()["data"]
+        assert client.get(f"{API}/auth/me", headers=_bearer(tokens["access_token"])).status_code == 403
+        resp = _change(client, tokens["access_token"], temporary, NEW_PASSWORD)
+        assert resp.status_code == 200, resp.text
+        assert client.get(f"{API}/auth/me", headers=_bearer(resp.json()["data"]["access_token"])).status_code == 200
+        assert _login(client, "newhire", temporary).status_code == 401
+
+    def test_expiry_follows_the_setting(self, client: TestClient, world, as_, monkeypatch):
+        monkeypatch.setattr(settings, "TEMP_PASSWORD_EXPIRE_HOURS", 1)
+        body = _new_cashier(client, world, as_("ba_a", "A")).json()["data"]
+        assert _about(body["temp_password_expires_at"], datetime.now(timezone.utc) + timedelta(hours=1))
+
+    def test_a_password_sent_by_the_client_is_422(self, client: TestClient, world, as_, session: Session):
+        body = {"username": "chosen", "email": "chosen@example.com", "display_name": "x", "password": "Passw0rd!",
+                "roles": [{"role_id": world.roles["Cashier"], "branch_id": world.A}]}
+        resp = client.post(f"{API}/users/", json=body, headers=as_("ba_a", "A"))
+        assert resp.status_code == 422 and "password is set by the server" in resp.text
+        assert session.scalar(select(func.count()).select_from(User).where(User.username == "chosen")) == 0
+        resp = client.put(f"{API}/users/{world.users['pos_a']}", json={"password": "Passw0rd!"},
+                          headers=as_("ba_a", "A"))
+        assert resp.status_code == 422
+
+
+class TestResetPassword:
+    @staticmethod
+    def _reset(client: TestClient, world, target: str, headers: dict):
+        return client.post(f"{API}/users/{world.users[target]}/reset-password", headers=headers)
+
+    def test_branch_admin_resets_a_cashier_of_their_branch(self, client: TestClient, world, as_, session: Session):
+        cashier = session.get(User, world.users["pos_a"])
+        cashier.locked_until = datetime.now(timezone.utc) + timedelta(minutes=20)
+        cashier.failed_login_attempts = 3
+        old_access = _token(cashier, "access", datetime.now(timezone.utc) - timedelta(seconds=5))
+        old_refresh = _token(cashier, "refresh", datetime.now(timezone.utc) - timedelta(seconds=5))
+        _store_refresh(session, cashier, old_refresh)
+
+        resp = self._reset(client, world, "pos_a", as_("ba_a", "A"))
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["Cache-Control"] == "no-store"
+        body = resp.json()["data"]
+        assert body["user_id"] == cashier.id
+        assert _about(body["temp_password_expires_at"], datetime.now(timezone.utc) + timedelta(hours=72))
+
+        # Every session of the cashier ended.
+        assert client.get(f"{API}/auth/me", headers=_bearer(old_access)).status_code == 401
+        assert client.post(f"{API}/auth/refresh", json={"refresh_token": old_refresh}).status_code == 401
+        # The lock is lifted; the temporary password must be changed first.
+        resp = _login(client, "pos_a", body["temporary_password"])
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["password_change_required"] is True
+        session.refresh(cashier)
+        assert cashier.must_change_password is True and cashier.failed_login_attempts == 0
+
+    def test_an_expired_temporary_password_is_reset_again(self, client: TestClient, world, as_, session: Session):
+        first = self._reset(client, world, "pos_a", as_("ba_a", "A")).json()["data"]["temporary_password"]
+        cashier = session.get(User, world.users["pos_a"])
+        cashier.temp_password_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.commit()
+        assert _login(client, "pos_a", first).json()["code"] == "TEMPORARY_PASSWORD_EXPIRED"
+
+        second = self._reset(client, world, "pos_a", as_("ba_a", "A")).json()["data"]["temporary_password"]
+        assert _login(client, "pos_a", first).status_code == 401
+        assert _login(client, "pos_a", second).status_code == 200
+
+    def test_who_may_reset_whom(self, client: TestClient, world, as_):
+        resp = self._reset(client, world, "ba_a", as_("ba_a", "A"))
+        assert resp.status_code == 403 and resp.json()["code"] == "SELF_CHANGE"
+        resp = self._reset(client, world, "sa", as_("ba_a", "A"))
+        assert resp.status_code == 403 and resp.json()["code"] == "PERMISSION_ESCALATION"
+        assert self._reset(client, world, "pos_b", as_("ba_a", "A")).status_code == 404
+        assert self._reset(client, world, "pos_a2", as_("pos_a", "A")).status_code == 403
+        assert self._reset(client, world, "pos_b", as_("sa", "A")).status_code == 200

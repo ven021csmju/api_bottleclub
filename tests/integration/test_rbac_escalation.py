@@ -478,7 +478,7 @@ class TestLastSuperadmin:
 # ⑥ a branch is part of a role assignment; branch_ids is gone
 # ---------------------------------------------------------------------------
 def _new_user(**extra) -> dict:
-    return {"username": "fresh", "email": "fresh@example.com", "password": "Passw0rd!", "display_name": "Fresh", **extra}
+    return {"username": "fresh", "email": "fresh@example.com", "display_name": "Fresh", **extra}
 
 
 def _user_named(session: Session, org: Org, username: str) -> User | None:
