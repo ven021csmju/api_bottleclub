@@ -210,17 +210,23 @@ def cancel_order(
     request: Request,
     order_id: int,
     body: OrderCancel,
-    user: User = Depends(require_permission("orders.cancel", scope="any")),
+    user: User = Depends(require_permission(("orders.cancel", "orders.create"), scope="any")),
     access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ) -> OrderResponse:
-    _scoped_order(db, access, order_id, "orders.cancel")
+    """orders.cancel at the order's branch: any unpaid order there. orders.create
+    alone (a cashier): only the caller's own unpaid orders (Phase 38b)."""
+    order = OrderService.get_order_by_reference(db=db, org_id=access.org_id, reference=str(order_id))
+    may_cancel_any = access.can_at("orders.cancel", order.branch_id)
+    if not may_cancel_any:
+        access.ensure_at("orders.create", order.branch_id, "Order")
     order = OrderService.cancel_order(
         db=db,
         org_id=user.organization_id,
         order_id=order_id,
         user_id=user.id,
         request_id=getattr(request.state, "request_id", ""),
+        may_cancel_any=may_cancel_any,
     )
     return OrderResponse.model_validate(order)
 

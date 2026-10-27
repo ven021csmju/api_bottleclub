@@ -51,10 +51,12 @@ def test_superadmin_and_organization_wide_manager_reach_both_branches(
 
 
 def test_manager_at_a_cashier_at_b_cannot_cancel_at_b(client: TestClient, world, orders, as_):
-    # orders.cancel: Manager only; mixed is Cashier at B.
-    assert client.post(f"{API}/orders/{orders['b1']}/cancel", json={}, headers=as_("mixed", "B")).status_code == 404
+    # orders.cancel: Manager only; mixed is Cashier at B, so only their own orders there (38b).
+    resp = client.post(f"{API}/orders/{orders['b1']}/cancel", json={}, headers=as_("mixed", "B"))
+    assert (resp.status_code, resp.json()["code"]) == (403, "ORDER_NOT_YOURS")
     # orders.update: Cashier has it, so mixed may act on B's order.
     resp = client.put(f"{API}/orders/{orders['b1']}/status", json={"status": "preparing"}, headers=as_("mixed", "B"))
     assert resp.status_code not in (403, 404)
+    # Manager at A: past the scope check; the fixture's order holds a 10 payment, so it is returned, not cancelled.
     resp = client.post(f"{API}/orders/{orders['a1']}/cancel", json={}, headers=as_("mixed", "A"))
-    assert resp.status_code == 200
+    assert (resp.status_code, resp.json()["code"]) == (400, "ORDER_ALREADY_PAID"), resp.text

@@ -94,23 +94,26 @@ def has_permission(request: Request, permission_code: str, branch_id: int | None
 Scope = Literal["branch", "org", "any"]
 
 
-def require_permission(permission_code: str, scope: Scope = "branch") -> Callable:
+def require_permission(permission_code: str | tuple[str, ...], scope: Scope = "branch") -> Callable:
     """``permission_code`` at the active branch (``branch``), at organization level
-    (``org``) or at any branch (``any``; the route then checks the record's branch)."""
+    (``org``) or at any branch (``any``; the route then checks the record's branch).
+    A tuple: any one of the codes."""
+    codes = (permission_code,) if isinstance(permission_code, str) else permission_code
+
+    def holds(access: Access, code: str) -> bool:
+        if scope == "any":
+            return access.can_anywhere(code)
+        if scope == "org":
+            return access.can(code, None)
+        return access.can(code, access.branch_id)
 
     async def permission_checker(
         user: User = Depends(get_current_user),
         access: Access = Depends(get_access),
     ) -> User:
-        if scope == "any":
-            allowed = access.can_anywhere(permission_code)
-        elif scope == "org":
-            allowed = access.can(permission_code, None)
-        else:
-            allowed = access.can(permission_code, access.branch_id)
-        if not allowed:
+        if not any(holds(access, code) for code in codes):
             raise ForbiddenException(
-                detail=f"Missing required permission: {permission_code}"
+                detail=f"Missing required permission: {' or '.join(codes)}"
             )
         return user
 

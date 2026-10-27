@@ -27,7 +27,7 @@ from app.shared.exceptions import (
     InvalidOrderStateException,
     NotFoundException,
 )
-from app.domains.shifts.drawer import CASH, current_shift
+from app.domains.shifts.drawer import CASH, current_shift, paid_net
 from app.shared.ordering import generate_order_number
 
 
@@ -45,7 +45,9 @@ class OrderService:
     }
 
     #: Statuses from which cancellation (with stock restore) is allowed.
-    CANCELLABLE_STATUSES = {"pending", "confirmed", "preparing"}
+    #: Not yet paid: a parked (held) or ready order can be cancelled too (38b).
+    CANCELLABLE_STATUSES = {"pending", "confirmed", "preparing", "held"}
+    PAID_STATUSES = {"paid", "completed", "refunded"}
 
     @staticmethod
     def _validate_status(value: str) -> None:
@@ -441,11 +443,29 @@ class OrderService:
         order_id: int,
         user_id: int,
         request_id: str = "",
+        may_cancel_any: bool = True,
     ) -> Order:
-        order = OrderRepository.get_org_order(db, org_id, order_id)
+        """Cancel an unpaid order and put its stock back (Phase 38b).
+
+        ``may_cancel_any``: the caller holds orders.cancel at the order's
+        branch; without it only the caller's own orders (403 ORDER_NOT_YOURS).
+        An order with money on it is returned, not cancelled (400
+        ORDER_ALREADY_PAID). The order row is locked, so a payment and a
+        cancel of one order cannot both go through."""
+        order = OrderRepository.get_org_order_for_update(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")
+        if not may_cancel_any and order.user_id != user_id:
+            raise ForbiddenException(
+                detail="Only your own orders can be cancelled without orders.cancel",
+                code="ORDER_NOT_YOURS",
+            )
+        if order.status in OrderService.PAID_STATUSES or paid_net(db, order.id) > 0:
+            raise BadRequestException(
+                detail="This order has been paid: return it (POST /returns/) instead of cancelling",
+                code="ORDER_ALREADY_PAID",
+            )
         if order.status not in OrderService.CANCELLABLE_STATUSES:
             raise InvalidOrderStateException(
                 detail=f"Cannot cancel order in '{order.status}' status"
@@ -455,9 +475,11 @@ class OrderService:
             product = OrderRepository.get_product(db, item.product_id)
 
             if product and product.track_inventory:
-                on_hand_before = OrderRepository.get_inventory_on_hand(
+                on_hand_before = OrderRepository.lock_inventory_on_hand(
                     db, order.branch_id, item.product_id
                 )
+                if on_hand_before is None:
+                    continue
                 OrderRepository.restore_stock(db, order.branch_id, item.product_id, item.quantity)
 
                 OrderRepository.add_stock_movement(

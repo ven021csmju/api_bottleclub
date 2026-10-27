@@ -84,6 +84,20 @@ class OrderRepository:
         )
 
     @staticmethod
+    def lock_inventory_on_hand(
+        db: Session, branch_id: int, product_id: int
+    ) -> int | None:
+        """on_hand with the row locked until commit (None: no inventory row)."""
+        return db.scalar(
+            select(Inventory.on_hand)
+            .where(
+                Inventory.branch_id == branch_id,
+                Inventory.product_id == product_id,
+            )
+            .with_for_update()
+        )
+
+    @staticmethod
     def deduct_stock(
         db: Session, branch_id: int, product_id: int, quantity: int
     ) -> int:
@@ -181,6 +195,7 @@ class OrderRepository:
             select(Order)
             .where(Order.id == order_id, Order.organization_id == org_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return db.scalar(stmt)
 
