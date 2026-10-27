@@ -75,6 +75,8 @@ class XReport(BaseModel):
     total_card_sales: Decimal
     total_other_sales: Decimal
     total_refunds: Decimal
+    # Paid out of this drawer; expected_cash subtracts only these.
+    total_cash_refunds: Decimal = Decimal("0")
     cash_movements_in: Decimal
     cash_movements_out: Decimal
     order_count: int

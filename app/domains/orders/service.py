@@ -603,7 +603,7 @@ class OrderService:
                 detail="A payment would settle nothing: send only what is needed", code="OVERPAYMENT",
             )
 
-        shift = current_shift(db, order.branch_id, user_id, order.register_id)
+        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
         recorded: list[Payment] = []
         for (pay, amount), net in zip(handed, nets):
             payment = Payment(

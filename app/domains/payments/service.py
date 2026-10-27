@@ -47,7 +47,7 @@ class PaymentService:
                 code="OVERPAYMENT",
             )
         net = min(amount, remaining)
-        shift = current_shift(db, order.branch_id, user_id, order.register_id)
+        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
 
         payment = Payment(
             order_id=order_id,

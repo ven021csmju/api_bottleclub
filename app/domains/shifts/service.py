@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Shift, ShiftCashMovement
 from app.db.repositories.branches import BranchRepository
 from app.db.repositories.shifts import ShiftRepository
+from app.domains.shifts.drawer import shift_totals
 from app.shared.exceptions import BadRequestException, NotFoundException
 
 
@@ -65,17 +66,13 @@ class ShiftService:
         if shift.status != "open":
             raise BadRequestException(detail="Shift is not open")
 
-        cash_movements = ShiftRepository.sum_cash_in_movements(db, shift_id)
-        cash_movements_out = ShiftRepository.sum_cash_out_movements(db, shift_id)
-
-        expected_cash = (
-            Decimal(str(shift.opening_cash))
-            + Decimal(str(shift.total_cash_sales))
-            + Decimal(str(cash_movements))
-            - Decimal(str(cash_movements_out))
-            - Decimal(str(shift.total_refunds))
-        )
+        # Added up from the shift's payments, refunds and movements; the
+        # columns keep what they were at closing.
+        totals = shift_totals(db, shift)
+        expected_cash = totals["expected_cash"]
         cash_difference = closing_cash - expected_cash
+        for key in ("total_sales", "total_cash_sales", "total_card_sales", "total_other_sales", "total_refunds"):
+            setattr(shift, key, totals[key])
 
         shift.closing_cash = closing_cash
         shift.expected_cash = expected_cash
@@ -132,33 +129,16 @@ class ShiftService:
     @staticmethod
     def get_x_report(db: Session, org_id: int, shift_id: int) -> dict:
         shift = _org_shift(db, org_id, shift_id)
-
-        cash_movements = ShiftRepository.group_cash_movements(db, shift_id)
-
-        movements_in = Decimal("0")
-        movements_out = Decimal("0")
-        for mtype, total in cash_movements:
-            if mtype == "cash_in":
-                movements_in += Decimal(str(total))
-            else:
-                movements_out += Decimal(str(total))
-
-        order_count = ShiftRepository.count_shift_orders(db, shift_id)
-
+        totals = shift_totals(db, shift)
+        closed = shift.status != "open"
         return {
             "shift_id": shift.id,
             "opened_at": shift.opened_at,
             "closed_at": shift.closed_at,
             "opening_cash": shift.opening_cash,
             "closing_cash": shift.closing_cash,
-            "expected_cash": shift.expected_cash,
+            # While the shift is open: what the drawer should hold now.
+            "expected_cash": shift.expected_cash if closed else totals["expected_cash"],
             "cash_difference": shift.cash_difference,
-            "total_sales": shift.total_sales,
-            "total_cash_sales": shift.total_cash_sales,
-            "total_card_sales": shift.total_card_sales,
-            "total_other_sales": shift.total_other_sales,
-            "total_refunds": shift.total_refunds,
-            "cash_movements_in": movements_in,
-            "cash_movements_out": movements_out,
-            "order_count": order_count,
+            **{k: v for k, v in totals.items() if k != "expected_cash"},
         }

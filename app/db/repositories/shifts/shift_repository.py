@@ -1,7 +1,7 @@
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Branch, Order, Register, Shift, ShiftCashMovement
+from app.db.models import Branch, Register, Shift, ShiftCashMovement
 
 
 class ShiftRepository:
@@ -34,44 +34,6 @@ class ShiftRepository:
         return db.execute(
             select(Register).where(Register.id == register_id, Register.branch_id == branch_id)
         ).scalar_one_or_none()
-
-    @staticmethod
-    def sum_cash_in_movements(db: Session, shift_id: int) -> int:
-        return (
-            db.execute(
-                select(
-                    func.coalesce(
-                        func.sum(
-                            case(
-                                (ShiftCashMovement.movement_type == "cash_in", ShiftCashMovement.amount),
-                                else_=0,
-                            )
-                        ),
-                        0,
-                    )
-                ).where(ShiftCashMovement.shift_id == shift_id)
-            ).scalar()
-            or 0
-        )
-
-    @staticmethod
-    def sum_cash_out_movements(db: Session, shift_id: int) -> int:
-        return (
-            db.execute(
-                select(
-                    func.coalesce(
-                        func.sum(
-                            case(
-                                (ShiftCashMovement.movement_type == "cash_out", ShiftCashMovement.amount),
-                                else_=0,
-                            )
-                        ),
-                        0,
-                    )
-                ).where(ShiftCashMovement.shift_id == shift_id)
-            ).scalar()
-            or 0
-        )
 
     @staticmethod
     def add_cash_movement(db: Session, movement: ShiftCashMovement) -> None:
@@ -115,26 +77,3 @@ class ShiftRepository:
             db.scalars(stmt.offset(pages).limit(per_page)).all()
         )
         return items, total
-
-    @staticmethod
-    def group_cash_movements(db: Session, shift_id: int) -> list[tuple]:
-        return db.execute(
-            select(
-                ShiftCashMovement.movement_type,
-                func.coalesce(func.sum(ShiftCashMovement.amount), 0),
-            )
-            .where(ShiftCashMovement.shift_id == shift_id)
-            .group_by(ShiftCashMovement.movement_type)
-        ).all()
-
-    @staticmethod
-    def count_shift_orders(db: Session, shift_id: int) -> int:
-        return (
-            db.scalar(
-                select(func.count()).select_from(Order).where(
-                    Order.shift_id == shift_id,
-                    Order.status != "cancelled",
-                )
-            )
-            or 0
-        )
