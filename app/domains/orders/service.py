@@ -325,10 +325,11 @@ class OrderService:
         date_to: datetime | None = None,
         customer_id: int | None = None,
         user_id: int | None = None,
+        date_field: str = "created_at",
     ) -> dict:
         items, total = OrderRepository.list_orders(
             db, org_id, branch_id, page, per_page, status,
-            date_from, date_to, customer_id, user_id,
+            date_from, date_to, customer_id, user_id, date_field,
         )
 
         return {

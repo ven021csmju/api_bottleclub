@@ -141,7 +141,10 @@ class OrderRepository:
         date_to=None,
         customer_id: int | None = None,
         user_id: int | None = None,
+        date_field: str = "created_at",
     ) -> tuple[list[Order], int]:
+        """``date_field``: created_at, or paid_at (only paid orders have one)."""
+        moment = Order.paid_at if date_field == "paid_at" else Order.created_at
         query = (
             select(Order)
             .options(joinedload(Order.items))
@@ -153,9 +156,9 @@ class OrderRepository:
         if status:
             query = query.where(Order.status == status)
         if date_from:
-            query = query.where(Order.created_at >= date_from)
+            query = query.where(moment >= date_from)
         if date_to:
-            query = query.where(Order.created_at <= date_to)
+            query = query.where(moment <= date_to)
         if customer_id:
             query = query.where(Order.customer_id == customer_id)
         if user_id:

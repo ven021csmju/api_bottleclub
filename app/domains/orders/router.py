@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -135,6 +135,9 @@ def list_orders(
     status: Optional[str] = None,
     date_from: Optional[StoreDateTime] = None,
     date_to: Optional[StoreDateTime] = None,
+    date_field: Literal["created_at", "paid_at"] = Query(
+        "created_at", description="What date_from/date_to compare: when the order was made or paid"
+    ),
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
 ) -> OrderListResponse:
@@ -153,6 +156,7 @@ def list_orders(
         date_to=date_to,
         customer_id=customer_id,
         user_id=user_filter,
+        date_field=date_field,
     )
     return OrderListResponse(
         orders=[OrderResponse.model_validate(o) for o in result["orders"]],
