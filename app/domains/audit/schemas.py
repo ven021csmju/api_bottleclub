@@ -3,6 +3,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
+from app.shared.clock import StoreDateTime
+
 
 class AuditLogResponse(BaseModel):
     id: int
@@ -31,5 +33,5 @@ class AuditLogFilter(BaseModel):
     action: Optional[str] = None
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
-    date_from: Optional[datetime] = None
-    date_to: Optional[datetime] = None
+    date_from: Optional[StoreDateTime] = None
+    date_to: Optional[StoreDateTime] = None

@@ -3,14 +3,17 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.shared.clock import StoreDateTime
+
 
 class CouponCreate(BaseModel):
     code: str = Field(..., max_length=100)
     promotion_id: int
     max_uses: Optional[int] = Field(None, gt=0)
     max_uses_per_customer: int = Field(1, gt=0)
-    start_date: datetime
-    end_date: datetime
+    # Without an offset: store time (STORE_TIMEZONE).
+    start_date: StoreDateTime
+    end_date: StoreDateTime
 
 
 class CouponResponse(BaseModel):

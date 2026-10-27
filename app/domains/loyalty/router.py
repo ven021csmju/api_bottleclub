@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -15,6 +14,7 @@ from app.domains.loyalty.schemas import (
 from app.domains.loyalty.service import LoyaltyService
 from app.middleware.auth import require_permission
 from app.db.models import User
+from app.shared.clock import StoreDateTime
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()
@@ -73,8 +73,8 @@ def get_balance(
 def list_transactions(
     customer_id: int,
     transaction_type: Optional[str] = Query(None),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
+    date_from: Optional[StoreDateTime] = Query(None),
+    date_to: Optional[StoreDateTime] = Query(None),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("loyalty.read")),

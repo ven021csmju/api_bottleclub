@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -18,6 +17,7 @@ from app.domains.shifts.service import ShiftService
 from app.middleware.access import Access
 from app.middleware.auth import get_access, require_permission
 from app.db.models import User
+from app.shared.clock import StoreDateTime
 from app.shared.exceptions import NotFoundException
 from app.shared.pagination import PaginationParams
 
@@ -101,8 +101,8 @@ def add_cash_movement(
 def list_shifts(
     branch_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
+    date_from: Optional[StoreDateTime] = Query(None),
+    date_to: Optional[StoreDateTime] = Query(None),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("shifts.read", scope="any")),

@@ -189,3 +189,93 @@ def test_the_postgresql_session_time_zone_changes_nothing(client, session, world
     assert [h["hour"] for h in sales["sales_by_hour"]] == [0, 23]
     report = _get(client, as_, f"/reports/financial?date_from={D27}&date_to={D28}")
     assert [d["date"] for d in report["daily"]] == [D27, D28]
+
+
+# ---------------------------------------------------------------------------
+# Request datetimes without an offset are store time
+# ---------------------------------------------------------------------------
+BEFORE, AFTER = "2026-10-26T16:59:59", "2026-10-26T17:00:00"  # 23:59:59 / 00:00 Bangkok
+FROM_27 = "date_from=2026-10-27T00:00:00"
+TO_26 = "date_to=2026-10-26T23:59:59"
+
+
+@pytest.fixture()
+def around_midnight(session: Session, world) -> dict[str, list[int]]:
+    """One row of each kind just before and at 00:00 on the 27th in Bangkok."""
+    from app.db.models import AuditLog, LoyaltyTransaction, Refund, Register, Shift
+
+    ids: dict[str, list[int]] = {k: [] for k in ("orders", "refunds", "shifts", "audit", "loyalty")}
+    register = Register(branch_id=world.A, name="R-tz")
+    session.add(register)
+    session.flush()
+    for n, at in enumerate((BEFORE, AFTER)):
+        order = _order(session, world, f"TZ-N{n}", at, "10")
+        ids["orders"].append(order.id)
+        refund = Refund(order_id=order.id, refund_number=f"REF-TZ-N{n}", refund_amount=Decimal("1"),
+                        refund_method="cash", status="completed", processed_by=world.users["sa"],
+                        created_at=utc(at))
+        shift = Shift(branch_id=world.A, register_id=register.id, user_id=world.users["sa"], status="closed",
+                      opening_cash=Decimal("0"), opened_at=utc(at))
+        audit = AuditLog(organization_id=world.org, user_id=world.users["sa"], action="TZ.TEST",
+                         entity_type="tz", created_at=utc(at))
+        loyalty = LoyaltyTransaction(customer_id=world.data["customer"], transaction_type="earn", points=1,
+                                     points_before=0, points_after=1, created_at=utc(at))
+        session.add_all([refund, shift, audit, loyalty])
+        session.flush()
+        ids["refunds"].append(refund.id)
+        ids["shifts"].append(shift.id)
+        ids["audit"].append(audit.id)
+        ids["loyalty"].append(loyalty.id)
+    session.commit()
+    return ids
+
+
+@pytest.fixture()
+def owner(session: Session, world) -> str:
+    """``orgmgr`` also holds Superadmin at every branch (audit.read, coupons.create)."""
+    from app.db.models import UserRole
+
+    session.add(UserRole(user_id=world.users["orgmgr"], role_id=world.roles["Superadmin"], branch_id=None))
+    session.commit()
+    return "orgmgr"
+
+
+def _ids(body) -> list[int]:
+    data = body["data"]
+    for key in ("items", "orders", "refunds", "shifts", "logs", "transactions"):
+        if isinstance(data, dict) and key in data:
+            data = data[key]
+            break
+    return sorted(row["id"] for row in data)
+
+
+@pytest.mark.parametrize("kind, path, who, where", [
+    ("orders", "/orders", "sa", "A"),
+    ("refunds", "/refunds/", "sa", "A"),
+    ("shifts", "/shifts/", "sa", "A"),
+    ("audit", "/audit/?action=TZ.TEST", "orgmgr", None),
+    ("loyalty", "/loyalty/transactions/{customer}", "orgmgr", None),
+])
+def test_a_filter_without_offset_is_store_time(client, world, around_midnight, owner, as_, kind, path, who, where):
+    before, after = around_midnight[kind]
+    url = API + path.format(customer=world.data["customer"])
+    sep = "&" if "?" in url else "?"
+    headers = as_(who, where)
+    for query, expected in ((FROM_27, [after]), (TO_26, [before]),
+                            ("date_from=2026-10-26T17:00:00Z", [after])):
+        resp = client.get(f"{url}{sep}{query}", headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert _ids(resp.json()) == expected, query
+
+
+def test_coupon_dates_without_offset_are_store_midnight(client, session, world, owner, as_):
+    from app.db.models import Coupon
+
+    resp = client.post(f"{API}/coupons/", headers=as_(owner), json={
+        "code": "TZ-NOV", "promotion_id": 1,
+        "start_date": "2026-11-01T00:00:00", "end_date": "2026-11-30T23:59:59+07:00",
+    })
+    assert resp.status_code == 201, resp.text
+    coupon = session.get(Coupon, resp.json()["data"]["id"])
+    assert coupon.start_date == utc("2026-10-31T17:00:00")
+    assert coupon.end_date == utc("2026-11-30T16:59:59")

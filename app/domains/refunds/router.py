@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -9,6 +8,7 @@ from app.middleware.access import Access, order_branch
 from app.middleware.auth import get_access, get_audit_context, require_permission
 from app.db.models import User
 from app.shared.audit import AuditContext
+from app.shared.clock import StoreDateTime
 
 from .schemas import RefundCreate, RefundListResponse, RefundResponse
 from .service import RefundService
@@ -42,8 +42,8 @@ def list_refunds(
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    date_from: Optional[datetime] = None,
-    date_to: Optional[datetime] = None,
+    date_from: Optional[StoreDateTime] = None,
+    date_to: Optional[StoreDateTime] = None,
     order_id: Optional[int] = None,
     status: Optional[str] = None,
 ) -> RefundListResponse:

@@ -131,3 +131,12 @@ class TestSql:
     def test_hour(self):
         from app.db.models import Order
         assert "timezone('Asia/Bangkok', orders.created_at)" in self._sql(clock.store_hour(Order.created_at))
+
+
+def test_coupon_dates_without_offset_are_bangkok_midnight():
+    from app.domains.coupons.schemas import CouponCreate
+
+    coupon = CouponCreate(code="NOV", promotion_id=1,
+                          start_date="2026-11-01T00:00:00", end_date="2026-11-30T23:59:59")
+    assert coupon.start_date == utc("2026-10-31T17:00")
+    assert coupon.end_date == utc("2026-11-30T16:59:59")

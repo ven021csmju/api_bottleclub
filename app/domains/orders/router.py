@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -15,6 +14,7 @@ from app.middleware.auth import (
 from app.middleware.rate_limit import limiter
 from app.db.models import Order, User
 from app.config.settings import settings
+from app.shared.clock import StoreDateTime
 from app.shared.exceptions import ForbiddenException, NotFoundException
 
 from .schemas import (
@@ -120,8 +120,8 @@ def list_orders(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     status: Optional[str] = None,
-    date_from: Optional[datetime] = None,
-    date_to: Optional[datetime] = None,
+    date_from: Optional[StoreDateTime] = None,
+    date_to: Optional[StoreDateTime] = None,
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
 ) -> OrderListResponse:

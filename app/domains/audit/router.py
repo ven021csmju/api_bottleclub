@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -12,6 +11,7 @@ from app.domains.audit.schemas import (
 from app.domains.audit.service import AuditService
 from app.middleware.auth import require_permission
 from app.db.models import User
+from app.shared.clock import StoreDateTime
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()
@@ -23,8 +23,8 @@ def list_audit_logs(
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     entity_id: Optional[int] = Query(None),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
+    date_from: Optional[StoreDateTime] = Query(None),
+    date_to: Optional[StoreDateTime] = Query(None),
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("audit.read", scope="org")),
