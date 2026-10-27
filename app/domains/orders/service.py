@@ -18,9 +18,11 @@ from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.orders import OrderRepository
 from app.db.repositories.payments import PaymentRepository
 from app.services import user_events
+from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
     AppException,
     BadRequestException,
+    ForbiddenException,
     InsufficientStockException,
     InvalidOrderStateException,
     NotFoundException,
@@ -82,6 +84,33 @@ class OrderService:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _check_discounts(data: dict, products_map: dict, can_discount: bool) -> None:
+        """Typed-in discounts: only with orders.discount, never above the line
+        (catalog price x quantity) or the bill (after the line discounts)."""
+        item_discounts = [Decimal(str(i.get("discount_amount") or 0)) for i in data["items"]]
+        order_discount = Decimal(str(data.get("discount_amount") or 0))
+        if (order_discount > 0 or any(d > 0 for d in item_discounts)) and not can_discount:
+            raise ForbiddenException(
+                detail="Missing required permission: orders.discount", code="DISCOUNT_NOT_ALLOWED"
+            )
+        subtotal = Decimal("0")
+        for item, discount in zip(data["items"], item_discounts):
+            line = Decimal(str(products_map[item["product_id"]].selling_price)) * item["quantity"]
+            if discount > line:
+                raise AppException(
+                    status_code=422,
+                    detail=f"Discount {discount} is more than the line ({line})",
+                    code="DISCOUNT_EXCEEDS_LINE",
+                )
+            subtotal += line - discount
+        if order_discount > subtotal:
+            raise AppException(
+                status_code=422,
+                detail=f"Discount {order_discount} is more than the order ({subtotal})",
+                code="DISCOUNT_EXCEEDS_TOTAL",
+            )
+
+    @staticmethod
     def create_order(
         db: Session,
         org_id: int,
@@ -89,7 +118,11 @@ class OrderService:
         user_id: int,
         data: dict,
         request_id: str = "",
+        can_discount: bool = False,
+        audit: AuditContext | None = None,
     ) -> tuple[Order, str | None]:
+        """``can_discount``: the caller holds orders.discount at the branch;
+        a discount typed in by anyone else is 403 (``audit`` records each one)."""
         idempotency_key = data.get("idempotency_key")
         if idempotency_key:
             existing = OrderRepository.find_by_idempotency_key(
@@ -128,6 +161,8 @@ class OrderService:
                     ),
                     code="PRICE_MISMATCH",
                 )
+
+        OrderService._check_discounts(data, products_map, can_discount)
 
         order_number = generate_order_number(db, branch.code)
 
@@ -219,6 +254,26 @@ class OrderService:
         order.grand_total = grand_total
         order.amount_paid = Decimal("0")
         order.change_amount = Decimal("0")
+
+        item_discounts = [
+            {"product_id": i.product_id, "discount_amount": str(i.discount_amount)}
+            for i in order_items if i.discount_amount > 0
+        ]
+        if (discount > 0 or item_discounts) and audit is not None:
+            log_audit(
+                db=db,
+                ctx=audit,
+                action="ORDER.DISCOUNT",
+                entity_type="order",
+                entity_id=order.id,
+                after_data={
+                    "order_number": order.order_number,
+                    "order_discount": str(discount),
+                    "item_discounts": item_discounts,
+                    "subtotal": str(subtotal),
+                    "grand_total": str(grand_total),
+                },
+            )
 
         db.flush()
         db.commit()

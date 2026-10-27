@@ -114,7 +114,8 @@ def test_only_a_paid_order_can_be_returned(client: TestClient, session, world, s
 def test_refunds_never_exceed_what_was_paid(client: TestClient, session, world, shop, as_):
     """An order discount of 80: paid 800 for 880 of lines; every return together refunds 800."""
     pos = as_("pos_a", "A")
-    order = new_order(client, pos, world.A, [(shop.wine, 2), (shop.cheese, 1)], discount_amount="80.00")
+    # The Branch Admin may discount (orders.discount); the cashier takes the money.
+    order = new_order(client, as_("ba_a", "A"), world.A, [(shop.wine, 2), (shop.cheese, 1)], discount_amount="80.00")
     assert checkout(client, pos, order["id"], ("cash", "800.00")).status_code == 200
     for line in order["items"]:
         ret = _return(client, as_, order, line, line["quantity"]).json()["data"]
@@ -144,3 +145,4 @@ def test_a_mixed_payment_needs_a_refund_method(client: TestClient, session, worl
     assert (resp.status_code, resp.json()["code"]) == (400, "REFUND_METHOD_REQUIRED")
     assert _process(client, as_, ret["id"], refund_method="credit_card").status_code == 200
     assert _refunds(session, order["id"])[0][:2] == (Decimal("350.00"), "credit_card")
+

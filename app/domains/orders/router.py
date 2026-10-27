@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.middleware.access import Access
 from app.middleware.auth import (
     get_access,
+    get_audit_context,
     get_current_branch,
     require_permission,
     require_station_item_permission,
@@ -14,6 +15,7 @@ from app.middleware.auth import (
 from app.middleware.rate_limit import limiter
 from app.db.models import Order, User
 from app.config.settings import settings
+from app.shared.audit import AuditContext
 from app.shared.clock import StoreDateTime
 from app.shared.exceptions import ForbiddenException, NotFoundException
 
@@ -67,6 +69,8 @@ def create_order(
     body: OrderCreate,
     user: User = Depends(require_permission("orders.create")),
     branch_id: int = Depends(get_current_branch),
+    access: Access = Depends(get_access),
+    audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> OrderCreationResponse:
     order, tracking_token = OrderService.create_order(
@@ -76,6 +80,8 @@ def create_order(
         user_id=user.id,
         data=body.model_dump(),
         request_id=getattr(request.state, "request_id", ""),
+        can_discount=access.can_at("orders.discount", branch_id),
+        audit=audit,
     )
     order_response = OrderResponse.model_validate(order)
     return OrderCreationResponse(
