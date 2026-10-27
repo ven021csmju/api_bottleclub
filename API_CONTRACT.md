@@ -433,8 +433,8 @@ stock_transfers GROUP BY 1;` (any `partially_received` → settle by hand).
 - **Cancel** `POST /orders/{id}/cancel`: `orders.cancel` at the order's branch
   → any unpaid order there; `orders.create` only (a cashier) → the caller's
   own unpaid orders, someone else's **403 `ORDER_NOT_YOURS`**. Cancellable =
-  `pending`, `confirmed`, `preparing`, `held` (a `ready` order is not, as
-  before: it is paid). An order with any payment is **400
+  `pending`, `confirmed`, `preparing`, `held` (a `ready` order: by a Branch
+  Admin with a reason since 38c). An order with any payment is **400
   `ORDER_ALREADY_PAID`** for everyone: return it with `POST /returns/`. Stock
   comes back.
 - **Closing a shift** with an unpaid order of that shift is **409
@@ -724,6 +724,93 @@ permissions of another system role only by a Superadmin (403 `SYSTEM_ROLE`).
 
 ### DELETE `/roles/{role_id}` → 204
 
+### Screens, coupons and promotion ends (Phase 38c)
+
+**Deploy order: apply migrations 016, 017, 018, then deploy the code at
+once.** Rollback: the code, then `018_..._rollback.sql`, `017_...`, `016_...`.
+
+| | 016-018 not applied | 016-018 applied |
+|---|---|---|
+| code before 38c | as now | as now, except: a new category goes to no screen (its items are sold as `none`, on neither KDS screen); `POST /coupons/` with a `promotion_id` that names no promotion → 500; `GET /coupons/` with a coupon whose `promotion_id` is NULL → 500 (production has no coupons) |
+| 38c code | **catalog, orders, coupons and promotions → 500** (missing columns) | correct |
+
+- **016** stations: `categories.station` and `order_items.station` allow
+  `none` (no screen) and default to it; every existing category → `none`
+  (production has no products yet). New `products.station` (NULL = the
+  category's). Rollback: `none` → `kitchen`, the product overrides are lost.
+- **017** `promotions.ends_at` TIMESTAMPTZ NULL (NULL = no end). Rollback drops it.
+- **018** `coupons.promotion_id` BIGINT NOT NULL → VARCHAR(50) NULL with a
+  foreign key to `promotions(id)` (ON DELETE SET NULL); a value that names no
+  promotion → NULL. Coupons get `discount_type`, `discount_value`,
+  `max_discount`, `min_order_amount`, `branch_id`; usages `discount_amount`,
+  `released_at` and one row per coupon and order (a duplicate stops the
+  migration); orders `coupon_id`, `coupon_discount`. Existing coupons get no
+  discount (they cannot be used in an order until one is set). Rollback: what
+  a coupon gives and each order's coupon are lost; a promotion id that is not
+  a number → 0.
+
+Check before applying (read-only): `SELECT count(*) FROM coupons;`, `SELECT
+coupon_id, order_id FROM coupon_usages GROUP BY 1, 2 HAVING count(*) > 1;`
+(any row → settle by hand).
+
+**Rules**
+
+- **Stations:** an item goes to the screen of its product's `station`, else
+  its category's, else `none`. `GET /orders/station/kitchen|bar` shows only
+  that station's items, each order under its own header; orders that are
+  `completed`, `cancelled` or `refunded` leave the queue (a paid order stays
+  until it is completed). `PATCH /orders/{id}/station-items/{item}/status` of
+  a `none` item is 404.
+- **Coupon in an order:** `coupon_code` on `POST /orders/` or on `POST
+  /orders/{id}/checkout`. The system computes the discount from the
+  subtotal: `percent` (rounded to the satang, at most `max_discount`) or
+  `fixed` (at most the subtotal). It goes to `coupon_discount`, apart from the
+  typed-in `discount_amount`; `grand_total = subtotal − discount_amount −
+  coupon_discount`. The coupon row is locked: its last use goes to one order
+  only. Refusals, all **422** with nothing written:
+  `COUPON_NOT_FOUND`, `COUPON_INACTIVE`, `COUPON_NOT_STARTED`,
+  `COUPON_EXPIRED` (dates are store time), `COUPON_PROMOTION_ENDED` (its
+  promotion inactive or past `ends_at`), `COUPON_WRONG_BRANCH`,
+  `COUPON_USED_UP` (`max_uses`), `COUPON_NEEDS_CUSTOMER` (a coupon needs
+  `customer_id`), `COUPON_CUSTOMER_LIMIT` (`max_uses_per_customer`),
+  `COUPON_MIN_ORDER`, `COUPON_HAS_NO_DISCOUNT`, `COUPON_WITH_MANUAL_DISCOUNT`
+  (not with a typed-in order or line discount). At checkout: another coupon on
+  an order that has one → **409 `COUPON_ALREADY_APPLIED`** (the same one again
+  changes nothing); a partly paid order → **400 `COUPON_AFTER_PAYMENT`**.
+- **Giving a use back:** a cancelled order gives its coupon use back
+  (`released_at`, `used_count − 1`). A returned order keeps it: the customer
+  had the discount, and the refund is of what was paid (the coupon's share
+  stays off).
+- **Ready orders:** a `ready` order that is not paid is cancelled by a Branch
+  Admin (`orders.cancel` at its branch) with a `reason` (**422
+  `CANCEL_REASON_REQUIRED`**); the stock comes back and the audit log keeps
+  `ORDER.CANCEL_READY` with the reason. A cashier cannot: **403
+  `ORDER_READY_NEEDS_MANAGER`**.
+- **Promotions:** `endsAt` (without an offset: store time); `GET
+  /api/promotions` leaves out an ended promotion.
+- **Reports:** `GET /reports/financial` has `coupon_discounts` (total and per
+  day) apart from `discounts` (typed in). `sales_by_category` counts line
+  totals, before an order-level discount (typed in or coupon).
+- **Stock arriving twice at once:** a transfer receipt or a purchase receipt
+  adds with one `INSERT ... ON CONFLICT` (a branch's first row for a product
+  is made once) and its ledger line starts where on_hand really was; the
+  receiving number comes from `document_sequences` (`REC-YYYYMMDD-NNNN`).
+
+**Breaking changes for the frontend**
+
+| Call | Before 38c | 38c |
+|---|---|---|
+| `POST /catalog/categories` | no `station`; every category `kitchen` | `station`: `none` (default) / `kitchen` / `bar`; also on `PUT` and in the response |
+| `POST/PUT /catalog/products` | no `station` | `station`: null (the category's) / `none` / `kitchen` / `bar` |
+| Order items without a station (no category) | `kitchen` | `none`: on no screen |
+| `GET /orders/station/kitchen`, `/bar` | every item under the last order's header; completed orders stayed | each order's own header; completed / cancelled / refunded leave; `total` = items listed |
+| `POST /coupons/` | `promotion_id` (number) required, no discount | `discount_type` + `discount_value` required; `max_discount`, `min_order_amount`, `branch_id`; `promotion_id` optional text, must exist (422 `PROMOTION_NOT_FOUND`) |
+| Coupon responses, `POST /coupons/validate` | `promotion_id` number, `promotion_type` (always null) | `promotion_id` text or null, `discount_type`, `discount_value`, `max_discount`, `min_order_amount`; when not valid `code` (as the order would answer); `promotion_type` removed; `branch_id` may be sent |
+| `POST /orders/`, `POST /orders/{id}/checkout` | no coupon | `coupon_code`; responses have `coupon_id`, `coupon_discount` |
+| `POST /orders/{id}/cancel` of a `ready` order | 400 | Branch Admin with a reason; cashier 403 |
+| `GET /api/promotions` | ended promotions listed | `endsAt`; ended ones left out |
+| `POST /purchases/{id}/receive` | `receiving_number` `REC-000001` | `REC-YYYYMMDD-0001` |
+
 ---
 
 ## Catalog `/catalog`
@@ -732,8 +819,8 @@ permissions of another system role only by a Superadmin (403 `SYSTEM_ROLE`).
 
 ```
 GET    /catalog/categories
-POST   /catalog/categories         { "name", "description"?, "parent_id"?, "sort_order": 0 }
-PUT    /catalog/categories/{id}    { "name"?, "description"?, "parent_id"?, "sort_order"?, "is_active"? }
+POST   /catalog/categories         { "name", "description"?, "parent_id"?, "sort_order": 0, "station": "none" }
+PUT    /catalog/categories/{id}    { "name"?, "description"?, "parent_id"?, "sort_order"?, "is_active"?, "station"? }
 DELETE /catalog/categories/{id}    → 204
 ```
 
@@ -758,9 +845,11 @@ DELETE /catalog/products/{id}      → 204
   "selling_price": 250.00,
   "unit": "each",
   "track_inventory": true,
-  "has_expiry": false
+  "has_expiry": false,
+  "station": null | "none" | "kitchen" | "bar"
 }
 ```
+`station` (38c): the screen the product's items go to; null = the category's.
 
 ### Suppliers
 
@@ -825,11 +914,13 @@ Query: `?branch_id=&threshold=10`
     { "product_id": 1, "quantity": 2, "unit_price": 250.00, "discount_amount": 0 }
   ],
   "discount_amount": 0,
+  "coupon_code": "string" | null,
   "notes": "string" | null,
   "idempotency_key": "string" | null
 }
 ```
 Header `Idempotency-Key` required (or the body's `idempotency_key`); see Phase 38b.
+`coupon_code`: the system computes `coupon_discount` (not with `discount_amount`); see Phase 38c.
 
 ### GET `/orders/`
 Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=`
@@ -855,6 +946,9 @@ Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_
 ```
 `orders.cancel` (any unpaid order of the branch) or `orders.create` (the caller's own
 unpaid orders; another's → 403 `ORDER_NOT_YOURS`). Any payment → 400 `ORDER_ALREADY_PAID`.
+A `ready` order: `orders.cancel` and a `reason` only (422 `CANCEL_REASON_REQUIRED`;
+a cashier → 403 `ORDER_READY_NEEDS_MANAGER`); audited as `ORDER.CANCEL_READY` (38c).
+A coupon use is given back.
 
 ### PUT `/orders/{order_id}/complete`
 
@@ -1070,6 +1164,8 @@ legacy `/api/promotions` path and return **raw** payloads (no envelope); see
 ### GET `/api/promotions`  `?featured=&page=&per_page=&is_active=`
 ### POST `/api/admin/promotions`
 #### Body: `{ "name": "...", "description": "...", "promotion_type": "...", ... }`
+`endsAt` (38c): when it ends (without an offset: store time); null = no end. An
+ended promotion is not in `GET /api/promotions`.
 ### PUT `/api/admin/promotions`
 #### Body: `{ "name": "...", ... }` (full replacement)
 ### PUT `/api/admin/promotions/bulk`
@@ -1090,13 +1186,21 @@ the envelope policy).
 ```json
 {
   "code": "SUMMER10",
-  "promotion_id": 1,
+  "promotion_id": "summer" | null,
+  "discount_type": "percent" | "fixed",
+  "discount_value": 10.00,
+  "max_discount": 100.00 | null,
+  "min_order_amount": 0,
+  "branch_id": 1 | null,
   "max_uses": 100 | null,
   "max_uses_per_customer": 1,
   "start_date": "2026-09-01T00:00:00",
   "end_date": "2026-09-30T23:59:59"
 }
 ```
+Dates without an offset are store time. `promotion_id` must name a promotion
+(422 `PROMOTION_NOT_FOUND`); `branch_id` null = every branch. Used with
+`coupon_code` on `POST /orders/` or checkout (Phase 38c).
 
 ### GET `/coupons/`  `?page=&per_page=`
 ### GET `/coupons/{coupon_id}`
@@ -1104,16 +1208,20 @@ the envelope policy).
 
 ### POST `/coupons/validate`
 ```json
-// Request: { "code": "SUMMER10", "customer_id": 1 }
+// Request: { "code": "SUMMER10", "customer_id": 1, "branch_id": 1 | null }
 // Response 200:
 {
   "valid": true,
   "coupon_id": 1,
-  "promotion_id": 1,
-  "promotion_type": "percentage_discount",
-  "discount_value": 10.0,
-  "message": "Coupon applied"
+  "promotion_id": "summer",
+  "discount_type": "percent",
+  "discount_value": "10.00",
+  "max_discount": "100.00",
+  "min_order_amount": "0.00",
+  "code": null,
+  "message": "Coupon is valid"
 }
+// Not valid: "valid": false, "code": "COUPON_EXPIRED" (the code POST /orders/ would answer), "message"
 ```
 
 ---
@@ -1283,6 +1391,7 @@ Query: `?branch_id=&category_id=`
 
 ### GET `/reports/financial`
 Query: `?date_from=&date_to=&branch_id=`
+`discounts` (typed in) and `coupon_discounts` (computed from coupons, 38c), total and per day.
 
 ### GET `/reports/loyalty`
 Query: `?from_date=2026-09-01&to_date=2026-09-30`
