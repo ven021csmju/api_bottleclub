@@ -1,6 +1,7 @@
 """Passwords and sessions of staff accounts (Phase 35e).
 
-Login refuses inactive accounts; a password bcrypt cannot hash is 422, not 500.
+Login refuses inactive accounts; a password bcrypt cannot hash is 422, not 500;
+logout revokes refresh tokens.
 """
 from __future__ import annotations
 
@@ -67,3 +68,47 @@ class TestPasswordLength:
                 "display_name": "72", "organization_id": seed_org}
         assert client.post(f"{API}/auth/register", json=body).status_code == 201
         assert _login(client, "pw72", password).status_code == 200
+
+
+class TestLogout:
+    @staticmethod
+    def _login_twice(client: TestClient, seed_user: dict) -> tuple[dict, dict]:
+        first = _login(client, seed_user["username"], seed_user["password"]).json()["data"]
+        second = _login(client, seed_user["username"], seed_user["password"]).json()["data"]
+        return first, second
+
+    @staticmethod
+    def _refresh(client: TestClient, tokens: dict):
+        return client.post(f"{API}/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+
+    def test_logout_with_its_refresh_token_revokes_that_session_only(self, client: TestClient, seed_user: dict):
+        first, second = self._login_twice(client, seed_user)
+        resp = client.post(f"{API}/auth/logout", json={"refresh_token": first["refresh_token"]},
+                           headers={"Authorization": f"Bearer {first['access_token']}"})
+        assert resp.status_code == 204
+        assert self._refresh(client, first).status_code == 401
+        assert self._refresh(client, second).status_code == 200
+
+    def test_logout_without_body_revokes_every_session_of_the_user(self, client: TestClient, seed_user: dict):
+        first, second = self._login_twice(client, seed_user)
+        resp = client.post(f"{API}/auth/logout", headers={"Authorization": f"Bearer {first['access_token']}"})
+        assert resp.status_code == 204
+        assert self._refresh(client, first).status_code == 401
+        assert self._refresh(client, second).status_code == 401
+
+    def test_another_users_refresh_token_is_not_revoked(
+        self, client: TestClient, seed_user: dict, seed_org: int, session: Session
+    ):
+        from app.shared.security import create_access_token, hash_password
+
+        other = User(organization_id=seed_org, username="other", email="other@test.com",
+                     password_hash=hash_password("Other1234!"), display_name="Other", status="active")
+        session.add(other)
+        session.commit()
+        victim = _login(client, "other", "Other1234!").json()["data"]
+        token = create_access_token(user_id=seed_user["user_id"], org_id=seed_org, permissions=[], branches=[])
+
+        resp = client.post(f"{API}/auth/logout", json={"refresh_token": victim["refresh_token"]},
+                           headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 204
+        assert self._refresh(client, victim).status_code == 200

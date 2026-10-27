@@ -14,6 +14,7 @@ from app.shared.exceptions import ForbiddenException, UnauthorizedException
 
 from .schemas import (
     LoginRequest,
+    LogoutRequest,
     RefreshTokenRequest,
     RegisterRequest,
     RegisterResponse,
@@ -155,14 +156,14 @@ def refresh(
 @router.post("/logout", status_code=204)
 def logout(
     request: Request,
+    body: LogoutRequest | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    token_hash: str = getattr(request.state, "refresh_token_hash", "")
     AuthService.logout(
         db=db,
         user_id=user.id,
-        token_hash=token_hash,
+        raw_refresh_token=body.refresh_token if body else None,
         request_id=getattr(request.state, "request_id", ""),
     )
     return Response(status_code=204)

@@ -359,13 +359,20 @@ class AuthService:
     def logout(
         db: Session,
         user_id: int,
-        token_hash: str,
+        raw_refresh_token: str | None,
         request_id: str = "",
     ) -> None:
-        record = AuthRepository.find_active_refresh_token(db, user_id, token_hash)
+        """Revoke the given refresh token (only the caller's own), or every
+        refresh token of the caller when none is given."""
+        if raw_refresh_token:
+            record = AuthRepository.find_active_refresh_token(db, user_id, hash_token(raw_refresh_token))
+            if record:
+                record.is_revoked = True
+            revoked = record is not None
+        else:
+            revoked = AuthRepository.revoke_refresh_tokens(db, user_id) > 0
 
-        if record:
-            record.is_revoked = True
+        if revoked:
             db.commit()
             # Only after the refresh session was actually invalidated.
             user_events.publish_user_event_sync(

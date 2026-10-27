@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -161,6 +161,16 @@ class AuthRepository:
                 RefreshToken.is_revoked == False,  # noqa: E712
             )
         ).scalar_one_or_none()
+
+    @staticmethod
+    def revoke_refresh_tokens(db: Session, user_id: int) -> int:
+        """Revoke every live refresh token of the user; returns how many."""
+        result = db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.is_revoked == False)  # noqa: E712
+            .values(is_revoked=True)
+        )
+        return result.rowcount
 
     @staticmethod
     def add_login_attempt(

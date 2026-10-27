@@ -195,7 +195,7 @@ class TestAuthEvents:
         session.commit()
 
         AuthService.logout(
-            session, seed_user["user_id"], token_hash, request_id="req-logout"
+            session, seed_user["user_id"], raw, request_id="req-logout"
         )
         assert [c["event_type"] for c in record_sync] == ["logout"]
         assert record_sync[0]["request_id"] == "req-logout"

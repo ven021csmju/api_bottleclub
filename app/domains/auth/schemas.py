@@ -53,6 +53,11 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
 
+class LogoutRequest(BaseModel):
+    #: The refresh token to revoke. Left out: every refresh token of the user.
+    refresh_token: str | None = None
+
+
 class TokenPayload(BaseModel):
     user_id: int
     organization_id: int
