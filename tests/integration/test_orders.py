@@ -184,7 +184,7 @@ class TestCreateOrder:
                 ],
             },
         )
-        assert resp.status_code == 400, resp.text
+        assert resp.status_code == 422, resp.text  # 38a: one rule for every source
         assert resp.json()["code"] == "PRICE_MISMATCH"
         session.refresh(inventory)
         assert inventory.on_hand == 5

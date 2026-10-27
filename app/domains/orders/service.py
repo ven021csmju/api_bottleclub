@@ -19,6 +19,7 @@ from app.db.repositories.orders import OrderRepository
 from app.db.repositories.payments import PaymentRepository
 from app.services import user_events
 from app.shared.exceptions import (
+    AppException,
     BadRequestException,
     InsufficientStockException,
     InvalidOrderStateException,
@@ -111,19 +112,21 @@ class OrderService:
         order_source = OrderService._order_source_value(
             data.get("order_source", "pos")
         )
-        if order_source == "ecommerce":
-            for item_data in data["items"]:
-                product = products_map[item_data["product_id"]]
-                client_price = Decimal(str(item_data["unit_price"]))
-                catalog_price = Decimal(str(product.selling_price))
-                if client_price != catalog_price:
-                    raise BadRequestException(
-                        detail=(
-                            f"Price mismatch for product '{product.name}': "
-                            f"expected {catalog_price}, received {client_price}"
-                        ),
-                        code="PRICE_MISMATCH",
-                    )
+        # Every source sells at the catalog price. A unit_price sent by the
+        # client is only checked against it, never used.
+        for item_data in data["items"]:
+            product = products_map[item_data["product_id"]]
+            sent = item_data.get("unit_price")
+            catalog_price = Decimal(str(product.selling_price))
+            if sent is not None and Decimal(str(sent)) != catalog_price:
+                raise AppException(
+                    status_code=422,
+                    detail=(
+                        f"Price mismatch for product '{product.name}': "
+                        f"expected {catalog_price}, received {Decimal(str(sent))}"
+                    ),
+                    code="PRICE_MISMATCH",
+                )
 
         order_number = generate_order_number(db, branch.code)
 
@@ -158,12 +161,7 @@ class OrderService:
         for item_data in data["items"]:
             product = products_map[item_data["product_id"]]
             quantity = item_data["quantity"]
-            client_price = Decimal(str(item_data["unit_price"]))
-            unit_price = (
-                Decimal(str(product.selling_price))
-                if order_source == "ecommerce"
-                else client_price
-            )
+            unit_price = Decimal(str(product.selling_price))
             item_discount = Decimal(str(item_data.get("discount_amount", 0)))
             line_total = unit_price * quantity - item_discount
 

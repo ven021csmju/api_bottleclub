@@ -12,7 +12,9 @@ ORDER_SOURCE_VALUES = tuple(s.value for s in OrderSource)
 class OrderItemCreate(BaseModel):
     product_id: int
     quantity: int = Field(..., gt=0)
-    unit_price: Decimal = Field(..., decimal_places=2)
+    # Optional: the catalog price is always used; one that differs is 422
+    # PRICE_MISMATCH.
+    unit_price: Optional[Decimal] = Field(None, decimal_places=2)
     discount_amount: Decimal = Field(Decimal("0"), ge=0, decimal_places=2)
 
 
