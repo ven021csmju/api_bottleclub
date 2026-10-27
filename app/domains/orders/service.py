@@ -28,6 +28,7 @@ from app.shared.exceptions import (
     InsufficientStockException,
     InvalidOrderStateException,
     NotFoundException,
+    UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
 from app.domains.shifts.drawer import CASH, current_shift, paid_net
@@ -461,6 +462,8 @@ class OrderService:
         user_id: int,
         request_id: str = "",
         may_cancel_any: bool = True,
+        reason: str | None = None,
+        audit: AuditContext | None = None,
     ) -> Order:
         """Cancel an unpaid order and put its stock back (Phase 38b).
 
@@ -468,7 +471,11 @@ class OrderService:
         branch; without it only the caller's own orders (403 ORDER_NOT_YOURS).
         An order with money on it is returned, not cancelled (400
         ORDER_ALREADY_PAID). The order row is locked, so a payment and a
-        cancel of one order cannot both go through."""
+        cancel of one order cannot both go through.
+
+        A ``ready`` order (38c): only with orders.cancel (403
+        ORDER_READY_NEEDS_MANAGER) and a ``reason`` (422
+        CANCEL_REASON_REQUIRED); ``audit`` records who, why and from what."""
         order = OrderRepository.get_org_order_for_update(db, org_id, order_id)
 
         if not order:
@@ -483,7 +490,18 @@ class OrderService:
                 detail="This order has been paid: return it (POST /returns/) instead of cancelling",
                 code="ORDER_ALREADY_PAID",
             )
-        if order.status not in OrderService.CANCELLABLE_STATUSES:
+        was_ready = order.status == "ready"
+        if was_ready:
+            if not may_cancel_any:
+                raise ForbiddenException(
+                    detail="A ready order is cancelled by a Branch Admin (orders.cancel)",
+                    code="ORDER_READY_NEEDS_MANAGER",
+                )
+            if not (reason or "").strip():
+                raise UnprocessableException(
+                    detail="Say why the ready order is cancelled", code="CANCEL_REASON_REQUIRED"
+                )
+        elif order.status not in OrderService.CANCELLABLE_STATUSES:
             raise InvalidOrderStateException(
                 detail=f"Cannot cancel order in '{order.status}' status"
             )
@@ -518,6 +536,16 @@ class OrderService:
         CouponService.release(db, order)
         order.status = "cancelled"
         order.cancelled_at = datetime.now(timezone.utc)
+        if was_ready and audit is not None:
+            log_audit(
+                db=db,
+                ctx=audit,
+                action="ORDER.CANCEL_READY",
+                entity_type="order",
+                entity_id=order.id,
+                before_data={"status": "ready", "grand_total": str(order.grand_total)},
+                after_data={"status": "cancelled", "order_number": order.order_number, "reason": reason.strip()},
+            )
         db.flush()
         db.commit()
         db.refresh(order)
