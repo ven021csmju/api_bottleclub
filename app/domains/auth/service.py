@@ -14,6 +14,7 @@ from app.shared.exceptions import (
     BadRequestException,
     ForbiddenException,
     UnauthorizedException,
+    UnprocessableException,
 )
 
 from .schemas import RegisterRequest, RegisterResponse, TokenResponse, UserProfileResponse
@@ -22,6 +23,7 @@ from app.shared.security import (
     create_refresh_token,
     decode_token,
     hash_token,
+    issued_before,
     verify_password,
     hash_password,
 )
@@ -101,10 +103,7 @@ class AuthService:
             )
 
         if not verify_password(password, user.password_hash):
-            user.failed_login_attempts += 1
-            if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
-                user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
-                user.failed_login_attempts = 0
+            _count_failed_password(user, now)
             db.commit()
 
             _record_attempt(db, username, ip_address, success=False, user_id=user.id)
@@ -114,6 +113,10 @@ class AuthService:
         if user.status != "active":
             _record_attempt(db, username, ip_address, success=False, user_id=user.id)
             raise UnauthorizedException(detail="User account is inactive", code="ACCOUNT_INACTIVE")
+
+        if _temporary_password_expired(user, now):
+            _record_attempt(db, username, ip_address, success=False, user_id=user.id)
+            raise _temporary_password_expired_error()
 
         user.failed_login_attempts = 0
         user.locked_until = None
@@ -173,6 +176,7 @@ class AuthService:
             access_token=access_token,
             refresh_token=refresh_raw,
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            password_change_required=user.must_change_password,
         )
 
     @staticmethod
@@ -204,6 +208,18 @@ class AuthService:
 
         if user is None or user.status != "active" or user.deleted_at is not None:
             raise UnauthorizedException(detail="User not found or inactive")
+
+        # change-password revokes every refresh token; this also covers one
+        # stored by a request racing the change.
+        if issued_before(payload, user.password_changed_at):
+            raise UnauthorizedException(
+                detail="Token was issued before the password was changed", code="TOKEN_REVOKED"
+            )
+        if user.must_change_password:
+            raise ForbiddenException(
+                detail="Change your password first (POST /auth/change-password)",
+                code="PASSWORD_CHANGE_REQUIRED",
+            )
 
         record.is_revoked = True
         db.commit()
@@ -311,6 +327,7 @@ class AuthService:
             access_token=access_token,
             refresh_token=refresh_raw,
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            password_change_required=user.must_change_password,
         )
 
     @staticmethod
@@ -354,6 +371,77 @@ class AuthService:
                 detail="Google email belongs to a deleted account", code="DUPLICATE_USER"
             )
         return user
+
+    @classmethod
+    def change_password(
+        cls,
+        db: Session,
+        user: User,
+        current_password: str,
+        new_password: str,
+        ip_address: str,
+        user_agent: str,
+    ) -> TokenResponse:
+        """Set the caller's own password. Every session of the user ends
+        (refresh tokens revoked, older access tokens refused); the answer is a
+        new token pair for this device."""
+        now = datetime.now(timezone.utc)
+        if not user.password_hash:
+            raise BadRequestException(
+                detail="This account has no password: it signs in with a social account",
+                code="NO_PASSWORD",
+            )
+        if user.locked_until and user.locked_until > now:
+            raise BadRequestException(
+                detail="Account is locked. Please try again later.", code="ACCOUNT_LOCKED"
+            )
+        # A wrong current password counts as a failed login (same lockout).
+        if not verify_password(current_password, user.password_hash):
+            _count_failed_password(user, now)
+            db.commit()
+            _record_attempt(db, user.username, ip_address, success=False, user_id=user.id)
+            raise BadRequestException(
+                detail="Current password is incorrect", code="INVALID_CURRENT_PASSWORD"
+            )
+        if _temporary_password_expired(user, now):
+            raise _temporary_password_expired_error()
+        if new_password.casefold() == user.username.casefold():
+            raise UnprocessableException(
+                detail="The new password must not be the username", code="WEAK_PASSWORD"
+            )
+        if verify_password(new_password, user.password_hash):
+            raise UnprocessableException(
+                detail="The new password must differ from the current one", code="PASSWORD_REUSED"
+            )
+
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = False
+        user.temp_password_expires_at = None
+        user.password_changed_at = now
+        user.failed_login_attempts = 0
+        AuthRepository.revoke_refresh_tokens(db, user.id)
+
+        access_token = create_access_token(
+            user_id=user.id,
+            org_id=user.organization_id,
+            permissions=cls._load_user_permissions(db, user),
+            branches=cls._load_user_branches(db, user),
+        )
+        refresh_raw = create_refresh_token(user_id=user.id, device_info=user_agent, ip=ip_address)
+        AuthRepository.add_refresh_token(
+            db,
+            user_id=user.id,
+            token_hash=hash_token(refresh_raw),
+            device_info=user_agent,
+            ip_address=ip_address,
+            expires_at=now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        )
+        db.commit()
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_raw,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
 
     @staticmethod
     def logout(
@@ -402,6 +490,30 @@ class AuthService:
             permissions=permissions,
             branches=branches,
         )
+
+
+def _count_failed_password(user: User, now: datetime) -> None:
+    user.failed_login_attempts += 1
+    if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
+        user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+        user.failed_login_attempts = 0
+
+
+def _temporary_password_expired(user: User, now: datetime) -> bool:
+    """A temporary password (must_change_password) past its expiry: only an
+    administrator's reset gives the user a way in again."""
+    return bool(
+        user.must_change_password
+        and user.temp_password_expires_at is not None
+        and user.temp_password_expires_at <= now
+    )
+
+
+def _temporary_password_expired_error() -> UnauthorizedException:
+    return UnauthorizedException(
+        detail="Temporary password has expired; ask an administrator to reset it",
+        code="TEMPORARY_PASSWORD_EXPIRED",
+    )
 
 
 def _record_attempt(

@@ -12,14 +12,16 @@ from app.db.models import Order, OrderItem, User
 from app.db.repositories.users import UserRepository
 from app.shared.audit import AuditContext
 from app.shared.exceptions import ForbiddenException, NotFoundException, UnauthorizedException
-from app.shared.security import decode_token
+from app.shared.security import decode_token, issued_before
 
 
-async def get_current_user(
+async def get_authenticated_user(
     request: Request,
     authorization: str = Header(...),
     db: Session = Depends(get_db),
 ) -> User:
+    """The caller, even one who must still change their password. Only
+    POST /auth/change-password and /auth/logout use this directly."""
     if not authorization.startswith("Bearer "):
         raise UnauthorizedException(detail="Invalid authorization header format")
 
@@ -38,11 +40,26 @@ async def get_current_user(
     if user is None or user.deleted_at is not None:
         raise UnauthorizedException(detail="User not found")
 
+    # A password change (or an admin reset) ends every session opened before it.
+    if issued_before(payload, user.password_changed_at):
+        raise UnauthorizedException(
+            detail="Token was issued before the password was changed", code="TOKEN_REVOKED"
+        )
+
     if user.status != "active":
         raise ForbiddenException(detail="User account is inactive")
 
     request.state.user = user
     request.state.token_payload = payload
+    return user
+
+
+async def get_current_user(user: User = Depends(get_authenticated_user)) -> User:
+    if user.must_change_password:
+        raise ForbiddenException(
+            detail="Change your password first (POST /auth/change-password)",
+            code="PASSWORD_CHANGE_REQUIRED",
+        )
     return user
 
 

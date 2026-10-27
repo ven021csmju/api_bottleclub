@@ -2,12 +2,18 @@
 
 A new route that only asks for ``get_current_user`` fails here until it is
 added to ``LOGIN_ONLY`` on purpose: any logged-in account (a registered or
-Google user without a role) can call it.
+Google user without a role) can call it. One that asks for
+``get_authenticated_user`` must also be in ``BEFORE_PASSWORD_CHANGE``: a user
+who still has to change their password can call it.
 """
 from fastapi.routing import APIRoute
 
 from app.main import create_app
-from app.middleware.auth import get_current_user, require_station_item_permission
+from app.middleware.auth import (
+    get_authenticated_user,
+    get_current_user,
+    require_station_item_permission,
+)
 
 PREFIX = "/api/v1"
 
@@ -16,6 +22,7 @@ PREFIX = "/api/v1"
 LOGIN_ONLY = {
     ("GET", "/auth/me"),
     ("POST", "/auth/logout"),
+    ("POST", "/auth/change-password"),
     # Branch picker after login; organization-scoped, no personal data.
     ("GET", "/branches/"),
     ("GET", "/branches/{branch_id}"),
@@ -28,6 +35,12 @@ LOGIN_ONLY = {
     ("POST", "/slip-verify/checkslip"),
     # kds.<station>.update of the item's station (require_station_item_permission).
     ("PATCH", "/orders/{order_id}/station-items/{run_id}/status"),
+}
+
+#: Callable with must_change_password set (no PASSWORD_CHANGE_REQUIRED).
+BEFORE_PASSWORD_CHANGE = {
+    ("POST", "/auth/logout"),
+    ("POST", "/auth/change-password"),
 }
 
 PUBLIC = {
@@ -57,6 +70,8 @@ def _classify(route: APIRoute) -> str:
         return "permission"
     if get_current_user in calls:
         return "login"
+    if get_authenticated_user in calls:
+        return "login, before password change"
     return "public"
 
 
@@ -72,7 +87,14 @@ def _routes() -> dict[tuple[str, str], str]:
 
 def test_login_only_routes_are_the_reviewed_ones():
     routes = _routes()
-    assert {key for key, kind in routes.items() if kind == "login"} == LOGIN_ONLY
+    assert {key for key, kind in routes.items() if kind.startswith("login")} == LOGIN_ONLY
+
+
+def test_routes_open_before_the_password_change_are_the_reviewed_ones():
+    routes = _routes()
+    assert {key for key, kind in routes.items() if kind == "login, before password change"} == (
+        BEFORE_PASSWORD_CHANGE
+    )
 
 
 def test_public_routes_are_the_reviewed_ones():

@@ -1,4 +1,5 @@
 import hashlib
+import math
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -73,6 +74,17 @@ def decode_token(token: str) -> dict:
         return payload
     except JWTError as e:
         raise e
+
+
+def issued_before(payload: dict, moment: datetime | None) -> bool:
+    """Whether the token was issued before the second of ``moment``.
+
+    ``iat`` holds whole seconds, so a token issued in the same second as
+    ``moment`` (the token pair answering a password change) is not "before".
+    """
+    if moment is None:
+        return False
+    return int(payload.get("iat", 0)) < math.floor(moment.timestamp())
 
 
 def hash_token(token: str) -> str:

@@ -47,6 +47,14 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     refresh_token: str
+    #: True: every route but POST /auth/change-password (and logout) answers
+    #: 403 PASSWORD_CHANGE_REQUIRED until the password is changed.
+    password_change_required: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: BcryptPassword = Field(min_length=12)
 
 
 class RefreshTokenRequest(BaseModel):

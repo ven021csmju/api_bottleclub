@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.session import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_authenticated_user, get_current_user
 from app.middleware.rate_limit import limiter
 from app.db.models import User
 from app.shared.exceptions import ForbiddenException, UnauthorizedException
 
 from .schemas import (
+    ChangePasswordRequest,
     LoginRequest,
     LogoutRequest,
     RefreshTokenRequest,
@@ -153,11 +154,29 @@ def refresh(
     )
 
 
+@router.post("/change-password", response_model=TokenResponse)
+@limiter.limit(settings.RATE_LIMIT_CHANGE_PASSWORD)
+def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    user: User = Depends(get_authenticated_user),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    return AuthService.change_password(
+        db=db,
+        user=user,
+        current_password=body.current_password,
+        new_password=body.new_password,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("User-Agent", ""),
+    )
+
+
 @router.post("/logout", status_code=204)
 def logout(
     request: Request,
     body: LogoutRequest | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_authenticated_user),
     db: Session = Depends(get_db),
 ) -> Response:
     AuthService.logout(
