@@ -196,6 +196,24 @@ change is therefore valid; an access token issued in that same second before
 the change also stays valid until it expires (15 minutes at most); its refresh
 token is revoked in any case.
 
+### Slip time (Phase 36h)
+
+**Deploy order: apply migration 011 first, then deploy the code.**
+
+| | `ocr_time` timestamp (before 011) | `ocr_time` time (011) |
+|---|---|---|
+| code before 36h | slip with a time → 500, without → 200 | same as before 011 |
+| 36h code | **every** slip upload → 500 | 200 |
+
+011 alone changes nothing for the frontend; the 36h code alone breaks every
+upload; both together fix it. Rollback in the reverse order: the code first,
+then `011_..._rollback.sql` (the time becomes `ocr_date + ocr_time`, or NULL
+when the slip had no date).
+
+| Route | Before | Now |
+|---|---|---|
+| `POST /slip-verify/upload`, `/checkslip` | a slip whose time the OCR read (most slips) → 500 `DATABASE_ERROR`, nothing saved | 200; the time is stored (`payment_verifications.ocr_time`) |
+
 ---
 
 ## Authentication
@@ -986,7 +1004,9 @@ Query: `?page=&per_page=&user_id=&action=&entity_type=&date_from=&date_to=`
 ### POST `/slip-verify/upload`
 Permission `payments.create`, or the caller created the order. Otherwise
 403 `FORBIDDEN`, whether the order exists or not. `POST /slip-verify/checkslip`
-is the same route under another name.
+is the same route under another name. `data.date` / `data.time` are the slip's
+own date and time (Thai local time, no offset), as read; the time is stored
+since Phase 36h (before, a slip with a readable time failed with 500).
 ```
 Content-Type: multipart/form-data
   file: (image file)
