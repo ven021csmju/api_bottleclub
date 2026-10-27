@@ -66,11 +66,16 @@ class ReturnRepository:
     def get_inventory(
         db: Session, branch_id: int, product_id: int
     ) -> Inventory | None:
+        """Locked (FOR UPDATE): a sale's UPDATE ... SET on_hand = on_hand - n
+        at the same time waits instead of being overwritten by the restock."""
         return db.execute(
-            select(Inventory).where(
+            select(Inventory)
+            .where(
                 Inventory.branch_id == branch_id,
                 Inventory.product_id == product_id,
             )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
 
     @staticmethod
