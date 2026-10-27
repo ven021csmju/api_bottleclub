@@ -245,6 +245,27 @@ def test_d_pos_sale(api, rec, flow):
            plain.status_code)
     if created(plain):
         api.post(f"/orders/{data(plain)['id']}/cancel", "manager", json={"reason": "E2E price probe"})
+
+    one = [{"product_id": flow["p1"], "quantity": 1}]
+    resp = api.post("/orders/", "cashier", json={**body, "items": [{**one[0], "discount_amount": "50.00"}]})
+    rec.eq(s, "POS staff sends a discount → 403", (403, "DISCOUNT_NOT_ALLOWED"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    resp = api.post("/orders/", "manager", json={**body, "items": one, "discount_amount": "350.01"})
+    rec.eq(s, "Branch Admin: a discount over the bill → 422", (422, "DISCOUNT_EXCEEDS_TOTAL"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    resp = api.post("/orders/", "manager", json={**body, "items": [{**one[0], "discount_amount": "50.00"}]})
+    disc = data(resp)
+    rec.check(s, "Branch Admin: 50 off one bottle", created(resp) and D(disc.get("grand_total", 0)) == D(300),
+              "200/201, 300", (resp.status_code, disc.get("grand_total")), resp.status_code)
+    if created(resp):
+        audit = rows(data(api.get(f"/audit/?action=ORDER.DISCOUNT&entity_id={disc['id']}", "sa", branch=None)))
+        rec.eq(s, "the discount is in audit_logs (who, how much, which order)",
+               [("ORDER.DISCOUNT", disc["id"], "50.00")],
+               [(a.get("action"), a.get("entity_id"),
+                 ((a.get("after_data") or {}).get("item_discounts") or [{}])[0].get("discount_amount")) for a in audit])
+        manager_id = data(api.get("/auth/me", "manager")).get("id")
+        rec.eq(s, "audit names the Branch Admin", [manager_id], [a.get("user_id") for a in audit])
+        api.post(f"/orders/{disc['id']}/cancel", "manager", json={"reason": "E2E discount probe"})
     rec.eq(s, "stock p1 back to −2 after every probe was cancelled", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
     resp = api.post(f"/orders/{flow['o1']}/checkout", "cashier",
