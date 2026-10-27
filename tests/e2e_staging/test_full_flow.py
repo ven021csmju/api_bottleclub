@@ -22,7 +22,11 @@ RUN = secrets.token_hex(3).upper()  # keeps codes unique if the flow is run twic
 P1 = {"name": f"E2E Red {RUN}", "sku": f"E2E-RED-{RUN}", "barcode": f"88500{RUN}01", "selling_price": "350.00"}
 P2 = {"name": f"E2E White {RUN}", "sku": f"E2E-WHT-{RUN}", "barcode": f"88500{RUN}02", "selling_price": "420.00"}
 P3 = {"name": f"E2E Cheese plate {RUN}", "sku": f"E2E-CHS-{RUN}", "barcode": f"88500{RUN}03",
-      "selling_price": "180.00", "track_inventory": False}
+      "selling_price": "180.00", "track_inventory": False, "station": "kitchen"}
+# Wine (p1, p2) goes to no screen (the category's 'none'); the cheese plate to
+# the kitchen and the mojito to the bar (each product's own station).
+P4 = {"name": f"E2E Mojito {RUN}", "sku": f"E2E-MOJ-{RUN}", "barcode": f"88500{RUN}04",
+      "selling_price": "150.00", "track_inventory": False, "station": "bar"}
 
 
 CREATED = (200, 201)  # creates answer 200 or 201 depending on the route
@@ -73,17 +77,18 @@ def test_a_catalog(api, rec, flow, sa_credentials):
 
     resp = api.post("/catalog/categories", "sa", json={"name": f"E2E Wine {RUN}"})
     rec.check(s, "create category", created(resp), "200/201", resp.status_code, resp.status_code)
+    rec.eq(s, "a category goes to no screen unless set", "none", data(resp).get("station"))
     flow["category"] = data(resp).get("id")
 
-    for key, product in (("p1", P1), ("p2", P2), ("p3", P3)):
+    for key, product in (("p1", P1), ("p2", P2), ("p3", P3), ("p4", P4)):
         resp = api.post("/catalog/products", "sa", json={**product, "category_id": flow["category"]})
         body = data(resp)
         rec.check(s, f"create product {key}", created(resp), "200/201", resp.status_code, resp.status_code)
         rec.eq(s, f"{key} barcode/price stored", (product["barcode"], D(product["selling_price"])),
                (body.get("barcode"), D(body.get("selling_price", 0))))
         flow[key] = body.get("id")
-    rec.note(s, "kitchen/bar routing: CategoryCreate has no station field; every item goes to 'kitchen'",
-             "kitchen (category.station server default)")
+    rec.eq(s, "stations: p1 the category's, p3 kitchen, p4 bar", (None, "kitchen", "bar"),
+           tuple(data(api.get(f"/catalog/products/{flow[k]}", "sa")).get("station") for k in ("p1", "p3", "p4")))
 
     resp = api.post("/catalog/suppliers", "sa", json={"name": f"E2E Supplier {RUN}", "phone": "000-000-0000"})
     rec.check(s, "create supplier", created(resp), "200/201", resp.status_code, resp.status_code)
@@ -143,7 +148,7 @@ def test_c_staff(api, rec, flow):
     s = "c"
     needs(flow, "A")
     roles = {r["name"]: r["id"] for r in rows(data(api.get("/roles/", "sa")))}
-    for who, role in (("manager", "Manager"), ("cashier", "Cashier"), ("kitchen", "Kitchen")):
+    for who, role in (("manager", "Manager"), ("cashier", "Cashier"), ("kitchen", "Kitchen"), ("bar", "Bar")):
         username = f"e2e_{who}_{RUN.lower()}"
         resp = api.post("/users/", "sa", json={
             "username": username, "email": f"{username}@e2e.example.com", "display_name": f"E2E {who}",
@@ -207,6 +212,7 @@ def test_d_pos_sale(api, rec, flow):
     number = str(order.get("order_number", ""))
     rec.eq(s, "order number carries the Bangkok date", f"MNB-{today().replace('-', '')}", number[:12])
     flow["o1"], flow["o1_items"], flow["o1_token"] = order.get("id"), order.get("items", []), order.get("tracking_token")
+    flow["o1_number"] = number
     rec.eq(s, "stock p1 −2 at order creation", flow["stock"]["p1"] - 2, on_hand(api, A, flow["p1"]))
 
     resp = api.post("/orders/", "cashier", json=body, key=None)
@@ -367,33 +373,80 @@ def test_e_slip(api, rec, flow):
 # ---------------------------------------------------------------------------
 def test_f_kds(api, rec, flow):
     s = "f"
-    needs(flow, "kitchen", "o1_items")
-    resp = api.get("/orders/station/kitchen", "kitchen")
-    entries = rows(data(resp))
-    o1_item_ids = {i["id"] for i in flow["o1_items"]}
-    shown = [(e.get("order_id"), e.get("order_number"), it["id"]) for e in entries for it in e.get("items", [])]
-    rec.eq(s, "Kitchen sees order 1's items", (200, o1_item_ids),
-           (resp.status_code, {i for _, _, i in shown if i in o1_item_ids}), resp.status_code)
-    rec.eq(s, "order 1's items are under order 1's header", {flow["o1"]},
-           {oid for oid, _, i in shown if i in o1_item_ids})
-    rec.note(s, "kitchen queue: (order_id, order_number, item id)", shown)
+    needs(flow, "kitchen", "bar", "o1_items", "p4")
+    A = flow["A"]
+
+    def queue(station: str, who: str):
+        resp = api.get(f"/orders/station/{station}", who)
+        entries = rows(data(resp))
+        return resp, {e.get("order_id"): (e.get("order_number"), sorted(it["product_id"] for it in e.get("items", [])),
+                                          {it.get("station") for it in e.get("items", [])}) for e in entries}
+
+    # Order 1: 2 × wine (no screen) and a cheese plate (kitchen).
+    resp, kitchen = queue("kitchen", "kitchen")
+    rec.eq(s, "Kitchen sees order 1 under its own number, the cheese plate only (wine: no screen)",
+           (200, (flow["o1_number"], [flow["p3"]], {"kitchen"})), (resp.status_code, kitchen.get(flow["o1"])),
+           resp.status_code)
+
+    # Order 5 (not paid): a mojito (bar), a cheese plate (kitchen), a wine (no screen).
+    stock_p1 = on_hand(api, A, flow["p1"])
+    resp = api.post("/orders/", "cashier", json={"branch_id": A, "items": [
+        {"product_id": flow["p4"], "quantity": 1}, {"product_id": flow["p3"], "quantity": 1},
+        {"product_id": flow["p1"], "quantity": 1}]})
+    o5 = data(resp)
+    rec.eq(s, "order 5: stations bar / kitchen / none", (200, {flow["p4"]: "bar", flow["p3"]: "kitchen",
+                                                               flow["p1"]: "none"}),
+           (resp.status_code, {i["product_id"]: i.get("station") for i in o5.get("items", [])}), resp.status_code)
+    resp, kitchen = queue("kitchen", "kitchen")
+    rec.eq(s, "Kitchen: each order under its own header", {
+        flow["o1"]: (flow["o1_number"], [flow["p3"]], {"kitchen"}),
+        o5.get("id"): (o5.get("order_number"), [flow["p3"]], {"kitchen"})},
+        {k: v for k, v in kitchen.items() if k in (flow["o1"], o5.get("id"))})
+    resp, bar = queue("bar", "bar")
+    rec.eq(s, "Bar sees only order 5's mojito", (200, {o5.get("id"): (o5.get("order_number"), [flow["p4"]], {"bar"})}),
+           (resp.status_code, bar), resp.status_code)
+
     item = next((i for i in flow["o1_items"] if i["product_id"] == flow["p3"]), None)
-    rec.check(s, "every item is 'kitchen' (no station on categories)",
-              all(it.get("station") == "kitchen" for e in entries for it in e.get("items", [])),
-              "kitchen", sorted({it.get("station") for e in entries for it in e.get("items", [])}))
     if item:
         for status in ("preparing", "ready", "served"):
             resp = api.patch(f"/orders/{flow['o1']}/station-items/{item['id']}/status", "kitchen",
                              json={"item_status": status})
             rec.eq(s, f"item → {status}", (200, status), (resp.status_code, data(resp).get("item_status")),
                    resp.status_code)
+    wine = next((i for i in flow["o1_items"] if i["product_id"] == flow["p1"]), None)
+    if wine:
+        resp = api.patch(f"/orders/{flow['o1']}/station-items/{wine['id']}/status", "kitchen",
+                         json={"item_status": "preparing"})
+        rec.eq(s, "an item on no screen cannot be advanced (404)", 404, resp.status_code, resp.status_code)
     resp = api.get("/orders/", "kitchen")
     rec.eq(s, "Kitchen cannot open /orders", 403, resp.status_code, resp.status_code)
     resp = api.get("/orders/station/bar", "kitchen")
     rec.eq(s, "Kitchen cannot open the bar queue", 403, resp.status_code, resp.status_code)
 
+    # Order 5 is made ready and not paid: only the Branch Admin cancels it, with a reason.
+    for status in ("confirmed", "ready"):
+        resp = api.put(f"/orders/{o5.get('id')}/status", "manager", json={"status": status})
+        rec.eq(s, f"order 5 → {status}", (200, status), (resp.status_code, data(resp).get("status")), resp.status_code)
+    resp = api.post(f"/orders/{o5.get('id')}/cancel", "cashier", json={"reason": "E2E"})
+    rec.eq(s, "POS staff cannot cancel a ready order", (403, "ORDER_READY_NEEDS_MANAGER"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    resp = api.post(f"/orders/{o5.get('id')}/cancel", "manager", json={})
+    rec.eq(s, "Branch Admin: a reason is needed", (422, "CANCEL_REASON_REQUIRED"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    resp = api.post(f"/orders/{o5.get('id')}/cancel", "manager", json={"reason": "E2E customer left"})
+    rec.eq(s, "Branch Admin cancels the ready order", (200, "cancelled"),
+           (resp.status_code, data(resp).get("status")), resp.status_code)
+    rec.eq(s, "its wine is back in stock", stock_p1, on_hand(api, A, flow["p1"]))
+    logs = rows(data(api.get(f"/audit/?action=ORDER.CANCEL_READY&entity_id={o5.get('id')}", "sa")))
+    rec.eq(s, "audit keeps the reason", ["E2E customer left"],
+           [(lg.get("after_data") or {}).get("reason") for lg in logs if lg.get("entity_id") == o5.get("id")])
+
     resp = api.put(f"/orders/{flow['o1']}/complete", "cashier")
     rec.eq(s, "POS completes order 1", (200, "completed"), (resp.status_code, data(resp).get("status")), resp.status_code)
+    _, kitchen = queue("kitchen", "kitchen")
+    _, bar = queue("bar", "bar")
+    rec.eq(s, "completed order 1 and cancelled order 5 have left both screens", (False, False, False),
+           (flow["o1"] in kitchen, o5.get("id") in kitchen, o5.get("id") in bar))
     rec.finish(s)
 
 
@@ -491,22 +544,46 @@ def test_h_customers_loyalty_coupons(api, rec, flow):
     flow["cash_in_drawer"] += D(400)
 
     now = datetime.now(BKK)
-    live = {"code": f"E2E-OK-{RUN}", "promotion_id": 1, "max_uses": 10,
+    live = {"code": f"E2E-OK-{RUN}", "discount_type": "percent", "discount_value": "10", "max_uses": 1,
             "start_date": (now - timedelta(days=1)).isoformat(), "end_date": (now + timedelta(days=7)).isoformat()}
-    expired = {"code": f"E2E-OLD-{RUN}", "promotion_id": 1, "max_uses": 10,
+    expired = {"code": f"E2E-OLD-{RUN}", "discount_type": "fixed", "discount_value": "50", "max_uses": 10,
                "start_date": (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S"),
                "end_date": (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")}
     for c in (live, expired):
         resp = api.post("/coupons/", "sa", json=c)
         rec.check(s, f"SA creates coupon {c['code'][:7]}", created(resp), "200/201", resp.status_code, resp.status_code)
     resp = api.post("/coupons/validate", "cashier", json={"code": live["code"], "customer_id": cid})
-    rec.eq(s, "valid coupon validates", (200, True), (resp.status_code, data(resp).get("valid")), resp.status_code)
-    rec.note(s, "what a valid coupon gives (promotion_id 1 has no discount fields)",
-             {k: data(resp).get(k) for k in ("promotion_type", "discount_value", "message")})
+    rec.eq(s, "valid coupon validates: 10%", (200, True, "percent", D(10)),
+           (resp.status_code, data(resp).get("valid"), data(resp).get("discount_type"),
+            D(data(resp).get("discount_value") or 0)), resp.status_code)
     resp = api.post("/coupons/validate", "cashier", json={"code": expired["code"], "customer_id": cid})
     rec.eq(s, "expired coupon is not valid", False, data(resp).get("valid"), resp.status_code)
-    rec.note(s, "using a coupon at the POS", "no field: OrderCreate/CheckoutRequest take no coupon code",
-             expected="coupon applied to the order")
+
+    # Order 4: a white (420) with the coupon: the system takes 10% off.
+    resp = api.post("/orders/", "cashier", json={
+        "branch_id": A, "shift_id": flow["shift"], "customer_id": cid, "coupon_code": live["code"],
+        "items": [{"product_id": flow["p2"], "quantity": 1}]})
+    o4 = data(resp)
+    rec.eq(s, "order 4 with the coupon: 420 − 42 = 378", (200, D(42), D(0), D(378)),
+           (resp.status_code, D(o4.get("coupon_discount", 0)), D(o4.get("discount_amount", 0)),
+            D(o4.get("grand_total", 0))), resp.status_code)
+    resp = api.post(f"/orders/{o4.get('id')}/checkout", "cashier", json={
+        "payments": [{"payment_method": "cash", "amount": "378.00"}]})
+    rec.eq(s, "checkout order 4: cash 378", (200, D(378)), (resp.status_code, D(data(resp).get("amount_paid", 0))),
+           resp.status_code)
+    resp = api.put(f"/orders/{o4.get('id')}/complete", "cashier")
+    rec.eq(s, "complete order 4", 200, resp.status_code, resp.status_code)
+    if created(resp):
+        flow["stock"]["p2"] -= 1
+        flow["sales"]["o4"] = D(378)
+        flow["coupon_discounts"] = D(42)
+
+    for code, expected in ((live["code"], "COUPON_USED_UP"), (expired["code"], "COUPON_EXPIRED")):
+        resp = api.post("/orders/", "cashier", json={
+            "branch_id": A, "customer_id": cid, "coupon_code": code, "items": [{"product_id": flow["p2"], "quantity": 1}]})
+        rec.eq(s, f"a coupon that cannot be used → 422 {expected}", (422, expected),
+               (resp.status_code, resp.json().get("code")), resp.status_code)
+    rec.eq(s, "stock p2 untouched by the refused orders", flow["stock"]["p2"], on_hand(api, A, flow["p2"]))
     rec.finish(s)
 
 
@@ -555,7 +632,8 @@ def test_j_shift(api, rec, flow):
         resp = api.post(f"/shifts/{sid}/cash-movements", "cashier",
                         json={"amount": amount, "movement_type": kind, "reason": f"E2E {kind}"})
         rec.check(s, f"{kind} {amount}", created(resp), "200/201", resp.status_code, resp.status_code)
-    cash_sales = flow["sales"]["o1"] + D(400)  # order 1 cash, order 3 cash after points; order 2 by slip
+    # order 1 cash, order 3 cash after points, order 4 cash after the coupon; order 2 by slip
+    cash_sales = flow["sales"]["o1"] + D(400) + flow["sales"].get("o4", D(0))
     expected_cash = D(1000) + cash_sales + D(200) - D(50) - flow.get("refunds", D(0))
     resp = api.post("/orders/", "cashier", json={"branch_id": flow["A"], "items": [{"product_id": flow["p1"], "quantity": 1}]})
     pending = data(resp)
@@ -573,9 +651,9 @@ def test_j_shift(api, rec, flow):
     resp = api.get(f"/shifts/{sid}/x-report", "cashier")
     x = data(resp)
     rec.eq(s, "x-report", 200, resp.status_code, resp.status_code)
-    # Money taken: 880 cash, 420 by slip, 400 cash (420 less 20 points).
-    rec.eq(s, "x-report total_sales = 880 + 420 + 400", D(1700), D(x.get("total_sales", 0)))
-    rec.eq(s, "x-report total_cash_sales = 880 + 400", cash_sales, D(x.get("total_cash_sales", 0)))
+    # Money taken: 880 cash, 420 by slip, 400 cash (420 less 20 points), 378 cash (420 less the coupon).
+    rec.eq(s, "x-report total_sales = 880 + 420 + 400 + 378", D(2078), D(x.get("total_sales", 0)))
+    rec.eq(s, "x-report total_cash_sales = 880 + 400 + 378", cash_sales, D(x.get("total_cash_sales", 0)))
     rec.eq(s, "x-report other sales = the 420 transfer", D(420), D(x.get("total_other_sales", 0)))
     rec.eq(s, "x-report refunds (all cash)", (flow.get("refunds", D(0)),) * 2,
            (D(x.get("total_refunds", 0)), D(x.get("total_cash_refunds", 0))))
@@ -583,7 +661,7 @@ def test_j_shift(api, rec, flow):
            (D(x.get("cash_movements_in", 0)), D(x.get("cash_movements_out", 0))))
     rec.eq(s, "expected_cash = 1000 + cash sales + 200 − 50 − refunds", expected_cash, D(x.get("expected_cash") or 0))
     rec.eq(s, "cash_difference 0 when the drawer matches the sales", D(0), D(x.get("cash_difference") or 0))
-    rec.eq(s, "order_count 3", 3, x.get("order_count"))
+    rec.eq(s, "order_count 4", 4, x.get("order_count"))
     rec.note(s, "closed shift", {k: closed.get(k) for k in ("status", "closing_cash", "total_sales")})
     rec.finish(s)
 
@@ -615,9 +693,11 @@ def test_k_reports(api, rec, flow):
     rec.eq(s, "sales total", sold, D(sales.get("total_sales", 0)))
     rec.eq(s, "sales orders", n_sold, sales.get("total_orders"))
     top = {p["product_name"]: p["total_qty"] for p in sales.get("top_products", [])}
-    rec.eq(s, "top products qty (p1 2, p2 2, p3 1)", {P1["name"]: 2, P2["name"]: 2, P3["name"]: 1}, top)
+    rec.eq(s, "top products qty (p1 2, p2 3, p3 1)", {P1["name"]: 2, P2["name"]: 3, P3["name"]: 1}, top)
     cat = {c["category"]: D(c["revenue"]) for c in sales.get("sales_by_category", [])}
-    rec.eq(s, "category revenue", {f"E2E Wine {RUN}": sold}, cat)
+    # By line totals: an order-level discount (the coupon's 42) is not spread over categories.
+    rec.eq(s, "category revenue (line totals, before the coupon)",
+           {f"E2E Wine {RUN}": sold + flow.get("coupon_discounts", D(0))}, cat)
     hour = datetime.now(BKK).hour
     rec.check(s, "sales_by_hour uses the Bangkok hour", all(abs(h["hour"] - hour) <= 1 for h in sales.get("sales_by_hour", [])),
               f"≈{hour}", [h["hour"] for h in sales.get("sales_by_hour", [])])
@@ -627,9 +707,11 @@ def test_k_reports(api, rec, flow):
     rec.eq(s, "financial 200", 200, resp.status_code, resp.status_code)
     rec.eq(s, "financial gross", sold, D(fin.get("gross_sales", 0)))
     rec.eq(s, "financial refunds", refunds, D(fin.get("refunds", 0)))
+    rec.eq(s, "financial: coupon discounts apart from typed-in ones", flow.get("coupon_discounts", D(0)),
+           D(fin.get("coupon_discounts", 0)))
     methods = {k: D(v) for k, v in (fin.get("payment_methods") or {}).items()}
     rec.eq(s, "financial payment methods (cash net of change; slip as transfer)",
-           {"cash": flow["sales"]["o1"] + D(400), "bank_transfer": D(420)}, methods)
+           {"cash": flow["sales"]["o1"] + D(400) + flow["sales"].get("o4", D(0)), "bank_transfer": D(420)}, methods)
 
     resp = api.get(f"/reports/inventory?branch_id={A}", "sa")
     inv = {i["product_id"]: i["on_hand"] for i in data(resp).get("items", [])}
