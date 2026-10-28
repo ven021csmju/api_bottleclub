@@ -33,6 +33,20 @@ from app.shared.exceptions import (
 )
 
 
+def _supplier_product_response(sp: SupplierProduct, product_name: str, product_sku: str) -> SupplierProductResponse:
+    """The link with its product's name and SKU, built before the response is
+    sent: a SupplierProduct row alone lacks both (500 after the commit)."""
+    return SupplierProductResponse(
+        id=sp.id,
+        supplier_id=sp.supplier_id,
+        product_id=sp.product_id,
+        cost_price=sp.cost_price,
+        supplier_sku=sp.supplier_sku,
+        product_name=product_name,
+        product_sku=product_sku,
+    )
+
+
 class CatalogService:
     # ------------------------------------------------------------------
     # Categories
@@ -350,23 +364,12 @@ class CatalogService:
 
         rows = CatalogRepository.list_supplier_products(db, supplier_id)
 
-        return [
-            SupplierProductResponse(
-                id=sp.id,
-                supplier_id=sp.supplier_id,
-                product_id=sp.product_id,
-                cost_price=sp.cost_price,
-                supplier_sku=sp.supplier_sku,
-                product_name=product_name,
-                product_sku=product_sku,
-            )
-            for sp, product_name, product_sku in rows
-        ]
+        return [_supplier_product_response(sp, product_name, product_sku) for sp, product_name, product_sku in rows]
 
     @staticmethod
     def create_supplier_product(
         db: Session, org_id: int, supplier_id: int, data: SupplierProductCreate
-    ) -> SupplierProduct:
+    ) -> SupplierProductResponse:
         supplier = CatalogRepository.get_supplier(db, supplier_id)
         if not supplier or supplier.organization_id != org_id:
             raise NotFoundException(detail="Supplier not found")
@@ -390,12 +393,12 @@ class CatalogService:
         CatalogRepository.add_supplier_product(db, sp)
         db.commit()
         db.refresh(sp)
-        return sp
+        return _supplier_product_response(sp, product.name, product.sku)
 
     @staticmethod
     def update_supplier_product(
         db: Session, org_id: int, supplier_product_id: int, data: SupplierProductUpdate
-    ) -> SupplierProduct:
+    ) -> SupplierProductResponse:
         sp = CatalogRepository.get_supplier_product(db, supplier_product_id)
         if not sp:
             raise NotFoundException(detail="Supplier product link not found")
@@ -411,7 +414,8 @@ class CatalogService:
         db.flush()
         db.commit()
         db.refresh(sp)
-        return sp
+        product = CatalogRepository.get_product(db, sp.product_id)
+        return _supplier_product_response(sp, product.name, product.sku)
 
     @staticmethod
     def delete_supplier_product(
