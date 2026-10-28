@@ -62,6 +62,8 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        # readable by a browser frontend: the deprecation of a route (Phase 40)
+        expose_headers=["Deprecation", "Link"],
     )
     if settings.RATE_LIMIT_ENABLED:
         app.add_middleware(SlowAPIMiddleware)

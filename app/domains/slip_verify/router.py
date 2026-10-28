@@ -149,7 +149,7 @@ def upload_slip(
     return _process_slip(request, file, order_id, user, access, db)
 
 
-@router.post("/checkslip", response_model=None)
+@router.post("/checkslip", response_model=None, deprecated=True)
 def check_slip(
     request: Request,
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
@@ -158,6 +158,8 @@ def check_slip(
     access: Access = Depends(get_access),
     db: Session = Depends(get_db),
 ):
+    """Deprecated (Phase 40): the same as POST /upload, which replaces it.
+    Answers carry ``Deprecation: true`` and a successor Link."""
     return _process_slip(request, file, order_id, user, access, db)
 
 
