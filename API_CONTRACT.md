@@ -73,6 +73,13 @@ Managers see only their own orders).
   organization, or one where the user has no role (and no organization-wide
   role), is **403 on every authenticated route** (`User does not have access to
   branch N`). Without the header only organization-wide roles count.
+- **No `X-Branch-Id` where a branch is needed** → **400 `BRANCH_REQUIRED`**
+  `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"` (Phase 42; before: 401 on the
+  routes marked *required*, 403 "Missing required permission" on the others).
+  It is answered when the caller holds the permission at some branch but
+  sent no header; a permission held nowhere stays **403 `FORBIDDEN`**, a
+  branch without a role **403**, another branch's record **404**. Never 401:
+  a 401 always means "log in again".
 - A record of a branch where the caller lacks the permission is **404** (same
   as a missing record): orders, payments, refunds, returns, slips, shifts,
   transfers, users.
@@ -81,16 +88,16 @@ Managers see only their own orders).
 
 | Need | Routes |
 |---|---|
-| **required** (401 without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
-| **required unless `branch_id` is given** (401 with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
+| **required** (400 `BRANCH_REQUIRED` without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
+| **required unless `branch_id` is given** (400 `BRANCH_REQUIRED` with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
 | **not used** (the record's branch decides) | routes with an order, payment, refund, return, slip, shift, transfer, purchase order or user id in the path; `PUT /branches/{id}`; `POST /purchases` (`branch_id` in the body); `GET/PUT /settings/...` (`?branch_id=`); `POST /inventory/adjust`, `GET /inventory/balances/{branch_id}/...`, `/lots`, `/movements`, `POST /shifts/open` (branch in the body/query) |
 | **ignored** (organization level only) | catalog, supplier and category changes (`catalog.create`), promotions and coupons changes, `POST /branches/`, `DELETE /branches/{id}`, `/roles` changes, `/audit`, `GET /reports/ecommerce/dashboard`, `/reports/loyalty`, `DELETE /users/{id}/roles/{role_id}` |
-| **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...) |
+| **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...; else 400 `BRANCH_REQUIRED`) |
 
 | Route | Before | Now |
 |---|---|---|
 | any route | permissions from the token, the union of every role at every branch | from the database, at the `X-Branch-Id` branch (see above) |
-| `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial` | `branch_id` unchecked; **omitted = every branch** | `branch_id` must be a branch where `reports.sales`/`reports.read` is held (404); **omitted = the `X-Branch-Id` branch**, neither → 401 |
+| `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial` | `branch_id` unchecked; **omitted = every branch** | `branch_id` must be a branch where `reports.sales`/`reports.read` is held (404); **omitted = the `X-Branch-Id` branch**, neither → 400 `BRANCH_REQUIRED` (401 before 42) |
 | `GET /reports/ecommerce/dashboard`, `/reports/loyalty` | `reports.read` anywhere | `reports.read` at organization level (403) |
 | `GET /orders/` | `?user_id=` optional, everyone saw the whole branch | without `orders.read_branch` at the branch: only the caller's orders; `?user_id=` of someone else → 403 |
 | `GET /orders/{ref}`, `/receipt`, `/track/{x}` | any order of the organization | the order's branch must hold `orders.read` (404); another user's order also needs `orders.read_branch` (404) |
@@ -925,6 +932,7 @@ date too when it has one.
 | Call | Before 42 | 42 |
 |---|---|---|
 | `PUT /orders/{id}/complete`, `PUT /orders/{id}/status` → `completed` of an order paid partly with points | **400** `BAD_REQUEST` "Order is not fully paid" when the cash handed over < `grand_total` | completes. **Fully paid** = what its completed payments settled (net of change) + the points redeemed (1 point = 1 Baht) ≥ `grand_total` (as checkout and the X-report count). Not fully paid → **400 `ORDER_NOT_FULLY_PAID`**, same `detail`. `POST /payments/` on such an order → 400 `OVERPAYMENT` (it took the payment before). |
+| **A route that needs a branch, without `X-Branch-Id`** (a user whose roles are all branch roles; anyone on the *required* routes) | a user whose roles are all branch roles: **403** `FORBIDDEN` "Missing required permission: …"; a Superadmin / organization-wide role on the *required* routes (`POST/GET /orders/`, KDS queues, `/returns/`, `POST /transfers/`, reports, `/inventory/balances`, `/low-stock`, `GET /shifts/`): **401** `UNAUTHORIZED` "X-Branch-Id header is required" | **400 `BRANCH_REQUIRED`** `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"`. Pick a branch and send it; never log out on it. A permission held nowhere stays 403 `FORBIDDEN`; another branch's record stays 404. |
 
 ---
 

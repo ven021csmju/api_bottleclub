@@ -11,7 +11,12 @@ from app.middleware.access import Access, load_access
 from app.db.models import Order, OrderItem, User
 from app.db.repositories.users import UserRepository
 from app.shared.audit import AuditContext
-from app.shared.exceptions import ForbiddenException, NotFoundException, UnauthorizedException
+from app.shared.exceptions import (
+    BranchRequiredException,
+    ForbiddenException,
+    NotFoundException,
+    UnauthorizedException,
+)
 from app.shared.security import decode_token, issued_before
 
 
@@ -103,9 +108,9 @@ async def get_access(
 
 
 async def get_current_branch(access: Access = Depends(get_access)) -> int:
-    """The active branch (``X-Branch-Id``), required."""
+    """The active branch (``X-Branch-Id``), required: 400 BRANCH_REQUIRED without it."""
     if access.branch_id is None:
-        raise UnauthorizedException(detail="X-Branch-Id header is required")
+        raise BranchRequiredException()
     return access.branch_id
 
 
@@ -137,6 +142,12 @@ def require_permission(permission_code: str | tuple[str, ...], scope: Scope = "b
         access: Access = Depends(get_access),
     ) -> User:
         if not any(holds(access, code) for code in codes):
+            # Held at some branch, and no X-Branch-Id to say which: the
+            # header is missing, not the permission.
+            if scope == "branch" and access.branch_id is None and any(
+                access.can_anywhere(code) for code in codes
+            ):
+                raise BranchRequiredException()
             raise ForbiddenException(
                 detail=f"Missing required permission: {' or '.join(codes)}"
             )
