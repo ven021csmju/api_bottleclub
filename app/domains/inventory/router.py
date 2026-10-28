@@ -10,6 +10,8 @@ from app.domains.inventory.schemas import (
     InventoryBalanceResponse,
     InventoryLotResponse,
     LowStockReportResponse,
+    MessageResponse,
+    ProductBalance,
     StockMovementResponse,
 )
 from app.domains.inventory.service import InventoryService
@@ -40,6 +42,7 @@ def list_balances(
 
 @router.get(
     "/balances/{branch_id}/{product_id}",
+    response_model=ProductBalance,
 )
 def get_balance(
     branch_id: int,
@@ -52,7 +55,7 @@ def get_balance(
     return InventoryService.get_balance(db, user.organization_id, branch_id, product_id)
 
 
-@router.post("/adjust", status_code=200)
+@router.post("/adjust", status_code=200, response_model=MessageResponse)
 def adjust_inventory(
     data: InventoryAdjustmentRequest,
     db: Session = Depends(get_db),

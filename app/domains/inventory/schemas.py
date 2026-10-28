@@ -24,6 +24,18 @@ class InventoryBalanceListResponse(BaseModel):
     per_page: int
 
 
+class ProductBalance(BaseModel):
+    """GET /inventory/balances/{branch_id}/{product_id}: 0s when the branch has no row."""
+
+    on_hand: int
+    reserved: int
+    available: int
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class InventoryLotResponse(BaseModel):
     id: int
     lot_number: str

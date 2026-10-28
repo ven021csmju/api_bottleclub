@@ -1,10 +1,12 @@
 ﻿
 import logging
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -22,6 +24,10 @@ from rabbitmq.publisher import close as close_rabbitmq_publisher
 from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
+
+
+class MongoHealth(BaseModel):
+    status: Literal["connected", "disconnected"]
 
 
 def _request_id(request: Request) -> str:
@@ -203,7 +209,8 @@ def create_app() -> FastAPI:
     # MongoDB status reported separately: a MongoDB outage (e.g. dead SSH
     # tunnel) must NOT make the whole service unhealthy.
     # 503 while disconnected, so a monitor sees it; /health stays 200.
-    @app.get("/health/mongodb", tags=["Health"])
+    @app.get("/health/mongodb", tags=["Health"], response_model=MongoHealth,
+             responses={503: {"model": MongoHealth, "description": "MongoDB is not connected"}})
     def mongodb_health() -> JSONResponse:
         health = get_mongodb_health()
         return JSONResponse(status_code=200 if health["status"] == "connected" else 503, content=health)

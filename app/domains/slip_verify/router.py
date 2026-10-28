@@ -16,8 +16,11 @@ from app.shared.exceptions import ForbiddenException, NotFoundException
 from .schemas import (
     ErrorResponse,
     VerificationApproveRequest,
+    SlipUploadResult,
+    VerificationDetailRead,
     VerificationDetailResponse,
     VerificationListResponse,
+    VerificationOfOrder,
     VerificationModerationRequest,
     VerificationResponse,
 )
@@ -137,7 +140,11 @@ def _process_slip(
     return JSONResponse(status_code=status_code, content=result)
 
 
-@router.post("/upload", response_model=None)
+#: The upload's answers other than 200 have the same body (see _HTTP_STATUS).
+_UPLOAD_RESPONSES = {code: {"model": SlipUploadResult} for code in (400, 404, 415, 422)}
+
+
+@router.post("/upload", response_model=SlipUploadResult, responses=_UPLOAD_RESPONSES)
 def upload_slip(
     request: Request,
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
@@ -149,7 +156,7 @@ def upload_slip(
     return _process_slip(request, file, order_id, user, access, db)
 
 
-@router.post("/checkslip", response_model=None, deprecated=True)
+@router.post("/checkslip", response_model=SlipUploadResult, responses=_UPLOAD_RESPONSES, deprecated=True)
 def check_slip(
     request: Request,
     file: UploadFile = File(..., description="Slip image (JPEG, PNG, WebP, max 10MB)"),
@@ -247,7 +254,7 @@ def reject_verification(
     return VerificationDetailResponse.model_validate(_verification_detail(verification))
 
 
-@router.get("/{verification_id}")
+@router.get("/{verification_id}", response_model=VerificationDetailRead)
 def get_verification(
     verification_id: int,
     user: User = Depends(require_permission("slip_verification.read", scope="any")),
@@ -261,7 +268,7 @@ def get_verification(
     return _verification_detail(verification)
 
 
-@router.get("/order/{order_id}")
+@router.get("/order/{order_id}", response_model=list[VerificationOfOrder])
 def list_verifications_by_order(
     order_id: int,
     user: User = Depends(require_permission("slip_verification.read", scope="any")),
