@@ -55,5 +55,5 @@ def get_audit_log(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("audit.read", scope="org")),
 ) -> AuditLogResponse:
-    result = AuditService.get_audit_log(db, user.organization_id, log_id)
-    return AuditLogResponse(**result)
+    # The service already answers an AuditLogResponse (``**`` of it was a 500).
+    return AuditService.get_audit_log(db, user.organization_id, log_id)
