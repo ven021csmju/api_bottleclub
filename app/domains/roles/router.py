@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.middleware.access import Access
-from app.middleware.auth import get_access, get_current_user, require_permission
+from app.middleware.auth import get_access, require_permission
 from app.db.models import User
 
 from .schemas import PermissionResponse, RoleCreate, RoleListResponse, RoleResponse, RoleUpdate
@@ -11,11 +11,15 @@ from .service import RoleService
 
 router = APIRouter()
 
+#: Reading roles and permissions needs roles.read (Phase 40; it needed only a
+#: login): a Branch Admin, who assigns roles, holds it at their branch.
+READ = require_permission("roles.read", scope="any")
+
 
 @router.get("/permissions/all", response_model=list[PermissionResponse])
 def list_permissions(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(READ),
 ) -> list[PermissionResponse]:
     permissions = RoleService.list_permissions(db)
     return [PermissionResponse.model_validate(p) for p in permissions]
@@ -26,7 +30,7 @@ def list_roles(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(READ),
 ) -> RoleListResponse:
     return RoleService.list_roles(db, current_user.organization_id, page, per_page)
 
@@ -35,7 +39,7 @@ def list_roles(
 def get_role(
     role_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(READ),
 ) -> RoleResponse:
     role = RoleService.get_role(db, current_user.organization_id, role_id)
     return RoleResponse.model_validate(role)

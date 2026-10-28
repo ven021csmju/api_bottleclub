@@ -26,5 +26,10 @@ class PromotionRepository:
         return list(db.execute(stmt).scalars())
 
     @staticmethod
+    def list_all(db: Session) -> list[Promotion]:
+        """Every promotion, inactive and ended ones too (the admin list)."""
+        return list(db.execute(select(Promotion).order_by(Promotion.sort_order.asc(), Promotion.id)).scalars())
+
+    @staticmethod
     def get(db: Session, promotion_id: str) -> Promotion | None:
         return db.get(Promotion, promotion_id)

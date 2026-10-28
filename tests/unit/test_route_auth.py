@@ -26,10 +26,7 @@ LOGIN_ONLY = {
     # Branch picker after login: the caller's own branches only (38b).
     ("GET", "/branches/"),
     ("GET", "/branches/{branch_id}"),
-    # Role and permission catalogue; organization-scoped, no personal data.
-    ("GET", "/roles/"),
-    ("GET", "/roles/permissions/all"),
-    ("GET", "/roles/{role_id}"),
+    # (The role and permission catalogue needs roles.read since Phase 40.)
     # payments.create, or the caller created the order (checked in the router).
     ("POST", "/slip-verify/upload"),
     ("POST", "/slip-verify/checkslip"),

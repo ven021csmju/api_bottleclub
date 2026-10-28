@@ -14,6 +14,10 @@ class PromotionService:
         return PromotionRepository.list_public(db, featured)
 
     @staticmethod
+    def list_all(db: Session) -> list[Promotion]:
+        return PromotionRepository.list_all(db)
+
+    @staticmethod
     def create(db: Session, data: dict) -> Promotion:
         if PromotionRepository.get(db, data["id"]):
             raise ConflictException(detail="Promotion ID already exists")

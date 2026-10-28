@@ -32,6 +32,16 @@ def list_promotions(
     )
 
 
+# The admin list (Phase 40): every promotion, inactive and ended ones too.
+# promotions.read at any branch; GET /promotions stays public.
+@router.get("/admin/promotions", response_model=PromotionListResponse)
+def list_all_promotions(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("promotions.read", scope="any")),
+) -> PromotionListResponse:
+    return PromotionListResponse(promotions=[_response(item) for item in PromotionService.list_all(db)])
+
+
 @router.post("/admin/promotions", response_model=PromotionMutationResponse, status_code=status.HTTP_201_CREATED)
 def create_promotion(
     data: PromotionCreate,
