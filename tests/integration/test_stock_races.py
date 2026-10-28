@@ -11,6 +11,10 @@ still inside its transaction.
   line starts where the one before ended
 - two transfers shipped from the same 10 bottles, 6 each: one ships, one 422
 - two adjustments of -6 on 10: one goes through, one 422; never below zero
+
+Phase 38d:
+- two purchase orders created at once: two numbers, both created
+  (count + 1 gave both the same number; one failed on the unique po_number)
 """
 from __future__ import annotations
 
@@ -245,3 +249,24 @@ def test_two_adjustments_never_go_below_zero(db_engine: Engine, place):
     assert sorted(_race(db_engine, adjust)) == ["INSUFFICIENT_STOCK", "ok"]
     on_hand, ledger = _stock(db_engine, place["src"], place["product"])
     assert on_hand == 4 and _chained(ledger, 10), ledger
+
+
+def test_two_purchase_orders_created_at_once(db_engine: Engine, place, monkeypatch):
+    from app.db.models import PurchaseOrder
+    from app.db.repositories.purchases import PurchaseRepository
+    from app.domains.purchases.schemas import PurchaseOrderCreate
+    from app.domains.purchases.service import PurchaseService
+
+    # Before 38d the number was count + 1: held, both count before either inserts.
+    _slow(monkeypatch, PurchaseRepository, "count_org_purchase_orders")
+
+    def create(db: Session, i: int) -> None:
+        PurchaseService.create_purchase_order(db, place["org"], place["user"], PurchaseOrderCreate(
+            branch_id=place["src"], supplier_id=place["supplier"],
+            items=[{"product_id": place["product"], "quantity_ordered": 5, "unit_cost": "200.00"}]))
+
+    assert _race(db_engine, create) == ["ok", "ok"]
+    with Session(db_engine) as s:
+        numbers = list(s.scalars(select(PurchaseOrder.po_number).where(PurchaseOrder.organization_id == place["org"])))
+    assert len(numbers) == 2 and len(set(numbers)) == 2, numbers
+

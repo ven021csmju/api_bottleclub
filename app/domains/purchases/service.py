@@ -28,7 +28,7 @@ from app.shared.exceptions import (
     BadRequestException,
     NotFoundException,
 )
-from app.shared.ordering import generate_receiving_number
+from app.shared.ordering import generate_po_number, generate_receiving_number
 
 
 class PurchaseService:
@@ -37,8 +37,10 @@ class PurchaseService:
     # ------------------------------------------------------------------
     @staticmethod
     def _generate_po_number(db: Session, org_id: int) -> str:
-        count = PurchaseRepository.count_org_purchase_orders(db, org_id)
-        return f"PO-{org_id:04d}-{count + 1:06d}"
+        # From document_sequences (row-locked): two purchase orders created at
+        # once never get the same number (count + 1 did; one of them failed
+        # on the unique po_number). PO-YYYYMMDD-NNNN, store day.
+        return generate_po_number(db)
 
     @staticmethod
     def _generate_receiving_number(db: Session) -> str:

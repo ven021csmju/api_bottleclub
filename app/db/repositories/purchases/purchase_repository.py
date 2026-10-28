@@ -27,14 +27,6 @@ class PurchaseRepository:
         ).scalar_one_or_none()
 
     @staticmethod
-    def count_org_purchase_orders(db: Session, org_id: int) -> int:
-        return db.scalar(
-            select(func.count()).where(
-                PurchaseOrder.organization_id == org_id
-            )
-        ) or 0
-
-    @staticmethod
     def get_supplier(db: Session, supplier_id: int) -> Supplier | None:
         return db.get(Supplier, supplier_id)
 
