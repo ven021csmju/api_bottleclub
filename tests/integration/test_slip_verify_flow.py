@@ -369,13 +369,14 @@ class TestManualApproval:
 
     def test_amount_mismatch_is_approved_with_the_order_total(self, client, session, headers, seed_user, slip):
         order_id, total = _order(client, headers, session, seed_user, "SLIP-8")
-        slip.amount, slip.reference = total + Decimal("5.00"), "REFMISMATCH"
+        # Less than due (more than due goes to review, Phase 43: test_slip_over_due).
+        slip.amount, slip.reference = total - Decimal("5.00"), "REFMISMATCH"
         assert _status(_upload(client, headers, order_id, _image(13))) == "amount_mismatch"
         vid = _verification_id(session, order_id, "amount_mismatch")
         url = f"/api/v1/slip-verify/{vid}/approve"
 
         # The slip's amount is not accepted: staff confirm the order total.
-        wrong = client.post(url, headers=headers, json=APPROVE_BODY(total + Decimal("5.00"), "REFMISMATCH"))
+        wrong = client.post(url, headers=headers, json=APPROVE_BODY(total - Decimal("5.00"), "REFMISMATCH"))
         assert wrong.status_code == 422, wrong.text
         assert wrong.json()["code"] == "AMOUNT_MISMATCH"
         assert _payments(session, order_id) == 0
@@ -389,7 +390,7 @@ class TestManualApproval:
         rows = _audit_rows(session, vid, "slip_verification.approve_manual")
         assert len(rows) == 1
         assert rows[0].before_data["status"] == "amount_mismatch"
-        assert rows[0].before_data["ocr_amount"] == str(total + Decimal("5.00"))
+        assert rows[0].before_data["ocr_amount"] == str(total - Decimal("5.00"))
         assert rows[0].after_data["amount"] == str(total)
         assert rows[0].after_data["note"] == "customer paid the rest"
 
@@ -564,7 +565,7 @@ class TestAutoVerifyDisabled:
         other_id, _ = _order(client, headers, session, seed_user, "SLIP-12B")
         assert _status(_upload(client, headers, other_id, _image(18))) == "duplicate_reference"
 
-        slip.amount, slip.reference = total + Decimal("1.00"), "REFHELD0013"
+        slip.amount, slip.reference = total - Decimal("1.00"), "REFHELD0013"
         assert _status(_upload(client, headers, other_id, _image(19))) == "amount_mismatch"
 
         slip.fail = True

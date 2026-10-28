@@ -47,6 +47,12 @@ REJECTABLE_STATUSES = frozenset({
 HELD_FOR_BANK_CHECK_REASON = "รอตรวจกับธนาคาร (auto-verify ปิด)"
 
 
+def over_due_reason(amount: Decimal, due: Decimal) -> str:
+    """failure_reason of a slip for more than the order still owes (Phase 43):
+    it is never settled by itself; staff decide (approve what is due, or reject)."""
+    return f"ยอดในสลิป {amount} เกินยอดค้างชำระ {due}"
+
+
 def _still_due(db: Session, order: Order) -> Decimal:
     """What a slip must settle: the money due less what payments already settled (Phase 43)."""
     return amount_due(order) - paid_net(db, order.id)
@@ -76,6 +82,9 @@ def decide_status(
     """
     if reference_duplicate:
         return "duplicate_reference"
+    # More than is still due: staff decide, the slip never settles by itself (Phase 43).
+    if amount is not None and due > 0 and amount > due:
+        return "review"
     if amount is not None and due > 0 and amount != due:
         return "amount_mismatch"
     if assessment.has_signal("receiver_mismatch"):
@@ -304,9 +313,13 @@ class SlipVerifyService:
         held_for_bank_check = final_status == "verified" and not settings.SLIP_AUTO_VERIFY
         if held_for_bank_check:
             final_status = "review"
-        failure_reason = (
-            HELD_FOR_BANK_CHECK_REASON if held_for_bank_check else _get_failure_reason(final_status)
-        )
+        over_due = final_status == "review" and parsed.amount is not None and due > 0 and parsed.amount.value > due
+        if over_due:
+            failure_reason = over_due_reason(parsed.amount.value, due)
+        else:
+            failure_reason = (
+                HELD_FOR_BANK_CHECK_REASON if held_for_bank_check else _get_failure_reason(final_status)
+            )
 
         # 12. Update verification record; a verified slip settles the order
         payment_id = None
@@ -395,7 +408,9 @@ class SlipVerifyService:
                 "success": True,
                 "status": "review",
                 "message": (
-                    "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
+                    "ยอดในสลิปเกินยอดค้างชำระ รอเจ้าหน้าที่ตรวจสอบ"
+                    if over_due
+                    else "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
                     if held_for_bank_check
                     else "สลิปอยู่ระหว่างการตรวจสอบ"
                 ),
@@ -405,7 +420,11 @@ class SlipVerifyService:
                     "amount": float(parsed.amount.value) if parsed.amount else None,
                     "reference": parsed.reference.value if parsed.reference else None,
                     "risk_score": assessment.total_score,
-                    "pending_reason": "bank_check" if held_for_bank_check else "risk_review",
+                    "pending_reason": (
+                        "over_due" if over_due else "bank_check" if held_for_bank_check else "risk_review"
+                    ),
+                    # What the order still owes, when the slip is for more.
+                    "expected_amount": float(due) if over_due else None,
                 },
             }
 
@@ -505,6 +524,11 @@ class SlipVerifyService:
             raise BadRequestException(detail="This verification cannot be approved")
 
         due = _still_due(db, order)
+        if confirmed_amount > due:
+            raise BadRequestException(
+                detail=f"confirmed_amount ({confirmed_amount}) is more than the amount still due ({due})",
+                code="OVERPAYMENT",
+            )
         if confirmed_amount != due:
             raise AppException(
                 status_code=422,

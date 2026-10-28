@@ -952,6 +952,8 @@ redeemed − what its completed payments already settled (net of change).
 | `POST /slip-verify/{id}/approve` after a part was paid | `confirmed_amount` had to equal `grand_total` (and the whole total was settled again) | `confirmed_amount` = what is still due, else 422 `AMOUNT_MISMATCH` "confirmed_amount must equal the amount still due (…)" |
 | `POST /slip-verify/upload` after a part was paid | the slip was compared with `grand_total` (`amount_mismatch` for the rest) | compared with what is still due; `amount_mismatch.data.expected_amount` = still due |
 | Points earned (order with a customer) | at checkout or slip only, on what that call settled; an order paid in full by `POST /payments/` earned **none** | when the order becomes **fully paid**, whichever way (checkout, `POST /payments/`, slip): `grand_total` − points redeemed, **once per order** (a replayed request or a second path adds nothing; a `POST /loyalty/earn` with `reference_type: "order"` for it counts as its points). `loyalty_points_earned` on the order. |
+| A slip for **more** than is still due (`POST /slip-verify/upload`) | `amount_mismatch` (refusal; after a part paid in cash, a slip for the whole total **settled it again**) | **200** `success: true`, `status: "review"`, `message: "ยอดในสลิปเกินยอดค้างชำระ รอเจ้าหน้าที่ตรวจสอบ"`, `data.pending_reason: "over_due"`, `data.expected_amount` = still due; `failure_reason` `"ยอดในสลิป 100.00 เกินยอดค้างชำระ 70.00"`. Never settled by itself (either auto-verify setting). Less than due stays `amount_mismatch`. |
+| `POST /slip-verify/{id}/approve` with `confirmed_amount` **more** than is still due | 422 `AMOUNT_MISMATCH` when ≠ `grand_total` (= `grand_total` was taken even after a cash part) | **400 `OVERPAYMENT`** `"confirmed_amount (100.00) is more than the amount still due (70.00)"`: approve what is still due (the transfer's extra is the shop's to give back). Less than due: 422 `AMOUNT_MISMATCH`. |
 
 ---
 
@@ -1685,7 +1687,9 @@ names, date, low confidence) never make a slip `rejected` on their own;
 failed attempts adding up to the reject threshold.
 
 `review` is not an error for the customer: the slip was received. A `review`
-caused by the risk score has `pending_reason: "risk_review"`. Failure results
+caused by the risk score has `pending_reason: "risk_review"`; a slip for more
+than the order still owes has `pending_reason: "over_due"` and
+`expected_amount` (what is still due), with either setting (Phase 43). Failure results
 (`amount_mismatch`, `duplicate_reference`, `duplicate_image`, `ocr_failed`,
 ...) are the same with either setting. Uploading for an order that is already paid returns
 `order_already_paid` (400). A slip that was `rejected` or `ocr_failed` may be
@@ -1701,7 +1705,7 @@ Way out of each verification status (every status except `verified` has one):
 | `pending` | no (`duplicate_image`) | yes | yes |
 | `review` | no (`duplicate_image`) | yes | yes |
 | `ocr_failed` | yes | yes | yes |
-| `amount_mismatch` | no (`duplicate_image`) | yes (`confirmed_amount` = order total) | yes |
+| `amount_mismatch` | no (`duplicate_image`) | yes (`confirmed_amount` = what is still due) | yes |
 | `receiver_mismatch` | no (`duplicate_image`) | yes, after checking the receiver | yes |
 | `duplicate_reference` | after a reject | no | yes |
 | `duplicate_image` | after a reject | no | yes |
@@ -1723,7 +1727,8 @@ app first; every field is required (missing or blank → 422).
 ```
 | Error | Code |
 |-------|------|
-| `confirmed_amount` ≠ what is still due (`grand_total` less earlier payments, Phase 43) | 422 `AMOUNT_MISMATCH` |
+| `confirmed_amount` more than what is still due (`grand_total` less earlier payments, Phase 43) | 400 `OVERPAYMENT` (the detail says what is still due) |
+| `confirmed_amount` less than what is still due | 422 `AMOUNT_MISMATCH` |
 | `bank_reference` already used by another slip or payment | 409 `DUPLICATE_REFERENCE` |
 | order already paid | 409 `ORDER_ALREADY_PAID` |
 | status not approvable (`duplicate_reference`, `duplicate_image`, `rejected`, ...) | 400 |

@@ -61,4 +61,10 @@ def test_evidence_of_a_bad_slip_is_still_rejected():
 
 def test_duplicate_and_mismatch_take_precedence():
     assert _status(_assess(), duplicate=True) == "duplicate_reference"
-    assert _status(_assess(ocr_amount=TOTAL + 1), amount=TOTAL + 1) == "amount_mismatch"
+    assert _status(_assess(ocr_amount=TOTAL - 1), amount=TOTAL - 1) == "amount_mismatch"
+
+
+def test_more_than_is_still_due_goes_to_review():
+    """Phase 43: never settled by itself, never a refusal either (amount_mismatch up to v0.1.16)."""
+    assert _status(_assess(ocr_amount=TOTAL + 1), amount=TOTAL + 1) == "review"
+    assert _status(_assess(), duplicate=True, amount=TOTAL + 1) == "duplicate_reference"
