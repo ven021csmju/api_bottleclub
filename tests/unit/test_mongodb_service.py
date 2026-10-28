@@ -51,9 +51,8 @@ def mongo_up() -> bool:
 
 async def test_health_endpoint_shape():
     health = get_mongodb_health()
-    assert set(health) >= {"status", "database", "uri"}
+    assert set(health) == {"status"}  # no host or database name (Phase 40)
     assert health["status"] in {"connected", "disconnected"}
-    assert health["database"] == "system_logs"
 
 
 async def test_fail_silent_when_unreachable():

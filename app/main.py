@@ -184,9 +184,11 @@ def create_app() -> FastAPI:
 
     # MongoDB status reported separately: a MongoDB outage (e.g. dead SSH
     # tunnel) must NOT make the whole service unhealthy.
+    # 503 while disconnected, so a monitor sees it; /health stays 200.
     @app.get("/health/mongodb", tags=["Health"])
-    def mongodb_health() -> dict:
-        return get_mongodb_health()
+    def mongodb_health() -> JSONResponse:
+        health = get_mongodb_health()
+        return JSONResponse(status_code=200 if health["status"] == "connected" else 503, content=health)
 
     # --- Domain routers ---
     from app.domains.auth.router import router as auth_router

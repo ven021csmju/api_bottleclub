@@ -58,7 +58,7 @@ def _create_client() -> Optional[MongoClient]:
         logger.info(
             "MongoDB connected (db=%s host=%s)",
             settings.MONGODB_DATABASE,
-            settings.MONGODB_URI,
+            _safe_uri(settings.MONGODB_URI),
         )
         return _client
     except (ConnectionFailure, ServerSelectionTimeoutError, OperationFailure, PyMongoError) as exc:
@@ -106,27 +106,11 @@ def get_database():
 
 
 def get_mongodb_health() -> dict:
-    """Report MongoDB status without raising. Does not touch Mongo until used."""
-    if _client is None:
-        return {
-            "status": "disconnected",
-            "database": settings.MONGODB_DATABASE,
-            "uri": _safe_uri(settings.MONGODB_URI),
-        }
-    try:
-        _client_is_healthy(_client)
-        return {
-            "status": "connected",
-            "database": settings.MONGODB_DATABASE,
-            "uri": _safe_uri(settings.MONGODB_URI),
-        }
-    except PyMongoError as exc:
-        return {
-            "status": "disconnected",
-            "database": settings.MONGODB_DATABASE,
-            "uri": _safe_uri(settings.MONGODB_URI),
-            "error": str(exc),
-        }
+    """``{"status": "connected" | "disconnected"}``, never raising. Connects
+    if no client exists yet (a lazy client is not an outage), within the
+    retry cooldown. No host, database name or error text: /health/mongodb is
+    public."""
+    return {"status": "connected" if get_client() is not None else "disconnected"}
 
 
 def close_connection() -> None:
