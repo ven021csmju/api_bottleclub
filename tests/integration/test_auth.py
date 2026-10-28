@@ -88,9 +88,9 @@ class TestGetProfile:
 
     def test_profile_without_token(self, client: TestClient):
         resp = client.get("/api/v1/auth/me")
-        assert resp.status_code == 422
+        assert resp.status_code == 401  # up to v0.1.14: 422 VALIDATION_ERROR
         body = resp.json()
-        assert body["code"] == "VALIDATION_ERROR"
+        assert body["code"] == "UNAUTHORIZED"
         assert body["detail"]
         assert body["request_id"]
 

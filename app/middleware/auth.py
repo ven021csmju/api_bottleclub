@@ -15,13 +15,20 @@ from app.shared.exceptions import ForbiddenException, NotFoundException, Unautho
 from app.shared.security import decode_token, issued_before
 
 
+#: Answer of a route that needs a login when no token was sent (Phase 40):
+#: 401, never the 422 of a missing header.
+NOT_AUTHENTICATED = "Not authenticated"
+
+
 async def get_authenticated_user(
     request: Request,
-    authorization: str = Header(...),
+    authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ) -> User:
     """The caller, even one who must still change their password. Only
     POST /auth/change-password and /auth/logout use this directly."""
+    if not authorization:
+        raise UnauthorizedException(detail=NOT_AUTHENTICATED)
     if not authorization.startswith("Bearer "):
         raise UnauthorizedException(detail="Invalid authorization header format")
 
@@ -52,6 +59,24 @@ async def get_authenticated_user(
     request.state.user = user
     request.state.token_payload = payload
     return user
+
+
+def requires_login(route) -> bool:
+    """Whether ``route`` (a matched APIRoute) depends on the caller's token."""
+    cached = getattr(route, "_requires_login", None)
+    if cached is not None:
+        return cached
+
+    def walk(dependant) -> bool:
+        return any(d.call is get_authenticated_user or walk(d) for d in dependant.dependencies)
+
+    found = walk(route.dependant) if getattr(route, "dependant", None) is not None else False
+    route._requires_login = found
+    return found
+
+
+def sent_no_token(request: Request) -> bool:
+    return not request.headers.get("Authorization", "").startswith("Bearer ")
 
 
 async def get_current_user(user: User = Depends(get_authenticated_user)) -> User:

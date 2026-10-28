@@ -126,10 +126,9 @@ def test_admin_routes_require_existing_authentication():
     app.dependency_overrides[get_db] = lambda: iter([object()])
     with TestClient(app) as client:
         response = client.post("/api/admin/promotions", json=payload())
-    # Existing auth middleware treats a missing required Authorization header
-    # as a validation error; invalid credentials are returned as 401.
-    assert response.status_code == 422
-    assert response.json()["code"] == "VALIDATION_ERROR"
+    # No token: 401, like invalid credentials (up to v0.1.14 a 422 VALIDATION_ERROR).
+    assert response.status_code == 401
+    assert response.json()["code"] == "UNAUTHORIZED"
 
 
 def test_openapi_exposes_all_contract_routes():

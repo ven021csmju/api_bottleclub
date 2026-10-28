@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config.settings import settings
 from app.db.mongodb import close_connection, get_mongodb_health
+from app.middleware.auth import NOT_AUTHENTICATED, requires_login, sent_no_token
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.envelope import ResponseEnvelopeMiddleware
 from app.middleware.rate_limit import limiter
@@ -102,6 +103,19 @@ def create_app() -> FastAPI:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        # A route that needs a login, called without a token: 401 first, even
+        # when its query or body is incomplete too (the token is checked only
+        # once the request validates).
+        route = request.scope.get("route")
+        if route is not None and requires_login(route) and sent_no_token(request):
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": NOT_AUTHENTICATED,
+                    "code": "UNAUTHORIZED",
+                    "request_id": _request_id(request),
+                },
+            )
         return JSONResponse(
             status_code=422,
             content={

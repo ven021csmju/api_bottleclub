@@ -5,7 +5,8 @@ from app.config.settings import settings
 
 class TestErrorContract:
     def test_validation_error_shape(self, client: TestClient):
-        resp = client.get("/api/v1/auth/me")
+        # a route without a login: a missing token is 401 since Phase 40
+        resp = client.post("/api/v1/auth/login", json={})
         assert resp.status_code == 422
         body = resp.json()
         assert {"detail", "code", "request_id"} == set(body)
