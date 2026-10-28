@@ -11,11 +11,11 @@ from app.shared.exceptions import (
     InvalidOrderStateException,
     NotFoundException,
 )
+from app.shared.money import CENT, prorate
 from app.shared.ordering import generate_refund_number, generate_return_number
 
 #: Orders whose money has been taken; only these can be returned.
 PAID_STATUSES = ("paid", "completed")
-CENT = Decimal("0.01")
 
 
 def _ensure_paid(order: Order) -> None:
@@ -71,10 +71,11 @@ class ReturnService:
         _check_quantities([(i["order_item_id"], i["quantity"]) for i in data["items"]], order_items,
                           ReturnRepository.returned_quantities(db, order.id))
 
-        # What one unit refunds: its share of the line, scaled to what the
-        # order really took (an order discount or redeemed points lower it).
-        lines_total = sum((Decimal(str(oi.line_total)) for oi in order_items.values()), Decimal("0"))
-        factor = paid_net(db, order.id) / lines_total if lines_total > 0 else Decimal("0")
+        # What one unit refunds: what its line was really paid (the order's
+        # payments spread over the lines, as the reports spread discounts),
+        # divided by the line's quantity.
+        line_paid = dict(zip(order_items, prorate(
+            paid_net(db, order.id), [oi.line_total for oi in order_items.values()])))
 
         ret = Return(
             organization_id=org_id,
@@ -88,8 +89,7 @@ class ReturnService:
         ReturnRepository.add_return(db, ret)
         for item_data in data["items"]:
             order_item = order_items[item_data["order_item_id"]]
-            unit = (Decimal(str(order_item.line_total)) / order_item.quantity * factor).quantize(
-                CENT, rounding=ROUND_HALF_UP)
+            unit = (line_paid[order_item.id] / order_item.quantity).quantize(CENT, rounding=ROUND_HALF_UP)
             ReturnRepository.add_return_item(db, ReturnItem(
                 return_id=ret.id,
                 order_item_id=order_item.id,

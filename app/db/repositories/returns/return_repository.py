@@ -54,7 +54,7 @@ class ReturnRepository:
     def list_order_items(db: Session, order_id: int) -> list[OrderItem]:
         return list(
             db.scalars(
-                select(OrderItem).where(OrderItem.order_id == order_id)
+                select(OrderItem).where(OrderItem.order_id == order_id).order_by(OrderItem.id)
             ).all()
         )
 
