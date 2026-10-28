@@ -951,6 +951,7 @@ redeemed − what its completed payments already settled (net of change).
 | `POST /orders/{id}/checkout` after `POST /payments/` took part | settled the **whole** `grand_total` again: a 350 order paid 100 + 350 = 450 in `payments`, X-report and refund limit; `amount_paid` overwritten (350) | payments cover only what is **still due** (less → 400 "less than amount due (…)", a non-cash payment above it → 400 `OVERPAYMENT`); points at most what is still due; `amount_paid` = everything handed over (100 + 250 = 350), `change_amount` from what was still due. Payments already cover it → **400 `ORDER_ALREADY_PAID`** |
 | `POST /slip-verify/{id}/approve` after a part was paid | `confirmed_amount` had to equal `grand_total` (and the whole total was settled again) | `confirmed_amount` = what is still due, else 422 `AMOUNT_MISMATCH` "confirmed_amount must equal the amount still due (…)" |
 | `POST /slip-verify/upload` after a part was paid | the slip was compared with `grand_total` (`amount_mismatch` for the rest) | compared with what is still due; `amount_mismatch.data.expected_amount` = still due |
+| Points earned (order with a customer) | at checkout or slip only, on what that call settled; an order paid in full by `POST /payments/` earned **none** | when the order becomes **fully paid**, whichever way (checkout, `POST /payments/`, slip): `grand_total` − points redeemed, **once per order** (a replayed request or a second path adds nothing; a `POST /loyalty/earn` with `reference_type: "order"` for it counts as its points). `loyalty_points_earned` on the order. |
 
 ---
 
@@ -1439,6 +1440,10 @@ With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 ---
 
 ## Loyalty `/loyalty`
+
+Orders earn points by themselves when fully paid (Phase 43): `grand_total` less
+the points redeemed, once per order. A manual earn with `reference_type: "order"`
+counts as that order's points (the order then earns no more).
 
 ### POST `/loyalty/earn`
 ```json

@@ -774,41 +774,59 @@ class OrderService:
         order.amount_paid = Decimal(str(order.amount_paid)) + paid_total
         order.change_amount = Decimal(str(order.change_amount)) + (paid_total - due)
 
-        # ---- Loyalty earn on net spend ----
-        points_earned = 0
-        if customer is not None and redeemed < int(order.grand_total):
-            # The whole order's net spend, not only what this call settled.
-            spend_whole = int(Decimal(str(order.grand_total)) - Decimal(redeemed))
-            points_earned = (
-                spend_whole // OrderService.POINTS_EARN_PER_BAHT
-                if OrderService.POINTS_EARN_PER_BAHT
-                else spend_whole
-            )
-            if points_earned > 0:
-                before = customer.loyalty_points_balance
-                after = before + points_earned
-                LoyaltyRepository.add_transaction(
-                    db,
-                    LoyaltyTransaction(
-                        customer_id=order.customer_id,
-                        transaction_type="earn",
-                        points=points_earned,
-                        points_before=before,
-                        points_after=after,
-                        reference_type="order",
-                        reference_id=order.id,
-                        notes="Points earned at checkout",
-                        user_id=user_id,
-                    ),
-                )
-                customer.loyalty_points_balance = after
-                order.loyalty_points_earned = points_earned
+        OrderService.award_points(db, order, user_id)
 
         order.status = "paid"
         order.paid_at = datetime.now(timezone.utc)
 
         db.flush()
         return recorded
+
+    @staticmethod
+    def award_points(db: Session, order: Order, user_id: int) -> int:
+        """Loyalty points for a fully paid order, whichever way it was paid
+        (checkout, POST /payments/, a slip): the whole order's net spend
+        (grand_total less the points redeemed), once per order (Phase 43).
+
+        The caller holds the order's row lock, so two payments that complete
+        one order cannot both award. Returns the points awarded now (0 when the
+        order has no customer or was awarded already). Only flushes.
+        """
+        if order.customer_id is None or order.loyalty_points_earned:
+            return 0
+        if LoyaltyRepository.earned_on_order(db, order.id):
+            return 0
+        spend_whole = int(amount_due(order))
+        points = (
+            spend_whole // OrderService.POINTS_EARN_PER_BAHT
+            if OrderService.POINTS_EARN_PER_BAHT
+            else spend_whole
+        )
+        if points <= 0:
+            return 0
+        customer = LoyaltyRepository.find_org_customer(db, order.organization_id, order.customer_id)
+        if customer is None:
+            return 0
+        before = customer.loyalty_points_balance
+        after = before + points
+        LoyaltyRepository.add_transaction(
+            db,
+            LoyaltyTransaction(
+                customer_id=order.customer_id,
+                transaction_type="earn",
+                points=points,
+                points_before=before,
+                points_after=after,
+                reference_type="order",
+                reference_id=order.id,
+                notes="Points earned on the paid order",
+                user_id=user_id,
+            ),
+        )
+        customer.loyalty_points_balance = after
+        order.loyalty_points_earned = points
+        db.flush()
+        return points
 
     @staticmethod
     def complete_order(db: Session, org_id: int, order_id: int) -> Order:

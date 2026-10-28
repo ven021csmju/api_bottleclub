@@ -55,6 +55,10 @@ def svc_modules(monkeypatch):
         def add_transaction(db, txn):
             state["txn"].append(txn)
 
+        @staticmethod
+        def earned_on_order(db, order_id):
+            return any(t.transaction_type == "earn" for t in state["txn"])
+
     class PaymentRepoStub:
         @staticmethod
         def add_payment(db, payment):
