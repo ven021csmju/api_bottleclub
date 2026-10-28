@@ -19,10 +19,11 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, column_property, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -309,6 +310,15 @@ class Product(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    # The screen an order line of it goes to (Phase 42): its own station, else its
+    # category's, else 'none'. The one formula: orders copy it into order_items.station.
+    effective_station: Mapped[str] = column_property(
+        func.coalesce(
+            station,
+            select(Category.station).where(Category.id == category_id).scalar_subquery(),
+            "none",
+        )
+    )
 
     __table_args__ = (
         UniqueConstraint("organization_id", "sku", name="uq_product_org_sku"),

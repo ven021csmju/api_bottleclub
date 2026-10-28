@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -13,6 +13,7 @@ from app.domains.catalog.schemas import (
     SupplierProductCreate,
     SupplierProductResponse,
     SupplierProductUpdate,
+    Station,
     SupplierResponse,
     SupplierUpdate,
 )
@@ -76,11 +77,12 @@ def list_products(
     search: str | None = None,
     category_id: int | None = None,
     is_active: bool | None = None,
+    station: Station | None = Query(None, description="Only products whose effective_station is this"),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("catalog.read")),
 ):
     result = CatalogService.list_products(
-        db, user.organization_id, page, per_page, search, category_id, is_active
+        db, user.organization_id, page, per_page, search, category_id, is_active, station
     )
     request_id = getattr(request.state, "request_id", "")
     if search:

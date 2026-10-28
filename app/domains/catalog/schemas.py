@@ -93,7 +93,10 @@ class ProductResponse(BaseModel):
     track_inventory: bool
     has_expiry: bool
     image_url: Optional[str] = None
+    # Its own station; None: the category's (what the product form edits).
     station: Optional[str] = None
+    # The screen its order lines go to: station, else the category's, else "none" (Phase 42).
+    effective_station: Station
     created_at: datetime
 
     model_config = {"from_attributes": True}

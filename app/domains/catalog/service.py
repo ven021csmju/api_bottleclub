@@ -157,9 +157,10 @@ class CatalogService:
         search: str | None = None,
         category_id: int | None = None,
         is_active: bool | None = None,
+        station: str | None = None,
     ) -> ProductListResponse:
         products, total = CatalogRepository.list_products(
-            db, org_id, page, per_page, search, category_id, is_active
+            db, org_id, page, per_page, search, category_id, is_active, station
         )
 
         return ProductListResponse(

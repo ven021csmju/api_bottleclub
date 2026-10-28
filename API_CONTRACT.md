@@ -938,6 +938,7 @@ date too when it has one.
 | `POST /coupons/validate` without `customer_id`; a coupon in an order without a customer | always **422** (`"Field required"` / `COUPON_NEEDS_CUSTOMER`); every coupon had a per-customer limit | **Migration 020 (apply before the code).** `max_uses_per_customer: null` = no per-customer limit: validated and used without a customer. A coupon with a limit and no customer → **422 `COUPON_CUSTOMER_REQUIRED`** (renamed from `COUPON_NEEDS_CUSTOMER`), at `/validate` too. Existing coupons keep their limit. |
 | OpenAPI (`/openapi.json`, development only) of `POST /slip-verify/upload`, `/checkslip`, `GET /slip-verify/{id}`, `/slip-verify/order/{order_id}`, `GET /inventory/balances/{branch_id}/{product_id}`, `POST /inventory/adjust`, `GET /auth/google`, `GET /health/mongodb` | success schema `{}` (8 of 149 operations) | each has its model: `SlipUploadResult` (also for 400/404/415/422), `VerificationDetailRead`, `VerificationOfOrder[]`, `ProductBalance`, `MessageResponse`, a 302 redirect, `MongoHealth` (200/503); none is `{}`. **The answers are unchanged** (same fields; amounts stay JSON numbers). Schemas describe `data` inside the envelope. |
 | `GET /orders/?shift_id=` | ignored: every order of the branch | the orders of that shift (`orders.shift_id`); a shift of another branch / missing / another cashier's without `orders.read_branch` → **404** `Shift not found` |
+| `GET /catalog/products`, `/catalog/products/{id}`, create/update answers | `station` only (`null` for a product that follows its category) | also **`effective_station`** (`kitchen`/`bar`/`none`, the screen its order lines go to); `GET /catalog/products?station=kitchen|bar|none` filters on it (422 otherwise). `station` unchanged. |
 
 ---
 
@@ -955,7 +956,7 @@ DELETE /catalog/categories/{id}    → 204
 ### Products
 
 ```
-GET    /catalog/products           ?page=&per_page=&search=&category_id=&is_active=
+GET    /catalog/products           ?page=&per_page=&search=&category_id=&is_active=&station=none|kitchen|bar
 GET    /catalog/products/{id}
 POST   /catalog/products
 PUT    /catalog/products/{id}
@@ -978,6 +979,13 @@ DELETE /catalog/products/{id}      → 204
 }
 ```
 `station` (38c): the screen the product's items go to; null = the category's.
+
+**ProductResponse** has both (Phase 42):
+- `station`: the product's own value (`null` = it follows its category), what
+  the product form edits;
+- `effective_station`: `"kitchen" | "bar" | "none"`, the screen its order lines
+  go to = `station`, else the category's, else `"none"` (the value each
+  `order_items.station` is sold with). `?station=` filters on it.
 
 ### Suppliers
 
