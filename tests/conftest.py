@@ -44,6 +44,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 #     place a pika connection is opened (rabbitmq/publisher.py).
 #   * MongoDB: the MongoClient name inside app.db.mongodb.client – the only
 #     place a client is constructed (_create_client).
+#   * OCR: settings.OCR_SERVICE_URL → a closed local port. Its default is
+#     127.0.0.1:9000, the production OCR service on the machine that runs
+#     production; a test that forgets to fake OCR must fail, not ask it.
 # Both fail the way a down broker / dead SSH tunnel does, so the production
 # fail-silent paths are what tests exercise.
 # ---------------------------------------------------------------------------
@@ -72,6 +75,10 @@ def _block_external_services(request: pytest.FixtureRequest, monkeypatch: pytest
     monkeypatch.setattr(rabbit_connection, "create_blocking_connection", _no_rabbitmq)
     monkeypatch.setattr(rabbit_publisher, "_CONNECTION", None)
     monkeypatch.setattr(rabbit_publisher, "_CHANNEL", None)
+
+    from app.config.settings import settings
+
+    monkeypatch.setattr(settings, "OCR_SERVICE_URL", "http://127.0.0.1:1")
 
     monkeypatch.setattr(mongo_client, "MongoClient", _no_mongodb)
     monkeypatch.setattr(mongo_client, "_client", None)
