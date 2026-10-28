@@ -150,7 +150,7 @@ def test_a_coupon_needs_a_customer_and_counts_per_customer(client: TestClient, s
                                                            customers, as_):
     cid = coupon(session, world, "ONCE", max_uses_per_customer=1)
     resp = _order(client, as_, world, shop, None, "ONCE")
-    assert (resp.status_code, resp.json()["code"]) == (422, "COUPON_NEEDS_CUSTOMER")
+    assert (resp.status_code, resp.json()["code"]) == (422, "COUPON_CUSTOMER_REQUIRED")
     assert _order(client, as_, world, shop, customers[0], "ONCE").status_code == 200
     resp = _order(client, as_, world, shop, customers[0], "ONCE")
     assert (resp.status_code, resp.json()["code"]) == (422, "COUPON_CUSTOMER_LIMIT")

@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
     Branch,
-    Category,
     Inventory,
     Order,
     OrderItem,
@@ -45,13 +44,9 @@ class OrderRepository:
         db: Session, org_id: int, product_ids: list[int]
     ) -> dict[int, str]:
         """Return a {product_id: station} map: the product's own station, else
-        its category's, else 'none' (no screen)."""
+        its category's, else 'none' (no screen); ``Product.effective_station``."""
         rows = db.execute(
-            select(
-                Product.id,
-                func.coalesce(Product.station, Category.station, "none"),
-            )
-            .join(Category, Category.id == Product.category_id, isouter=True)
+            select(Product.id, Product.effective_station)
             .where(
                 Product.organization_id == org_id,
                 Product.id.in_(product_ids),
@@ -139,8 +134,10 @@ class OrderRepository:
         customer_id: int | None = None,
         user_id: int | None = None,
         date_field: str = "created_at",
+        shift_id: int | None = None,
     ) -> tuple[list[Order], int]:
-        """``date_field``: created_at, or paid_at (only paid orders have one)."""
+        """``date_field``: created_at, or paid_at (only paid orders have one).
+        ``shift_id``: the orders of that shift (orders.shift_id, as a shift close counts them)."""
         moment = Order.paid_at if date_field == "paid_at" else Order.created_at
         query = (
             select(Order)
@@ -160,6 +157,8 @@ class OrderRepository:
             query = query.where(Order.customer_id == customer_id)
         if user_id:
             query = query.where(Order.user_id == user_id)
+        if shift_id is not None:
+            query = query.where(Order.shift_id == shift_id)
 
         query = query.order_by(Order.created_at.desc())
 

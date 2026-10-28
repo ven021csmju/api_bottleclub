@@ -81,6 +81,7 @@ class TestUnsupportedImage:
         from app.domains.slip_verify import service as slip_svc
 
         order = SimpleNamespace(status="pending", grand_total=Decimal("100.00"), amount_paid=Decimal("0"))
+        monkeypatch.setattr(slip_svc, "is_fully_paid", lambda db, o: False)
         attempts = []
         monkeypatch.setattr(slip_svc.SlipVerifyRepository, "find_pending_order", staticmethod(lambda *a, **k: order))
         monkeypatch.setattr(slip_svc.SlipVerifyRepository, "create_attempt", staticmethod(lambda db, **k: attempts.append(k)))

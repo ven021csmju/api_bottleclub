@@ -55,4 +55,5 @@ class TestList:
 
     def test_another_branch_is_404(self, client: TestClient, world, shifts, as_):
         assert client.get(f"{API}/shifts/?branch_id={world.B}", headers=as_("ba_a", "A")).status_code == 404
-        assert client.get(f"{API}/shifts/", headers=as_("ba_a")).status_code == 401
+        resp = client.get(f"{API}/shifts/", headers=as_("ba_a"))
+        assert (resp.status_code, resp.json()["code"]) == (400, "BRANCH_REQUIRED")

@@ -36,6 +36,8 @@ from app.db.models import IdempotencyKey
 from app.shared.exceptions import AppException
 
 HEADER = "Idempotency-Key"
+#: Header of an answer replayed for a key seen before.
+REPLAYED_HEADER = "Idempotent-Replayed"
 TTL = timedelta(hours=24)
 MAX_LENGTH = 255
 
@@ -137,7 +139,7 @@ def run_idempotent(
                 return JSONResponse(
                     status_code=kept.response_status,
                     content=kept.response_body,
-                    headers={"Idempotent-Replayed": "true"},
+                    headers={REPLAYED_HEADER: "true"},
                 )
 
             result = run()

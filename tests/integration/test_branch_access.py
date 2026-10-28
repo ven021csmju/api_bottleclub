@@ -38,7 +38,9 @@ class TestPermissionsPerBranch:
         assert _rename_customer(client, world, as_("sa")) == 200
 
     def test_without_x_branch_id_only_organization_wide_roles_count(self, client: TestClient, world, as_):
-        assert client.get(f"{API}/customers/", headers=as_("ba_a")).status_code == 403
+        # held at a branch only: the header is missing, not the permission (Phase 42)
+        resp = client.get(f"{API}/customers/", headers=as_("ba_a"))
+        assert (resp.status_code, resp.json()["code"]) == (400, "BRANCH_REQUIRED")
         assert client.get(f"{API}/customers/", headers=as_("orgmgr")).status_code == 200
 
 

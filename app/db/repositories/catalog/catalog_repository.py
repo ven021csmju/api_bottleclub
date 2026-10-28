@@ -85,6 +85,7 @@ class CatalogRepository:
         search: str | None = None,
         category_id: int | None = None,
         is_active: bool | None = None,
+        station: str | None = None,
     ) -> tuple[list[Product], int]:
         stmt = select(Product).where(
             Product.organization_id == org_id,
@@ -106,6 +107,9 @@ class CatalogRepository:
 
         if is_active is not None:
             stmt = stmt.where(Product.is_active == is_active)
+
+        if station is not None:
+            stmt = stmt.where(Product.effective_station == station)
 
         total = db.scalar(
             select(func.count()).select_from(stmt.subquery())

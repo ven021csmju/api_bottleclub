@@ -29,7 +29,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Branch, Order, Permission, Role, RolePermission, UserRole
-from app.shared.exceptions import ForbiddenException, NotFoundException, UnauthorizedException
+from app.shared.exceptions import BranchRequiredException, ForbiddenException, NotFoundException
 from app.shared.permissions import normalize_permission
 
 SUPERADMIN_ROLE = "Superadmin"
@@ -101,7 +101,7 @@ class Access:
         if branch_id is None:
             branch_id = self.branch_id
             if branch_id is None:
-                raise UnauthorizedException(detail="X-Branch-Id header is required")
+                raise BranchRequiredException()
         self.ensure_at(code, branch_id, "Branch")
         return branch_id
 

@@ -19,8 +19,9 @@ class TestSales:
         assert _sales(client, sales, as_("sa", "A")).json()["data"]["total_sales"] == 100
         assert _sales(client, sales, as_("sa", "B")).json()["data"]["total_sales"] == 250
 
-    def test_without_branch_id_or_x_branch_id_is_401(self, client: TestClient, world, sales, as_):
-        assert _sales(client, sales, as_("sa")).status_code == 401
+    def test_without_branch_id_or_x_branch_id_is_400(self, client: TestClient, world, sales, as_):
+        resp = _sales(client, sales, as_("sa"))
+        assert (resp.status_code, resp.json()["code"]) == (400, "BRANCH_REQUIRED")
         assert _sales(client, sales, as_("sa"), world.B).json()["data"]["total_sales"] == 250
 
     def test_a_branch_where_the_permission_is_not_held_is_404(self, client: TestClient, world, sales, as_):
@@ -48,7 +49,8 @@ def test_sales_by_category_is_200(client: TestClient, world, sales, as_):
 def test_other_reports_are_scoped_the_same_way(client: TestClient, world, sales, as_, path):
     url = API + path.format(d=sales)
     assert client.get(url + f"&branch_id={world.B}", headers=as_("ba_a", "A")).status_code == 404
-    assert client.get(url, headers=as_("ba_a")).status_code == 401
+    resp = client.get(url, headers=as_("ba_a"))
+    assert (resp.status_code, resp.json()["code"]) == (400, "BRANCH_REQUIRED")
     resp = client.get(url, headers=as_("ba_a", "A"))
     assert resp.status_code == 200
     if "daily-summary" in path:

@@ -31,6 +31,18 @@ class BadRequestException(AppException):
         super().__init__(status_code=400, detail=detail, code=code or "BAD_REQUEST")
 
 
+#: Answer of a route that needs a branch when ``X-Branch-Id`` is missing (Phase 42).
+BRANCH_REQUIRED_DETAIL = "กรุณาเลือกสาขา: ส่ง header X-Branch-Id"
+
+
+class BranchRequiredException(AppException):
+    """400 BRANCH_REQUIRED: the route works at a branch and no ``X-Branch-Id``
+    was sent. Not 401 (the login is fine) and not 403 (sending it may be enough)."""
+
+    def __init__(self, detail: str = BRANCH_REQUIRED_DETAIL) -> None:
+        super().__init__(status_code=400, detail=detail, code="BRANCH_REQUIRED")
+
+
 class ConflictException(AppException):
     def __init__(self, detail: str = "Conflict", code: str | None = None) -> None:
         super().__init__(status_code=409, detail=detail, code=code or "CONFLICT")

@@ -31,7 +31,8 @@ def test_lists_cover_the_active_branch_or_an_allowed_branch_id(client: TestClien
     assert branches(as_("ba_a", "A")) in ([world.A], ["Branch A"])
     assert branches(as_("sa", "B")) in ([world.B], ["Branch B"])
     assert client.get(f"{API}{path}?branch_id={world.B}", headers=as_("ba_a", "A")).status_code == 404
-    assert client.get(API + path, headers=as_("ba_a")).status_code == 401
+    resp = client.get(API + path, headers=as_("ba_a"))
+    assert (resp.status_code, resp.json()["code"]) == (400, "BRANCH_REQUIRED")
 
 
 def test_adjusting_another_branch_is_404(client: TestClient, session, world, stock, as_):

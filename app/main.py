@@ -1,10 +1,12 @@
 ﻿
 import logging
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -17,14 +19,34 @@ from app.middleware.envelope import ResponseEnvelopeMiddleware
 from app.middleware.rate_limit import limiter
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.shared.exceptions import AppException
+from app.shared.idempotency import REPLAYED_HEADER
 from rabbitmq.publisher import close as close_rabbitmq_publisher
 from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
 
+class MongoHealth(BaseModel):
+    status: Literal["connected", "disconnected"]
+
+
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "")
+
+
+#: Response headers a browser frontend may read (CORS ``Access-Control-Expose-Headers``):
+#: the request id, an idempotent replay, a route's deprecation (Phase 40) and
+#: how long to wait after a 429 (Phase 42).
+EXPOSED_HEADERS = ("X-Request-Id", REPLAYED_HEADER, "Deprecation", "Link", "Retry-After")
+
+
+def _retry_after(exc: RateLimitExceeded) -> int:
+    """Seconds until the limit's window is over: the whole window (slowapi does not
+    say how much of it is left)."""
+    try:
+        return int(exc.limit.limit.get_expiry())
+    except AttributeError:
+        return 60
 
 
 async def lifespan(app: FastAPI):
@@ -62,8 +84,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
-        # readable by a browser frontend: the deprecation of a route (Phase 40)
-        expose_headers=["Deprecation", "Link"],
+        expose_headers=list(EXPOSED_HEADERS),
     )
     if settings.RATE_LIMIT_ENABLED:
         app.add_middleware(SlowAPIMiddleware)
@@ -162,6 +183,7 @@ def create_app() -> FastAPI:
                 "code": "RATE_LIMIT_EXCEEDED",
                 "request_id": _request_id(request),
             },
+            headers={"Retry-After": str(_retry_after(exc))},
         )
 
     @app.exception_handler(Exception)
@@ -187,7 +209,8 @@ def create_app() -> FastAPI:
     # MongoDB status reported separately: a MongoDB outage (e.g. dead SSH
     # tunnel) must NOT make the whole service unhealthy.
     # 503 while disconnected, so a monitor sees it; /health stays 200.
-    @app.get("/health/mongodb", tags=["Health"])
+    @app.get("/health/mongodb", tags=["Health"], response_model=MongoHealth,
+             responses={503: {"model": MongoHealth, "description": "MongoDB is not connected"}})
     def mongodb_health() -> JSONResponse:
         health = get_mongodb_health()
         return JSONResponse(status_code=200 if health["status"] == "connected" else 503, content=health)

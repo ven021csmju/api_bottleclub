@@ -48,7 +48,8 @@ def _secure_cookie() -> bool:
     return settings.ENVIRONMENT.lower() in {"production", "staging"}
 
 
-@router.get("/google", include_in_schema=True)
+@router.get("/google", include_in_schema=True, response_class=RedirectResponse, status_code=302,
+            responses={302: {"description": "Redirect to Google's sign-in page (sets the state and nonce cookies)"}})
 def google_login() -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)

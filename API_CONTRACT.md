@@ -73,6 +73,13 @@ Managers see only their own orders).
   organization, or one where the user has no role (and no organization-wide
   role), is **403 on every authenticated route** (`User does not have access to
   branch N`). Without the header only organization-wide roles count.
+- **No `X-Branch-Id` where a branch is needed** → **400 `BRANCH_REQUIRED`**
+  `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"` (Phase 42; before: 401 on the
+  routes marked *required*, 403 "Missing required permission" on the others).
+  It is answered when the caller holds the permission at some branch but
+  sent no header; a permission held nowhere stays **403 `FORBIDDEN`**, a
+  branch without a role **403**, another branch's record **404**. Never 401:
+  a 401 always means "log in again".
 - A record of a branch where the caller lacks the permission is **404** (same
   as a missing record): orders, payments, refunds, returns, slips, shifts,
   transfers, users.
@@ -81,16 +88,16 @@ Managers see only their own orders).
 
 | Need | Routes |
 |---|---|
-| **required** (401 without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
-| **required unless `branch_id` is given** (401 with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
+| **required** (400 `BRANCH_REQUIRED` without) | `POST /orders/`, `GET /orders/`, `GET /orders/station/kitchen`, `/station/bar`, `POST /returns/`, `GET /returns/`, `POST /transfers/` (the source branch) |
+| **required unless `branch_id` is given** (400 `BRANCH_REQUIRED` with neither) | `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial`; `GET /inventory/balances`, `/low-stock`; `GET /shifts/` |
 | **not used** (the record's branch decides) | routes with an order, payment, refund, return, slip, shift, transfer, purchase order or user id in the path; `PUT /branches/{id}`; `POST /purchases` (`branch_id` in the body); `GET/PUT /settings/...` (`?branch_id=`); `POST /inventory/adjust`, `GET /inventory/balances/{branch_id}/...`, `/lots`, `/movements`, `POST /shifts/open` (branch in the body/query) |
 | **ignored** (organization level only) | catalog, supplier and category changes (`catalog.create`), promotions and coupons changes, `POST /branches/`, `DELETE /branches/{id}`, `/roles` changes, `/audit`, `GET /reports/ecommerce/dashboard`, `/reports/loyalty`, `DELETE /users/{id}/roles/{role_id}` |
-| **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...) |
+| **everything else** | the permission is checked at the `X-Branch-Id` branch; without the header, at organization level — **a user whose roles are all branch roles must send it** (customers, loyalty, catalog reads, reviews, coupons reads...; else 400 `BRANCH_REQUIRED`) |
 
 | Route | Before | Now |
 |---|---|---|
 | any route | permissions from the token, the union of every role at every branch | from the database, at the `X-Branch-Id` branch (see above) |
-| `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial` | `branch_id` unchecked; **omitted = every branch** | `branch_id` must be a branch where `reports.sales`/`reports.read` is held (404); **omitted = the `X-Branch-Id` branch**, neither → 401 |
+| `GET /reports/sales`, `/daily-summary`, `/inventory`, `/financial` | `branch_id` unchecked; **omitted = every branch** | `branch_id` must be a branch where `reports.sales`/`reports.read` is held (404); **omitted = the `X-Branch-Id` branch**, neither → 400 `BRANCH_REQUIRED` (401 before 42) |
 | `GET /reports/ecommerce/dashboard`, `/reports/loyalty` | `reports.read` anywhere | `reports.read` at organization level (403) |
 | `GET /orders/` | `?user_id=` optional, everyone saw the whole branch | without `orders.read_branch` at the branch: only the caller's orders; `?user_id=` of someone else → 403 |
 | `GET /orders/{ref}`, `/receipt`, `/track/{x}` | any order of the organization | the order's branch must hold `orders.read` (404); another user's order also needs `orders.read_branch` (404) |
@@ -423,7 +430,7 @@ stock_transfers GROUP BY 1;` (any `partially_received` → settle by hand).
   retry of that action).
   - none → **422 `IDEMPOTENCY_KEY_REQUIRED`**, nothing written;
   - the same key, path, `X-Branch-Id` and body again → the first answer,
-    unchanged, with header `Idempotent-Replayed: true`. The order's
+    unchanged, with header `Idempotent-Replayed: true` (readable by a browser, Phase 42). The order's
     `tracking_token` is `null` in a replay (it is shown once);
   - the same key with anything different → **409 `IDEMPOTENCY_KEY_REUSED`**;
   - a key is the sender's, per route, for **24 hours**; an error answer is
@@ -777,8 +784,9 @@ coupon_id, order_id FROM coupon_usages GROUP BY 1, 2 HAVING count(*) > 1;`
   `COUPON_NOT_FOUND`, `COUPON_INACTIVE`, `COUPON_NOT_STARTED`,
   `COUPON_EXPIRED` (dates are store time), `COUPON_PROMOTION_ENDED` (its
   promotion inactive or past `ends_at`), `COUPON_WRONG_BRANCH`,
-  `COUPON_USED_UP` (`max_uses`), `COUPON_NEEDS_CUSTOMER` (a coupon needs
-  `customer_id`), `COUPON_CUSTOMER_LIMIT` (`max_uses_per_customer`),
+  `COUPON_USED_UP` (`max_uses`), `COUPON_CUSTOMER_REQUIRED` (a coupon with a
+  per-customer limit needs `customer_id`; `COUPON_NEEDS_CUSTOMER` before
+  Phase 42), `COUPON_CUSTOMER_LIMIT` (`max_uses_per_customer`),
   `COUPON_MIN_ORDER`, `COUPON_HAS_NO_DISCOUNT`, `COUPON_WITH_MANUAL_DISCOUNT`
   (not with a typed-in order or line discount). At checkout: another coupon on
   an order that has one → **409 `COUPON_ALREADY_APPLIED`** (the same one again
@@ -918,6 +926,20 @@ date too when it has one.
   guard refuses `:9000` and it runs its own OCR on `127.0.0.1:9100`. Tests
   point `OCR_SERVICE_URL` at a closed port.
 
+### Frontend blockers (Phase 42)
+
+**Deploy: apply migration 020 (`migrations/020_coupon_without_customer.sql`), then the code.** Rollback: the previous release; `020_coupon_without_customer.rollback.sql` only after it, and it refuses while a coupon has no per-customer limit or a use has no customer.
+
+| Call | Before 42 | 42 |
+|---|---|---|
+| `PUT /orders/{id}/complete`, `PUT /orders/{id}/status` → `completed` of an order paid partly with points | **400** `BAD_REQUEST` "Order is not fully paid" when the cash handed over < `grand_total` | completes. **Fully paid** = what its completed payments settled (net of change) + the points redeemed (1 point = 1 Baht) ≥ `grand_total` (as checkout and the X-report count). Not fully paid → **400 `ORDER_NOT_FULLY_PAID`**, same `detail`. `POST /payments/` on such an order → 400 `OVERPAYMENT` (it took the payment before). |
+| **A route that needs a branch, without `X-Branch-Id`** (a user whose roles are all branch roles; anyone on the *required* routes) | a user whose roles are all branch roles: **403** `FORBIDDEN` "Missing required permission: …"; a Superadmin / organization-wide role on the *required* routes (`POST/GET /orders/`, KDS queues, `/returns/`, `POST /transfers/`, reports, `/inventory/balances`, `/low-stock`, `GET /shifts/`): **401** `UNAUTHORIZED` "X-Branch-Id header is required" | **400 `BRANCH_REQUIRED`** `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"`. Pick a branch and send it; never log out on it. A permission held nowhere stays 403 `FORBIDDEN`; another branch's record stays 404. |
+| CORS `Access-Control-Expose-Headers` (headers a browser may read) | `Deprecation`, `Link` | `X-Request-Id`, `Idempotent-Replayed`, `Deprecation`, `Link`, `Retry-After`. A **429** now carries `Retry-After` (seconds: the limit's whole window, e.g. 60 for login). |
+| `POST /coupons/validate` without `customer_id`; a coupon in an order without a customer | always **422** (`"Field required"` / `COUPON_NEEDS_CUSTOMER`); every coupon had a per-customer limit | **Migration 020 (apply before the code).** `max_uses_per_customer: null` = no per-customer limit: validated and used without a customer. A coupon with a limit and no customer → **422 `COUPON_CUSTOMER_REQUIRED`** (renamed from `COUPON_NEEDS_CUSTOMER`), at `/validate` too. Existing coupons keep their limit. |
+| OpenAPI (`/openapi.json`, development only) of `POST /slip-verify/upload`, `/checkslip`, `GET /slip-verify/{id}`, `/slip-verify/order/{order_id}`, `GET /inventory/balances/{branch_id}/{product_id}`, `POST /inventory/adjust`, `GET /auth/google`, `GET /health/mongodb` | success schema `{}` (8 of 149 operations) | each has its model: `SlipUploadResult` (also for 400/404/415/422), `VerificationDetailRead`, `VerificationOfOrder[]`, `ProductBalance`, `MessageResponse`, a 302 redirect, `MongoHealth` (200/503); none is `{}`. **The answers are unchanged** (same fields; amounts stay JSON numbers). Schemas describe `data` inside the envelope. |
+| `GET /orders/?shift_id=` | ignored: every order of the branch | the orders of that shift (`orders.shift_id`); a shift of another branch / missing / another cashier's without `orders.read_branch` → **404** `Shift not found` |
+| `GET /catalog/products`, `/catalog/products/{id}`, create/update answers | `station` only (`null` for a product that follows its category) | also **`effective_station`** (`kitchen`/`bar`/`none`, the screen its order lines go to); `GET /catalog/products?station=kitchen|bar|none` filters on it (422 otherwise). `station` unchanged. |
+
 ---
 
 ## Catalog `/catalog`
@@ -934,7 +956,7 @@ DELETE /catalog/categories/{id}    → 204
 ### Products
 
 ```
-GET    /catalog/products           ?page=&per_page=&search=&category_id=&is_active=
+GET    /catalog/products           ?page=&per_page=&search=&category_id=&is_active=&station=none|kitchen|bar
 GET    /catalog/products/{id}
 POST   /catalog/products
 PUT    /catalog/products/{id}
@@ -957,6 +979,13 @@ DELETE /catalog/products/{id}      → 204
 }
 ```
 `station` (38c): the screen the product's items go to; null = the category's.
+
+**ProductResponse** has both (Phase 42):
+- `station`: the product's own value (`null` = it follows its category), what
+  the product form edits;
+- `effective_station`: `"kitchen" | "bar" | "none"`, the screen its order lines
+  go to = `station`, else the category's, else `"none"` (the value each
+  `order_items.station` is sold with). `?station=` filters on it.
 
 ### Suppliers
 
@@ -1032,7 +1061,13 @@ Header `Idempotency-Key` required (or the body's `idempotency_key`); see Phase 3
 `coupon_code`: the system computes `coupon_discount` (not with `discount_amount`); see Phase 38c.
 
 ### GET `/orders/`
-Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=`
+Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=&shift_id=`
+
+`shift_id` (Phase 42): only the orders of that shift (`orders.shift_id`, the
+orders a shift close counts). The shift must be of the `X-Branch-Id` branch and
+the caller's own, or the caller holds `orders.read_branch` there; else **404**
+`"Shift not found"` (another branch, another organization, missing). E.g. the
+unpaid orders of my shift: `?shift_id=12&status=pending`.
 
 ### GET `/orders/{reference}` — ID หรือ order_number
 
@@ -1060,6 +1095,12 @@ a cashier → 403 `ORDER_READY_NEEDS_MANAGER`); audited as `ORDER.CANCEL_READY` 
 A coupon use is given back.
 
 ### PUT `/orders/{order_id}/complete`
+
+From `pending`, `ready` or `paid`. The order must be **fully paid**: the money
+its completed payments settled (net of change) plus the loyalty points
+redeemed on it (1 point = 1 Baht) cover `grand_total`; else **400
+`ORDER_NOT_FULLY_PAID`** (Phase 42). `PUT /orders/{id}/status` to `completed`
+checks the same.
 
 ### Order tracking (Tracking Token)
 
@@ -1309,7 +1350,7 @@ the envelope policy).
   "min_order_amount": 0,
   "branch_id": 1 | null,
   "max_uses": 100 | null,
-  "max_uses_per_customer": 1,
+  "max_uses_per_customer": 1 | null,
   "start_date": "2026-09-01T00:00:00",
   "end_date": "2026-09-30T23:59:59"
 }
@@ -1317,6 +1358,9 @@ the envelope policy).
 Dates without an offset are store time. `promotion_id` must name a promotion
 (422 `PROMOTION_NOT_FOUND`); `branch_id` null = every branch. Used with
 `coupon_code` on `POST /orders/` or checkout (Phase 38c).
+`max_uses_per_customer` (default 1): `null` = no per-customer limit (Phase 42,
+migration 020); such a coupon is validated and used **without a customer**.
+With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 
 ### GET `/coupons/`  `?page=&per_page=`
 ### GET `/coupons/{coupon_id}`
@@ -1324,7 +1368,10 @@ Dates without an offset are store time. `promotion_id` must name a promotion
 
 ### POST `/coupons/validate`
 ```json
-// Request: { "code": "SUMMER10", "customer_id": 1, "branch_id": 1 | null }
+// Request: { "code": "SUMMER10", "customer_id": 1 | omitted, "branch_id": 1 | null }
+// customer_id is needed only by a coupon with max_uses_per_customer (else 422
+// COUPON_CUSTOMER_REQUIRED, an error body, not "valid": false). Before Phase 42
+// it was always required (422 "Field required").
 // Response 200:
 {
   "valid": true,

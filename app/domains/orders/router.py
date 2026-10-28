@@ -13,7 +13,7 @@ from app.middleware.auth import (
     require_station_item_permission,
 )
 from app.middleware.rate_limit import limiter
-from app.db.models import Order, User
+from app.db.models import Order, Shift, User
 from app.config.settings import settings
 from app.shared.audit import AuditContext
 from app.shared.clock import StoreDateTime
@@ -124,6 +124,19 @@ def replace_order_tracking_token(
     )
 
 
+def _ensure_shift_of_branch(db: Session, access: Access, shift_id: int, branch_id: int) -> None:
+    """404 "Shift not found" unless the shift is of the listed branch (checked to be
+    of the caller's organization) and is the caller's own, or the caller holds
+    orders.read_branch there (as GET /shifts/{id}/x-report)."""
+    shift = db.get(Shift, shift_id)
+    if (
+        shift is None
+        or shift.branch_id != branch_id
+        or (shift.user_id != access.user_id and not access.can_at(READ_BRANCH, branch_id))
+    ):
+        raise NotFoundException(detail="Shift not found")
+
+
 @router.get("/", response_model=OrderListResponse)
 def list_orders(
     user: User = Depends(require_permission("orders.read")),
@@ -140,11 +153,16 @@ def list_orders(
     ),
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
+    shift_id: Optional[int] = Query(
+        None, description="Only the orders of this shift (of the X-Branch-Id branch; another's needs orders.read_branch)"
+    ),
 ) -> OrderListResponse:
     if not access.can(READ_BRANCH, branch_id):
         if user_filter is not None and user_filter != user.id:
             raise ForbiddenException(detail=f"Missing required permission: {READ_BRANCH}")
         user_filter = user.id
+    if shift_id is not None:
+        _ensure_shift_of_branch(db, access, shift_id, branch_id)
     result = OrderService.list_orders(
         db=db,
         org_id=user.organization_id,
@@ -157,6 +175,7 @@ def list_orders(
         customer_id=customer_id,
         user_id=user_filter,
         date_field=date_field,
+        shift_id=shift_id,
     )
     return OrderListResponse(
         orders=[OrderResponse.model_validate(o) for o in result["orders"]],

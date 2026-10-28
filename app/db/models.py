@@ -19,10 +19,11 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, column_property, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -309,6 +310,15 @@ class Product(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    # The screen an order line of it goes to (Phase 42): its own station, else its
+    # category's, else 'none'. The one formula: orders copy it into order_items.station.
+    effective_station: Mapped[str] = column_property(
+        func.coalesce(
+            station,
+            select(Category.station).where(Category.id == category_id).scalar_subquery(),
+            "none",
+        )
+    )
 
     __table_args__ = (
         UniqueConstraint("organization_id", "sku", name="uq_product_org_sku"),
@@ -1232,7 +1242,8 @@ class Coupon(Base):
     )
     max_uses: Mapped[int | None] = mapped_column(Integer)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    max_uses_per_customer: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # NULL: no per-customer limit, and no customer needed (020).
+    max_uses_per_customer: Mapped[int | None] = mapped_column(Integer, server_default="1")
     start_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_date: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
@@ -1268,8 +1279,9 @@ class CouponUsage(Base):
     coupon_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("coupons.id", ondelete="RESTRICT"), nullable=False
     )
-    customer_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    # NULL: a coupon without a per-customer limit used without a customer (020).
+    customer_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("customers.id", ondelete="RESTRICT")
     )
     order_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False
