@@ -30,6 +30,8 @@ _SETTLED_ORDER_STATUSES = {"paid", "completed", "refunded"}
 
 #: Verifications staff may approve by hand, after checking the transfer in
 #: the bank app (confirmed_amount must still equal the order total).
+#: pending_reason of a slip received while the OCR service was down (Phase 40).
+OCR_UNAVAILABLE = "ocr_unavailable"
 APPROVABLE_STATUSES = frozenset({"pending", "review", "ocr_failed", "amount_mismatch", "receiver_mismatch"})
 
 #: Verifications staff may reject. Rejecting a duplicate lets the customer
@@ -153,6 +155,37 @@ class SlipVerifyService:
 
         # 5. OCR extraction
         ocr_result = OCRService.extract_text(file_bytes, mime_type=image_mime)
+        if not ocr_result.success and ocr_result.unavailable:
+            # The OCR service is down or timed out: the slip is received and
+            # waits in the staff queue (review) instead of failing the customer.
+            verification = SlipVerifyRepository.create_verification(
+                db,
+                order_id=order_id,
+                image_sha256=image_sha256,
+                image_perceptual_hash=image_phash,
+                image_mime_type=image_mime,
+                image_file_size=image_size,
+                image_storage_key=storage_key,
+                status="review",
+                failure_reason=f"{OCR_UNAVAILABLE}: {ocr_result.error}",
+                created_by=user.id,
+            )
+            db.flush()
+            _log_attempt(db, user, order_id, verification.id, image_sha256, None, 200, "review", None,
+                         f"{OCR_UNAVAILABLE}: {ocr_result.error}", ip_address, user_agent)
+            return {
+                "success": True,
+                "status": "review",
+                "message": "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจ",
+                "data": {
+                    "verification_id": verification.id,
+                    "order_id": order_id,
+                    "amount": None,
+                    "reference": None,
+                    "risk_score": None,
+                    "pending_reason": OCR_UNAVAILABLE,
+                },
+            }
         if not ocr_result.success:
             verification = SlipVerifyRepository.create_verification(
                 db,

@@ -32,6 +32,10 @@ class OCRResult:
     success: bool = True
     error: str | None = None
     http_status: int | None = None
+    #: The OCR service could not be asked (down, timed out, 5xx): the slip may
+    #: be fine, staff check it by hand. False when the service read the image
+    #: and found nothing usable.
+    unavailable: bool = False
 
 
 class OCRService:
@@ -67,10 +71,10 @@ class OCRService:
                 response = client.post(url, files=files)
         except httpx.TimeoutException:
             logger.error("OCR service timeout")
-            return OCRResult(success=False, error="OCR service timeout")
+            return OCRResult(success=False, error="OCR service timeout", unavailable=True)
         except httpx.HTTPError as exc:
             logger.error("OCR service unavailable: %s", exc)
-            return OCRResult(success=False, error="OCR service unavailable")
+            return OCRResult(success=False, error="OCR service unavailable", unavailable=True)
 
         return OCRService._handle_response(response)
 
@@ -86,6 +90,7 @@ class OCRService:
                 success=False,
                 error="Invalid OCR response",
                 http_status=response.status_code,
+                unavailable=True,
             )
 
         if response.status_code >= 400 or not data.get("success"):
@@ -98,6 +103,9 @@ class OCRService:
                 success=False,
                 error=message,
                 http_status=response.status_code,
+                # 5xx: the service is down or still loading its engine (503),
+                # not a verdict on the image.
+                unavailable=response.status_code >= 500,
             )
 
         details = data.get("details") or []

@@ -122,3 +122,34 @@ class TestAutoVerifyFlag:
         assert Settings().SLIP_AUTO_VERIFY is True
         monkeypatch.setenv("SLIP_AUTO_VERIFY", "false")
         assert Settings().SLIP_AUTO_VERIFY is False
+
+
+class TestOCRUnavailable:
+    """Phase 40, item 5: an OCR outage is told apart from an unreadable slip."""
+
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_timeout_and_connection_errors_are_unavailable(self, mock_client_cls):
+        from app.services.ocr_service import OCRService
+
+        post = mock_client_cls.return_value.__enter__.return_value.post
+        for exc in (httpx.ReadTimeout("slow"), httpx.ConnectError("refused")):
+            post.side_effect = exc
+            result = OCRService.extract_text(_image("PNG"), mime_type="image/png")
+            assert (result.success, result.unavailable) == (False, True)
+
+    @patch("app.services.ocr_service.httpx.Client")
+    def test_a_5xx_is_unavailable_a_4xx_or_no_text_is_not(self, mock_client_cls):
+        from app.services.ocr_service import OCRService
+
+        post = mock_client_cls.return_value.__enter__.return_value.post
+        cases = [(503, {"status": "loading"}, True), (500, {}, True),
+                 (422, {"success": False, "error": "bad image"}, False),
+                 (200, {"success": True, "details": []}, False)]
+        for status, body, unavailable in cases:
+            response = MagicMock()
+            response.status_code = status
+            response.json.return_value = body
+            post.side_effect = None
+            post.return_value = response
+            result = OCRService.extract_text(_image("PNG"), mime_type="image/png")
+            assert (status, result.success, result.unavailable) == (status, False, unavailable)
