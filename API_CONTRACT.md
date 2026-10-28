@@ -430,7 +430,7 @@ stock_transfers GROUP BY 1;` (any `partially_received` → settle by hand).
   retry of that action).
   - none → **422 `IDEMPOTENCY_KEY_REQUIRED`**, nothing written;
   - the same key, path, `X-Branch-Id` and body again → the first answer,
-    unchanged, with header `Idempotent-Replayed: true`. The order's
+    unchanged, with header `Idempotent-Replayed: true` (readable by a browser, Phase 42). The order's
     `tracking_token` is `null` in a replay (it is shown once);
   - the same key with anything different → **409 `IDEMPOTENCY_KEY_REUSED`**;
   - a key is the sender's, per route, for **24 hours**; an error answer is
@@ -933,6 +933,7 @@ date too when it has one.
 |---|---|---|
 | `PUT /orders/{id}/complete`, `PUT /orders/{id}/status` → `completed` of an order paid partly with points | **400** `BAD_REQUEST` "Order is not fully paid" when the cash handed over < `grand_total` | completes. **Fully paid** = what its completed payments settled (net of change) + the points redeemed (1 point = 1 Baht) ≥ `grand_total` (as checkout and the X-report count). Not fully paid → **400 `ORDER_NOT_FULLY_PAID`**, same `detail`. `POST /payments/` on such an order → 400 `OVERPAYMENT` (it took the payment before). |
 | **A route that needs a branch, without `X-Branch-Id`** (a user whose roles are all branch roles; anyone on the *required* routes) | a user whose roles are all branch roles: **403** `FORBIDDEN` "Missing required permission: …"; a Superadmin / organization-wide role on the *required* routes (`POST/GET /orders/`, KDS queues, `/returns/`, `POST /transfers/`, reports, `/inventory/balances`, `/low-stock`, `GET /shifts/`): **401** `UNAUTHORIZED` "X-Branch-Id header is required" | **400 `BRANCH_REQUIRED`** `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"`. Pick a branch and send it; never log out on it. A permission held nowhere stays 403 `FORBIDDEN`; another branch's record stays 404. |
+| CORS `Access-Control-Expose-Headers` (headers a browser may read) | `Deprecation`, `Link` | `X-Request-Id`, `Idempotent-Replayed`, `Deprecation`, `Link`, `Retry-After`. A **429** now carries `Retry-After` (seconds: the limit's whole window, e.g. 60 for login). |
 
 ---
 
