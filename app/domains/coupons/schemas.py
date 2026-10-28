@@ -38,6 +38,33 @@ class CouponCreate(BaseModel):
         return self
 
 
+class CouponUpdate(BaseModel):
+    """PATCH /coupons/{id} (Phase 43): only the fields sent change; any other
+    field is 422. code / discount_type / discount_value only while the coupon
+    was never used (409 COUPON_IN_USE): old orders and reports keep their sums."""
+
+    model_config = {"extra": "forbid"}
+
+    # None: no per-customer limit (the coupon is then used without a customer too).
+    max_uses_per_customer: Optional[int] = Field(None, gt=0)
+    end_date: Optional[StoreDateTime] = None
+    is_active: Optional[bool] = None
+    # None: no overall limit; not below the uses already made.
+    max_uses: Optional[int] = Field(None, gt=0)
+    code: Optional[str] = Field(None, min_length=1, max_length=100)
+    discount_type: Optional[Literal["percent", "fixed"]] = None
+    discount_value: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "CouponUpdate":
+        if not self.model_fields_set:
+            raise ValueError("nothing to change")
+        for name in ("end_date", "is_active", "code", "discount_type", "discount_value"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
+
+
 class CouponResponse(BaseModel):
     id: int
     code: str

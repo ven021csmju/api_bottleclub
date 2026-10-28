@@ -954,6 +954,7 @@ redeemed − what its completed payments already settled (net of change).
 | Points earned (order with a customer) | at checkout or slip only, on what that call settled; an order paid in full by `POST /payments/` earned **none** | when the order becomes **fully paid**, whichever way (checkout, `POST /payments/`, slip): `grand_total` − points redeemed, **once per order** (a replayed request or a second path adds nothing; a `POST /loyalty/earn` with `reference_type: "order"` for it counts as its points). `loyalty_points_earned` on the order. |
 | A slip for **more** than is still due (`POST /slip-verify/upload`) | `amount_mismatch` (refusal; after a part paid in cash, a slip for the whole total **settled it again**) | **200** `success: true`, `status: "review"`, `message: "ยอดในสลิปเกินยอดค้างชำระ รอเจ้าหน้าที่ตรวจสอบ"`, `data.pending_reason: "over_due"`, `data.expected_amount` = still due; `failure_reason` `"ยอดในสลิป 100.00 เกินยอดค้างชำระ 70.00"`. Never settled by itself (either auto-verify setting). Less than due stays `amount_mismatch`. |
 | `POST /slip-verify/{id}/approve` with `confirmed_amount` **more** than is still due | 422 `AMOUNT_MISMATCH` when ≠ `grand_total` (= `grand_total` was taken even after a cash part) | **400 `OVERPAYMENT`** `"confirmed_amount (100.00) is more than the amount still due (70.00)"`: approve what is still due (the transfer's extra is the shop's to give back). Less than due: 422 `AMOUNT_MISMATCH`. |
+| `PATCH /coupons/{id}` | **405** (no way to change a coupon; delete + create lost its uses) | `coupons.update` at organization level (Superadmin). Changes only the fields sent: `max_uses_per_customer` (`null` = no limit), `end_date`, `is_active`, `max_uses` (`null` = no limit). `code`, `discount_type`, `discount_value` only while the coupon was **never used** (else **409 `COUPON_IN_USE`**). Any other field / empty body / `null` for a required field → 422. Audited `COUPON.UPDATE`. |
 
 ---
 
@@ -1381,6 +1382,30 @@ With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 
 ### GET `/coupons/`  `?page=&per_page=`
 ### GET `/coupons/{coupon_id}`
+### PATCH `/coupons/{coupon_id}` (Phase 43)
+Permission `coupons.update` at organization level (Superadmin; branch roles → 403).
+Only the fields sent change; the answer is the coupon (as GET).
+```json
+{
+  "max_uses_per_customer": null,
+  "end_date": "2026-12-31T23:59:59",
+  "is_active": true,
+  "max_uses": 100
+}
+```
+| Field | |
+|---|---|
+| `max_uses_per_customer` | int > 0, or `null` = no per-customer limit (used without a customer) |
+| `end_date` | after `start_date` (else 422); without an offset: store time |
+| `is_active` | `true` / `false` (not `null`) |
+| `max_uses` | int > 0, at least `used_count` (else 422 `COUPON_MAX_USES_BELOW_USED`), or `null` = no limit |
+| `code`, `discount_type`, `discount_value` | only while no order ever used the coupon (a cancelled one included), else **409 `COUPON_IN_USE`**; a percent at most 100; a taken code → 409 |
+
+Any other field (`min_order_amount`, `max_discount`, `branch_id`, `start_date`,
+`promotion_id`, ...) or an empty body → 422. Another organization's coupon → 404.
+Each change is an `audit_logs` row `COUPON.UPDATE` (`entity_type: "coupon"`,
+before/after of the fields that changed).
+
 ### DELETE `/coupons/{coupon_id}` → 204
 
 ### POST `/coupons/validate`

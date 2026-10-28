@@ -8,6 +8,7 @@ from app.db.models import Coupon, CouponUsage, Order
 from app.db.repositories.coupons import CouponRepository
 from app.db.repositories.promotions.promotion_repository import is_running
 from app.services import user_events
+from app.shared.audit import AuditContext, log_audit
 from app.shared.clock import store_now
 from app.shared.exceptions import (
     ConflictException,
@@ -118,6 +119,61 @@ class CouponService:
         coupon = CouponRepository.get_org_coupon(db, organization_id, coupon_id)
         if coupon is None:
             raise NotFoundException(detail="Coupon not found")
+        return coupon
+
+    #: What PATCH may change on a coupon that was used: the rest of a used
+    #: coupon (code, discount) is what old orders and reports were computed with.
+    LOCKED_ONCE_USED = ("code", "discount_type", "discount_value")
+
+    @staticmethod
+    def update(db: Session, audit: AuditContext, coupon_id: int, changes: dict) -> Coupon:
+        """PATCH /coupons/{id} (Phase 43): ``changes`` holds only the fields
+        sent. Audited (COUPON.UPDATE, before/after of the changed fields) in the
+        same transaction."""
+        coupon = CouponRepository.lock_org_coupon(db, audit.organization_id, coupon_id)
+        if coupon is None:
+            raise NotFoundException(detail="Coupon not found")
+        locked = [f for f in CouponService.LOCKED_ONCE_USED if f in changes]
+        if locked and CouponRepository.ever_used(db, coupon.id):
+            raise ConflictException(
+                detail=f"The coupon has been used: {', '.join(locked)} cannot change", code="COUPON_IN_USE"
+            )
+        if "code" in changes and changes["code"] != coupon.code:
+            if CouponRepository.find_by_code(db, coupon.organization_id, changes["code"]) is not None:
+                raise ConflictException(detail=f"Coupon with code '{changes['code']}' already exists")
+        if "end_date" in changes and changes["end_date"] <= coupon.start_date:
+            raise UnprocessableException(detail="end_date must be after start_date", code="VALIDATION_ERROR")
+        if changes.get("max_uses") is not None and changes["max_uses"] < coupon.used_count:
+            raise UnprocessableException(
+                detail=f"max_uses cannot be below the uses already made ({coupon.used_count})",
+                code="COUPON_MAX_USES_BELOW_USED",
+            )
+        kind = changes.get("discount_type", coupon.discount_type)
+        value = changes.get("discount_value", coupon.discount_value)
+        if ("discount_type" in changes or "discount_value" in changes) and (
+            kind is None or value is None or (kind == "percent" and Decimal(str(value)) > 100)
+        ):
+            raise UnprocessableException(
+                detail="a percent discount is at most 100, and a discount needs both type and value",
+                code="VALIDATION_ERROR",
+            )
+
+        def shown(value):
+            return value.isoformat() if isinstance(value, datetime) else str(value) if isinstance(value, Decimal) else value
+
+        before, after = {}, {}
+        for field, value in changes.items():
+            old = getattr(coupon, field)
+            if old == value:
+                continue
+            before[field], after[field] = shown(old), shown(value)
+            # An explicit NULL: a bare None would get the column default (1) on max_uses_per_customer.
+            setattr(coupon, field, null() if value is None else value)
+        if after:
+            log_audit(db, audit, action="COUPON.UPDATE", entity_type="coupon", entity_id=coupon.id,
+                      before_data=before, after_data=after)
+        db.commit()
+        db.refresh(coupon)
         return coupon
 
     @staticmethod

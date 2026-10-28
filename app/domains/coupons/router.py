@@ -6,12 +6,14 @@ from app.domains.coupons.schemas import (
     CouponCreate,
     CouponListResponse,
     CouponResponse,
+    CouponUpdate,
     CouponValidate,
     CouponValidationResult,
 )
 from app.domains.coupons.service import CouponService
-from app.middleware.auth import require_permission
+from app.middleware.auth import get_audit_context, require_permission
 from app.db.models import User
+from app.shared.audit import AuditContext
 from app.shared.pagination import PaginationParams
 
 router = APIRouter()
@@ -47,6 +49,18 @@ def create_coupon(
     return CouponService.create(
         db, user.organization_id, **data.model_dump()
     )
+
+
+@router.patch("/{coupon_id}", response_model=CouponResponse)
+def update_coupon(
+    coupon_id: int,
+    data: CouponUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("coupons.update", scope="org")),
+    audit: AuditContext = Depends(get_audit_context),
+) -> CouponResponse:
+    """Only the fields sent change (Phase 43); see CouponUpdate."""
+    return CouponService.update(db, audit, coupon_id, data.model_dump(exclude_unset=True))
 
 
 @router.delete("/{coupon_id}", status_code=204)
