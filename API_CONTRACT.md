@@ -790,7 +790,8 @@ coupon_id, order_id FROM coupon_usages GROUP BY 1, 2 HAVING count(*) > 1;`
   /api/promotions` leaves out an ended promotion.
 - **Reports:** `GET /reports/financial` has `coupon_discounts` (total and per
   day) apart from `discounts` (typed in). `sales_by_category` counts line
-  totals, before an order-level discount (typed in or coupon).
+  totals, before an order-level discount (typed in or coupon) — until 38d,
+  which spreads it over the lines (see Phase 38d).
 - **Stock arriving twice at once:** a transfer receipt or a purchase receipt
   adds with one `INSERT ... ON CONFLICT` (a branch's first row for a product
   is made once) and its ledger line starts where on_hand really was; the
@@ -810,6 +811,76 @@ coupon_id, order_id FROM coupon_usages GROUP BY 1, 2 HAVING count(*) > 1;`
 | `POST /orders/{id}/cancel` of a `ready` order | 400 | Branch Admin with a reason; cashier 403 |
 | `GET /api/promotions` | ended promotions listed | `endsAt`; ended ones left out |
 | `POST /purchases/{id}/receive` | `receiving_number` `REC-000001` | `REC-YYYYMMDD-0001` |
+
+### Report money and purchase races (Phase 38d)
+
+**Deploy order: apply migration 019, then deploy the code.** Rollback: the
+code, then `019_inventory_lot_unique.rollback.sql`.
+
+| | 019 not applied | 019 applied |
+|---|---|---|
+| code before 38d | as now | as now |
+| 38d code | as now if the database has `uq_inventory_lot` (create_all made it); without it **`POST /purchases/{id}/receive` → 500** | correct |
+
+- **019** makes sure `inventory_lots` has `UNIQUE (branch_id, product_id,
+  lot_number)` (`uq_inventory_lot`, as in the models). A database built by
+  `bootstrap_schema.py` has it already: 019 records `already present` and
+  changes nothing. Otherwise it adds it, or **stops** (nothing changed) while
+  two rows share a lot: merge them by hand first. Rollback drops the unique
+  only if 019 added it.
+
+Check before applying (read-only):
+`SELECT conname FROM pg_constraint WHERE conrelid = 'inventory_lots'::regclass AND contype = 'u';`
+and `SELECT branch_id, product_id, lot_number FROM inventory_lots GROUP BY 1, 2, 3 HAVING count(*) > 1;`
+(any row → merge by hand).
+
+**Money in the reports — one definition everywhere** (`/reports/daily-summary`,
+`/sales`, `/financial`, e-commerce dashboard), over the orders that are `paid`
+or `completed`, on the day paid:
+
+| Field | Meaning |
+|---|---|
+| `gross_sales` | before every discount: Σ unit price × quantity |
+| `discounts` | typed in: on lines (`order_items.discount_amount`) + on the order (`orders.discount_amount`) |
+| `coupon_discounts` | computed from coupons (`orders.coupon_discount`) |
+| `net_sales` | `gross_sales − discounts − coupon_discounts` = Σ `grand_total`: what was sold, **before refunds** |
+| `net_after_refunds` | `net_sales − refunds` (daily-summary: `total_refunds`) |
+
+Each discount is taken off once. `total_sales` (sales) and `total_revenue`
+(daily-summary) are `net_sales`; `sales_by_hour[].sales` and the dashboard's
+`sales_today` / `sales_this_month` are net too. Redeemed loyalty points are a
+way to pay, not a discount: they lower what the payments add up to
+(`payment_methods`), not `net_sales`. Tax and shipping are 0 in this system.
+
+**Lines:** an order-level discount (typed in or coupon) is spread over the
+order's lines in proportion to each line's total, to the satang, the last line
+taking the rounding (`app/shared/money.prorate`, the function a refund uses to
+price a returned unit). `sales_by_category[].revenue`,
+`top_products[].total_revenue` and the dashboard's
+`top_selling_wines[].total_revenue` are line totals less that share, so
+**the categories add up to `net_sales`**. Example: 350 + 180 with 10.00 off →
+6.60 and 3.40; returning the 180 refunds 176.60.
+
+**Purchases:** a new purchase order is numbered from `document_sequences`
+(`PO-YYYYMMDD-NNNN`, store day): two created at once both get a number (one of
+them used to fail, 500). Existing numbers (`PO-0001-000001`) stay. A receipt
+adds to its lot with one `INSERT ... ON CONFLICT (branch_id, product_id,
+lot_number)`: two receipts of a new lot at once make one lot with both
+quantities (one used to fail, 500); the cost becomes the receipt's, the expiry
+date too when it has one.
+
+**Breaking changes for the frontend**
+
+| Call | Before 38d | 38d |
+|---|---|---|
+| `GET /reports/financial` `gross_sales` (total, `daily[]`) | Σ `grand_total` (discounts already off) | before every discount |
+| `GET /reports/financial` `discounts` | order-level typed in only | lines + order typed in |
+| `GET /reports/financial` `net_sales` (total, `daily[]`) | `gross − discounts − refunds` (typed-in discount off twice, refunds off) | `gross − discounts − coupon_discounts`, **before refunds**; new `net_after_refunds` |
+| `GET /reports/daily-summary` `net_sales` | `total_revenue − total_refunds` | **before refunds** (= `total_revenue`); new `gross_sales`, `discounts`, `coupon_discounts`, `net_after_refunds` (the old `net_sales`) |
+| `GET /reports/sales` | `total_sales` only | also `gross_sales`, `discounts`, `coupon_discounts`, `net_sales` (= `total_sales`) |
+| `GET /reports/sales` `sales_by_category[].revenue`, `top_products[].total_revenue`; dashboard `top_selling_wines[].total_revenue` | line totals, before order-level discounts | after them; categories add up to `net_sales` |
+| `POST /purchases` `po_number` | `PO-0001-000001` (per organization) | `PO-YYYYMMDD-0001` |
+| Refund of a returned unit | its line × (paid ÷ lines), rounded per unit | its line's share of what was paid (`prorate`) ÷ quantity: can differ by a satang |
 
 ---
 
@@ -1369,21 +1440,32 @@ Query: `?date_from=2026-09-01&date_to=2026-09-30&branch_id=&group_by=category`
 
 ```json
 {
+  "gross_sales": 152000.0,
+  "discounts": 1500.0,
+  "coupon_discounts": 500.0,
+  "net_sales": 150000.0,
   "total_sales": 150000.0,
   "total_orders": 320,
   "average_order_value": 468.75,
-  "top_products": [...],
-  "sales_by_hour": [...],
-  "sales_by_category": [...]
+  "top_products": [{ "product_name": "...", "total_qty": 40, "total_revenue": 13860.0 }],
+  "sales_by_hour": [{ "hour": 19, "order_count": 31, "sales": 14500.0 }],
+  "sales_by_category": [{ "category": "Wine", "revenue": 120000.0, "qty": 260 }]
 }
 ```
+Money fields: see [Phase 38d](#report-money-and-purchase-races-phase-38d).
+`total_sales` = `net_sales`; `sales_by_category` (only with
+`group_by=category`) adds up to `net_sales`.
 
 ### GET `/reports/daily-summary`
 Query: `?date=2026-09-01&branch_id=`
 
 ```json
-{ "date": "2026-09-01", "branch_id": null, "total_orders": 50, "total_revenue": 25000.0, "total_refunds": 500.0, "net_sales": 24500.0 }
+{ "date": "2026-09-01", "branch_id": null, "total_orders": 50,
+  "gross_sales": 25600.0, "discounts": 400.0, "coupon_discounts": 200.0, "net_sales": 25000.0,
+  "total_revenue": 25000.0, "total_refunds": 500.0, "net_after_refunds": 24500.0 }
 ```
+`net_sales` is before refunds (up to v0.1.13 it was after them: that is
+`net_after_refunds` now); `total_revenue` = `net_sales`.
 `total_refunds`: `completed` refunds made that day, whichever day the order was sold (`pending`/`failed` are not counted).
 
 ### GET `/reports/inventory`
@@ -1391,7 +1473,9 @@ Query: `?branch_id=&category_id=`
 
 ### GET `/reports/financial`
 Query: `?date_from=&date_to=&branch_id=`
-`discounts` (typed in) and `coupon_discounts` (computed from coupons, 38c), total and per day.
+`gross_sales`, `discounts` (typed in, lines + order), `coupon_discounts`
+(computed from coupons, 38c), `net_sales` (= gross − both, before refunds),
+`refunds`, `net_after_refunds`, total and per day (38d).
 
 ### GET `/reports/loyalty`
 Query: `?from_date=2026-09-01&to_date=2026-09-30`
