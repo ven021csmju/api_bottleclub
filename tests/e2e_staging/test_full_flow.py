@@ -772,3 +772,72 @@ def test_l_branch_isolation(api, rec, flow, path):
     resp = api.get(url, "manager")
     rec.eq(s, f"Branch Admin A → {path.split('?')[0]}", 404, resp.status_code, resp.status_code)
     rec.finish(s)
+
+
+# ---------------------------------------------------------------------------
+# m. Split payment: part in cash, the rest by slip (Phase 43), in a new shift
+#    after j/k so their totals stay as they were
+# ---------------------------------------------------------------------------
+def test_m_split_cash_and_slip(api, rec, flow):
+    s = "m"
+    needs(flow, "cashier", "manager", "p2", "register")
+    A = flow["A"]
+    resp = api.post("/shifts/open", "cashier", json={"branch_id": A, "register_id": flow["register"],
+                                                     "opening_cash": "500.00"})
+    rec.check(s, "open a second shift", created(resp), "200/201", resp.status_code, resp.status_code)
+    sid = data(resp).get("id")
+    resp = api.post("/orders/", "cashier", json={
+        "branch_id": A, "shift_id": sid,
+        "items": [{"product_id": flow["p2"], "quantity": 1, "unit_price": P2["selling_price"]}]})
+    order = data(resp)
+    oid = order.get("id")
+    rec.check(s, "order of 420", created(resp) and D(order.get("grand_total", 0)) == D(420), "200/201, 420",
+              (resp.status_code, order.get("grand_total")), resp.status_code)
+
+    resp = api.post("/payments/", "cashier", json={"order_id": oid, "payment_method": "cash", "amount": "120.00"})
+    rec.eq(s, "120 in cash first (POST /payments/)", 200, resp.status_code, resp.status_code)
+    rec.eq(s, "order still open", "pending", data(api.get(f"/orders/{oid}", "cashier")).get("status"))
+
+    whole = f"E2E{RUN}{secrets.randbelow(10**12):012d}"
+    png = render_slip("krungthai", D(420), whole, datetime.now(BKK) - timedelta(minutes=4))
+    resp = api.post("/slip-verify/upload", "cashier",
+                    files={"file": ("e2e-split-whole.png", png, "image/png")}, data={"order_id": str(oid)})
+    up, inner = data(resp), (data(resp).get("data") or {})
+    rec.eq(s, "a slip for the whole 420 → review, over_due, 300 still due",
+           (200, "review", "over_due", 300.0),
+           (resp.status_code, up.get("status"), inner.get("pending_reason"), inner.get("expected_amount")),
+           resp.status_code)
+
+    rest = f"E2E{RUN}{secrets.randbelow(10**12):012d}"
+    png = render_slip("krungthai", D(300), rest, datetime.now(BKK) - timedelta(minutes=2))
+    resp = api.post("/slip-verify/upload", "cashier",
+                    files={"file": ("e2e-split-rest.png", png, "image/png")}, data={"order_id": str(oid)})
+    up, inner = data(resp), (data(resp).get("data") or {})
+    rec.eq(s, "a slip for the 300 → review for the bank check", (200, "review", 300.0, "bank_check"),
+           (resp.status_code, up.get("status"), inner.get("amount"), inner.get("pending_reason")), resp.status_code)
+    vid = inner.get("verification_id")
+    rec.check(s, "verification id", vid is not None, "id", vid)
+    if vid is None:
+        rec.finish(s)
+
+    resp = api.post(f"/slip-verify/{vid}/approve", "manager",
+                    json={"confirmed_amount": "420.00", "bank_reference": rest, "note": "E2E split"})
+    rec.eq(s, "approving the whole 420 → 400 OVERPAYMENT", (400, "OVERPAYMENT"),
+           (resp.status_code, resp.json().get("code")), resp.status_code)
+    resp = api.post(f"/slip-verify/{vid}/approve", "manager",
+                    json={"confirmed_amount": "300.00", "bank_reference": rest, "note": "E2E split"})
+    rec.eq(s, "approving the 300 still due", (200, "verified"), (resp.status_code, data(resp).get("status")),
+           resp.status_code)
+    paid = data(api.get(f"/orders/{oid}", "manager"))
+    rec.eq(s, "order paid, amount_paid 420", ("paid", D(420)), (paid.get("status"), D(paid.get("amount_paid", 0))))
+    pays = rows(data(api.get(f"/payments/{oid}", "manager")))
+    rec.eq(s, "payments: 120 cash + 300 transfer = 420", [("bank_transfer", D(300)), ("cash", D(120))],
+           sorted((p["payment_method"], D(p["amount"])) for p in pays))
+
+    x = data(api.get(f"/shifts/{sid}/x-report", "cashier"))
+    rec.eq(s, "x-report counts 420 once (120 cash + 300 other)", (D(420), D(120), D(300), D(620)),
+           (D(x.get("total_sales", 0)), D(x.get("total_cash_sales", 0)), D(x.get("total_other_sales", 0)),
+            D(x.get("expected_cash") or 0)))
+    resp = api.put(f"/shifts/{sid}/close", "cashier", json={"closing_cash": "620.00"})
+    rec.eq(s, "close the second shift", 200, resp.status_code, resp.status_code)
+    rec.finish(s)
