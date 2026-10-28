@@ -93,6 +93,19 @@ def paid_net(db: Session, order_id: int) -> Decimal:
     )))
 
 
+def amount_due(order) -> Decimal:
+    """What money must settle on the order: its grand_total less the loyalty
+    points redeemed on it (1 point = 1 Baht, as settle_order applies them)."""
+    return Decimal(str(order.grand_total)) - Decimal(order.loyalty_points_redeemed or 0)
+
+
+def is_fully_paid(db: Session, order) -> bool:
+    """"Fully paid" everywhere (Phase 42): the money its completed payments
+    settled plus the value of the points redeemed covers grand_total. The
+    same sums as settle_order and the shift's X-report (payments net of change)."""
+    return paid_net(db, order.id) >= amount_due(order)
+
+
 def refunded(db: Session, order_id: int) -> Decimal:
     """What has been refunded on the order (completed refunds)."""
     return Decimal(str(db.scalar(

@@ -918,6 +918,14 @@ date too when it has one.
   guard refuses `:9000` and it runs its own OCR on `127.0.0.1:9100`. Tests
   point `OCR_SERVICE_URL` at a closed port.
 
+### Frontend blockers (Phase 42)
+
+**Deploy: no migration unless the row says so; deploy the code.** Rollback: the previous release.
+
+| Call | Before 42 | 42 |
+|---|---|---|
+| `PUT /orders/{id}/complete`, `PUT /orders/{id}/status` → `completed` of an order paid partly with points | **400** `BAD_REQUEST` "Order is not fully paid" when the cash handed over < `grand_total` | completes. **Fully paid** = what its completed payments settled (net of change) + the points redeemed (1 point = 1 Baht) ≥ `grand_total` (as checkout and the X-report count). Not fully paid → **400 `ORDER_NOT_FULLY_PAID`**, same `detail`. `POST /payments/` on such an order → 400 `OVERPAYMENT` (it took the payment before). |
+
 ---
 
 ## Catalog `/catalog`
@@ -1060,6 +1068,12 @@ a cashier → 403 `ORDER_READY_NEEDS_MANAGER`); audited as `ORDER.CANCEL_READY` 
 A coupon use is given back.
 
 ### PUT `/orders/{order_id}/complete`
+
+From `pending`, `ready` or `paid`. The order must be **fully paid**: the money
+its completed payments settled (net of change) plus the loyalty points
+redeemed on it (1 point = 1 Baht) cover `grand_total`; else **400
+`ORDER_NOT_FULLY_PAID`** (Phase 42). `PUT /orders/{id}/status` to `completed`
+checks the same.
 
 ### Order tracking (Tracking Token)
 

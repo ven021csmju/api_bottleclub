@@ -31,6 +31,8 @@ def mock_repo(monkeypatch):
         get_product = staticmethod(lambda db, pid: None)
 
     monkeypatch.setattr(svc, "OrderRepository", Stub)
+    # The payments of the order settled what amount_paid says (no database here).
+    monkeypatch.setattr(svc, "is_fully_paid", lambda db, order: order.amount_paid >= order.grand_total)
 
     return order_holder
 

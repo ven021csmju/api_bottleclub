@@ -8,7 +8,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.domains.orders.service import OrderService
 from app.db.repositories.returns import ReturnRepository
 from app.domains.returns.service import PAID_STATUSES
-from app.domains.shifts.drawer import CASH, current_shift, paid_net, refunded
+from app.domains.shifts.drawer import CASH, amount_due, current_shift, paid_net, refunded
 from app.services import user_events
 from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
@@ -41,7 +41,7 @@ class PaymentService:
         # makes the order paid.
         amount = Decimal(str(data["amount"]))
         method = data["payment_method"]
-        remaining = Decimal(str(order.grand_total)) - paid_net(db, order.id)
+        remaining = amount_due(order) - paid_net(db, order.id)
         if remaining <= 0:
             raise BadRequestException(detail="The order is already fully paid", code="OVERPAYMENT")
         if amount > remaining and method != CASH:

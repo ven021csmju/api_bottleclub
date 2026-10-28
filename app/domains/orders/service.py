@@ -31,7 +31,7 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, current_shift, paid_net
+from app.domains.shifts.drawer import CASH, current_shift, is_fully_paid, paid_net
 from app.shared.ordering import generate_order_number
 
 
@@ -804,10 +804,8 @@ class OrderService:
             raise InvalidOrderStateException(
                 detail=f"Cannot complete order in '{order.status}' status"
             )
-        if order.amount_paid < order.grand_total:
-            raise BadRequestException(
-                detail="Order is not fully paid"
-            )
+        if not is_fully_paid(db, order):
+            raise BadRequestException(detail="Order is not fully paid", code="ORDER_NOT_FULLY_PAID")
 
         order.status = "completed"
         order.completed_at = datetime.now(timezone.utc)
@@ -842,8 +840,8 @@ class OrderService:
 
         order.status = target_status
         if target_status == "completed":
-            if order.amount_paid < order.grand_total:
-                raise BadRequestException(detail="Order is not fully paid")
+            if not is_fully_paid(db, order):
+                raise BadRequestException(detail="Order is not fully paid", code="ORDER_NOT_FULLY_PAID")
             order.completed_at = datetime.now(timezone.utc)
         db.flush()
         db.commit()

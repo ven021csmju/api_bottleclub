@@ -9,6 +9,7 @@ from app.config.settings import settings
 from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
+from app.domains.shifts.drawer import is_fully_paid
 from app.services.fraud_detection import FraudAssessment, FraudDetectionService
 from app.services.image_service import MIME_EXTENSIONS, ImageService, UnsupportedImageType
 from app.services.ocr_service import OCRService
@@ -46,12 +47,11 @@ REJECTABLE_STATUSES = frozenset({
 HELD_FOR_BANK_CHECK_REASON = "รอตรวจกับธนาคาร (auto-verify ปิด)"
 
 
-def _order_is_paid(order: Order) -> bool:
-    """True once the order is settled or its recorded payments cover the total."""
+def _order_is_paid(db: Session, order: Order) -> bool:
+    """True once the order is settled or its payments and points cover the total."""
     if order.status in _SETTLED_ORDER_STATUSES:
         return True
-    grand_total = Decimal(str(order.grand_total))
-    return grand_total > 0 and Decimal(str(order.amount_paid)) >= grand_total
+    return Decimal(str(order.grand_total)) > 0 and is_fully_paid(db, order)
 
 
 def decide_status(
@@ -114,7 +114,7 @@ class SlipVerifyService:
             _log_attempt(db, user, order_id, None, None, None, 404, "order_not_found", None, "Order not found", ip_address, user_agent)
             raise NotFoundException(detail="Order not found")
 
-        if _order_is_paid(order):
+        if _order_is_paid(db, order):
             _log_attempt(db, user, order_id, None, None, None, 200, "order_already_paid", None, "Order already paid", ip_address, user_agent)
             return _error_response("order_already_paid", "รายการคำสั่งซื้อได้รับการชำระเงินแล้ว", 200)
 
@@ -488,11 +488,11 @@ class SlipVerifyService:
         )
 
         # Re-approving the slip that already settled this order is a no-op.
-        if verification.status == "verified" and verification.payment_id is not None and _order_is_paid(order):
+        if verification.status == "verified" and verification.payment_id is not None and _order_is_paid(db, order):
             return verification
         # The order row is locked above, so a second approval waits here and
         # then sees the first one's payment instead of adding another.
-        if _order_is_paid(order):
+        if _order_is_paid(db, order):
             raise ConflictException(detail="Order is already paid", code="ORDER_ALREADY_PAID")
         if verification.status not in APPROVABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be approved")
