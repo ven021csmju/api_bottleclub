@@ -23,7 +23,8 @@ class CouponCreate(BaseModel):
     # None: every branch.
     branch_id: Optional[int] = None
     max_uses: Optional[int] = Field(None, gt=0)
-    max_uses_per_customer: int = Field(1, gt=0)
+    # None: no per-customer limit; the coupon is then used without a customer too.
+    max_uses_per_customer: Optional[int] = Field(1, gt=0)
     # Without an offset: store time (STORE_TIMEZONE).
     start_date: StoreDateTime
     end_date: StoreDateTime
@@ -47,7 +48,7 @@ class CouponResponse(BaseModel):
     min_order_amount: Decimal = Decimal("0")
     branch_id: Optional[int] = None
     max_uses: Optional[int] = None
-    max_uses_per_customer: int = 1
+    max_uses_per_customer: Optional[int] = 1
     used_count: int
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
@@ -59,7 +60,8 @@ class CouponResponse(BaseModel):
 
 class CouponValidate(BaseModel):
     code: str
-    customer_id: int
+    # Needed only by a coupon with a per-customer limit (else 422 COUPON_CUSTOMER_REQUIRED).
+    customer_id: Optional[int] = None
     # The branch the order is at; None: not checked.
     branch_id: Optional[int] = None
 

@@ -784,8 +784,9 @@ coupon_id, order_id FROM coupon_usages GROUP BY 1, 2 HAVING count(*) > 1;`
   `COUPON_NOT_FOUND`, `COUPON_INACTIVE`, `COUPON_NOT_STARTED`,
   `COUPON_EXPIRED` (dates are store time), `COUPON_PROMOTION_ENDED` (its
   promotion inactive or past `ends_at`), `COUPON_WRONG_BRANCH`,
-  `COUPON_USED_UP` (`max_uses`), `COUPON_NEEDS_CUSTOMER` (a coupon needs
-  `customer_id`), `COUPON_CUSTOMER_LIMIT` (`max_uses_per_customer`),
+  `COUPON_USED_UP` (`max_uses`), `COUPON_CUSTOMER_REQUIRED` (a coupon with a
+  per-customer limit needs `customer_id`; `COUPON_NEEDS_CUSTOMER` before
+  Phase 42), `COUPON_CUSTOMER_LIMIT` (`max_uses_per_customer`),
   `COUPON_MIN_ORDER`, `COUPON_HAS_NO_DISCOUNT`, `COUPON_WITH_MANUAL_DISCOUNT`
   (not with a typed-in order or line discount). At checkout: another coupon on
   an order that has one → **409 `COUPON_ALREADY_APPLIED`** (the same one again
@@ -927,13 +928,14 @@ date too when it has one.
 
 ### Frontend blockers (Phase 42)
 
-**Deploy: no migration unless the row says so; deploy the code.** Rollback: the previous release.
+**Deploy: apply migration 020 (`migrations/020_coupon_without_customer.sql`), then the code.** Rollback: the previous release; `020_coupon_without_customer.rollback.sql` only after it, and it refuses while a coupon has no per-customer limit or a use has no customer.
 
 | Call | Before 42 | 42 |
 |---|---|---|
 | `PUT /orders/{id}/complete`, `PUT /orders/{id}/status` → `completed` of an order paid partly with points | **400** `BAD_REQUEST` "Order is not fully paid" when the cash handed over < `grand_total` | completes. **Fully paid** = what its completed payments settled (net of change) + the points redeemed (1 point = 1 Baht) ≥ `grand_total` (as checkout and the X-report count). Not fully paid → **400 `ORDER_NOT_FULLY_PAID`**, same `detail`. `POST /payments/` on such an order → 400 `OVERPAYMENT` (it took the payment before). |
 | **A route that needs a branch, without `X-Branch-Id`** (a user whose roles are all branch roles; anyone on the *required* routes) | a user whose roles are all branch roles: **403** `FORBIDDEN` "Missing required permission: …"; a Superadmin / organization-wide role on the *required* routes (`POST/GET /orders/`, KDS queues, `/returns/`, `POST /transfers/`, reports, `/inventory/balances`, `/low-stock`, `GET /shifts/`): **401** `UNAUTHORIZED` "X-Branch-Id header is required" | **400 `BRANCH_REQUIRED`** `"กรุณาเลือกสาขา: ส่ง header X-Branch-Id"`. Pick a branch and send it; never log out on it. A permission held nowhere stays 403 `FORBIDDEN`; another branch's record stays 404. |
 | CORS `Access-Control-Expose-Headers` (headers a browser may read) | `Deprecation`, `Link` | `X-Request-Id`, `Idempotent-Replayed`, `Deprecation`, `Link`, `Retry-After`. A **429** now carries `Retry-After` (seconds: the limit's whole window, e.g. 60 for login). |
+| `POST /coupons/validate` without `customer_id`; a coupon in an order without a customer | always **422** (`"Field required"` / `COUPON_NEEDS_CUSTOMER`); every coupon had a per-customer limit | **Migration 020 (apply before the code).** `max_uses_per_customer: null` = no per-customer limit: validated and used without a customer. A coupon with a limit and no customer → **422 `COUPON_CUSTOMER_REQUIRED`** (renamed from `COUPON_NEEDS_CUSTOMER`), at `/validate` too. Existing coupons keep their limit. |
 
 ---
 
@@ -1332,7 +1334,7 @@ the envelope policy).
   "min_order_amount": 0,
   "branch_id": 1 | null,
   "max_uses": 100 | null,
-  "max_uses_per_customer": 1,
+  "max_uses_per_customer": 1 | null,
   "start_date": "2026-09-01T00:00:00",
   "end_date": "2026-09-30T23:59:59"
 }
@@ -1340,6 +1342,9 @@ the envelope policy).
 Dates without an offset are store time. `promotion_id` must name a promotion
 (422 `PROMOTION_NOT_FOUND`); `branch_id` null = every branch. Used with
 `coupon_code` on `POST /orders/` or checkout (Phase 38c).
+`max_uses_per_customer` (default 1): `null` = no per-customer limit (Phase 42,
+migration 020); such a coupon is validated and used **without a customer**.
+With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 
 ### GET `/coupons/`  `?page=&per_page=`
 ### GET `/coupons/{coupon_id}`
@@ -1347,7 +1352,10 @@ Dates without an offset are store time. `promotion_id` must name a promotion
 
 ### POST `/coupons/validate`
 ```json
-// Request: { "code": "SUMMER10", "customer_id": 1, "branch_id": 1 | null }
+// Request: { "code": "SUMMER10", "customer_id": 1 | omitted, "branch_id": 1 | null }
+// customer_id is needed only by a coupon with max_uses_per_customer (else 422
+// COUPON_CUSTOMER_REQUIRED, an error body, not "valid": false). Before Phase 42
+// it was always required (422 "Field required").
 // Response 200:
 {
   "valid": true,

@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
+from sqlalchemy import null
 from sqlalchemy.orm import Session
 
 from app.db.models import Coupon, CouponUsage, Order
@@ -26,7 +27,7 @@ MESSAGES = {
     "COUPON_PROMOTION_ENDED": "The coupon's promotion has ended",
     "COUPON_WRONG_BRANCH": "Coupon is not valid at this branch",
     "COUPON_USED_UP": "Coupon usage limit reached",
-    "COUPON_NEEDS_CUSTOMER": "A coupon needs a customer on the order",
+    "COUPON_CUSTOMER_REQUIRED": "This coupon has a per-customer limit: a customer is required",
     "COUPON_CUSTOMER_LIMIT": "Customer has reached per-customer usage limit",
     "COUPON_HAS_NO_DISCOUNT": "Coupon gives no discount",
 }
@@ -54,8 +55,10 @@ def _problem(
         return "COUPON_WRONG_BRANCH"
     if coupon.max_uses is not None and coupon.used_count >= coupon.max_uses:
         return "COUPON_USED_UP"
+    if coupon.max_uses_per_customer is None:
+        return None  # no per-customer limit: no customer needed
     if customer_id is None:
-        return "COUPON_NEEDS_CUSTOMER"
+        return "COUPON_CUSTOMER_REQUIRED"
     if CouponRepository.count_customer_usage(db, coupon.id, customer_id) >= coupon.max_uses_per_customer:
         return "COUPON_CUSTOMER_LIMIT"
     return None
@@ -90,6 +93,9 @@ class CouponService:
                 db, organization_id, kwargs["branch_id"]):
             raise NotFoundException(detail="Branch not found")
 
+        if "max_uses_per_customer" in kwargs and kwargs["max_uses_per_customer"] is None:
+            # An explicit NULL (no per-customer limit): a bare None would get the column default 1.
+            kwargs["max_uses_per_customer"] = null()
         coupon = Coupon(organization_id=organization_id, **kwargs)
         CouponRepository.add_coupon(db, coupon)
         db.commit()
@@ -178,7 +184,7 @@ class CouponService:
         db: Session,
         organization_id: int,
         code: str,
-        customer_id: int,
+        customer_id: int | None,
         user_id: int | None = None,
         request_id: str = "",
         branch_id: int | None = None,
@@ -202,7 +208,7 @@ class CouponService:
         db: Session,
         organization_id: int,
         code: str,
-        customer_id: int,
+        customer_id: int | None,
         branch_id: int | None = None,
     ) -> dict:
         """The checks of :meth:`redeem` that need no order (the minimum and a
@@ -212,6 +218,9 @@ class CouponService:
             return {"valid": False, "code": "COUPON_NOT_FOUND", "message": MESSAGES["COUPON_NOT_FOUND"]}
 
         problem = _problem(db, coupon, store_now(), customer_id, branch_id)
+        if problem == "COUPON_CUSTOMER_REQUIRED":
+            # A request to fix, not an answer about the coupon.
+            raise UnprocessableException(detail=MESSAGES[problem], code=problem)
         if problem is not None:
             return {"valid": False, "coupon_id": coupon.id, "code": problem, "message": MESSAGES[problem]}
 
