@@ -139,8 +139,10 @@ class OrderRepository:
         customer_id: int | None = None,
         user_id: int | None = None,
         date_field: str = "created_at",
+        shift_id: int | None = None,
     ) -> tuple[list[Order], int]:
-        """``date_field``: created_at, or paid_at (only paid orders have one)."""
+        """``date_field``: created_at, or paid_at (only paid orders have one).
+        ``shift_id``: the orders of that shift (orders.shift_id, as a shift close counts them)."""
         moment = Order.paid_at if date_field == "paid_at" else Order.created_at
         query = (
             select(Order)
@@ -160,6 +162,8 @@ class OrderRepository:
             query = query.where(Order.customer_id == customer_id)
         if user_id:
             query = query.where(Order.user_id == user_id)
+        if shift_id is not None:
+            query = query.where(Order.shift_id == shift_id)
 
         query = query.order_by(Order.created_at.desc())
 

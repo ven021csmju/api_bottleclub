@@ -937,6 +937,7 @@ date too when it has one.
 | CORS `Access-Control-Expose-Headers` (headers a browser may read) | `Deprecation`, `Link` | `X-Request-Id`, `Idempotent-Replayed`, `Deprecation`, `Link`, `Retry-After`. A **429** now carries `Retry-After` (seconds: the limit's whole window, e.g. 60 for login). |
 | `POST /coupons/validate` without `customer_id`; a coupon in an order without a customer | always **422** (`"Field required"` / `COUPON_NEEDS_CUSTOMER`); every coupon had a per-customer limit | **Migration 020 (apply before the code).** `max_uses_per_customer: null` = no per-customer limit: validated and used without a customer. A coupon with a limit and no customer → **422 `COUPON_CUSTOMER_REQUIRED`** (renamed from `COUPON_NEEDS_CUSTOMER`), at `/validate` too. Existing coupons keep their limit. |
 | OpenAPI (`/openapi.json`, development only) of `POST /slip-verify/upload`, `/checkslip`, `GET /slip-verify/{id}`, `/slip-verify/order/{order_id}`, `GET /inventory/balances/{branch_id}/{product_id}`, `POST /inventory/adjust`, `GET /auth/google`, `GET /health/mongodb` | success schema `{}` (8 of 149 operations) | each has its model: `SlipUploadResult` (also for 400/404/415/422), `VerificationDetailRead`, `VerificationOfOrder[]`, `ProductBalance`, `MessageResponse`, a 302 redirect, `MongoHealth` (200/503); none is `{}`. **The answers are unchanged** (same fields; amounts stay JSON numbers). Schemas describe `data` inside the envelope. |
+| `GET /orders/?shift_id=` | ignored: every order of the branch | the orders of that shift (`orders.shift_id`); a shift of another branch / missing / another cashier's without `orders.read_branch` → **404** `Shift not found` |
 
 ---
 
@@ -1052,7 +1053,13 @@ Header `Idempotency-Key` required (or the body's `idempotency_key`); see Phase 3
 `coupon_code`: the system computes `coupon_discount` (not with `discount_amount`); see Phase 38c.
 
 ### GET `/orders/`
-Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=`
+Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=&shift_id=`
+
+`shift_id` (Phase 42): only the orders of that shift (`orders.shift_id`, the
+orders a shift close counts). The shift must be of the `X-Branch-Id` branch and
+the caller's own, or the caller holds `orders.read_branch` there; else **404**
+`"Shift not found"` (another branch, another organization, missing). E.g. the
+unpaid orders of my shift: `?shift_id=12&status=pending`.
 
 ### GET `/orders/{reference}` — ID หรือ order_number
 
