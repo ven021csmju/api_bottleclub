@@ -125,10 +125,11 @@ def test_refunds_never_exceed_what_was_paid(client: TestClient, session, world, 
 
 
 def test_a_payment_refund_counts_against_the_same_limit(client: TestClient, session, world, shop, as_, sale):
-    resp = client.post(f"{API}/payments/{sale['id']}/refund", headers=as_("ba_a", "A"),
+    # POST /payments/{id}/refund is the Superadmin's since Phase 40
+    resp = client.post(f"{API}/payments/{sale['id']}/refund", headers=as_("sa", "A"),
                        json={"refund_amount": "900.00", "refund_method": "cash", "reason": "too much"})
     assert (resp.status_code, resp.json()["code"]) == (400, "REFUND_EXCEEDS_PAID")
-    resp = client.post(f"{API}/payments/{sale['id']}/refund", headers=as_("ba_a", "A"),
+    resp = client.post(f"{API}/payments/{sale['id']}/refund", headers=as_("sa", "A"),
                        json={"refund_amount": "800.00", "refund_method": "cash", "reason": "goodwill"})
     assert resp.status_code in (200, 201), resp.text
     ret = _return(client, as_, sale, sale["wine_line"], 1).json()["data"]

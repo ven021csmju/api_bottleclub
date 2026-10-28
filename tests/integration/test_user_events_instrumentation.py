@@ -508,6 +508,15 @@ class TestRefundReturnEvents:
         order_id = body["data"]["id"]
         _checkout(client, multiperm_headers, order_id, "50.00")
 
+        # POST /payments/{id}/refund is the Superadmin's since Phase 40
+        from app.db.models import Role, UserRole
+
+        superadmin = Role(organization_id=seed_user["org_id"], name="Superadmin", is_system=True)
+        session.add(superadmin)
+        session.flush()
+        session.add(UserRole(user_id=seed_user["user_id"], role_id=superadmin.id, branch_id=None))
+        session.commit()
+
         resp = client.post(
             f"/api/v1/payments/{order_id}/refund",
             headers=multiperm_headers,

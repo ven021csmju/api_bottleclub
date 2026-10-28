@@ -10,6 +10,7 @@ from app.db.repositories.returns import ReturnRepository
 from app.domains.returns.service import PAID_STATUSES
 from app.domains.shifts.drawer import CASH, current_shift, paid_net, refunded
 from app.services import user_events
+from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
     BadRequestException,
     NotFoundException,
@@ -97,6 +98,7 @@ class PaymentService:
         user_id: int,
         data: dict,
         request_id: str = "",
+        audit: AuditContext | None = None,
     ) -> Refund:
         order = PaymentRepository.get_org_order(db, org_id, order_id)
 
@@ -137,6 +139,22 @@ class PaymentService:
 
         order.amount_paid = Decimal(str(order.amount_paid)) - refund_amount
         db.flush()
+        if audit is not None:
+            # In the same transaction: no refund without its audit line.
+            log_audit(
+                db=db,
+                ctx=audit,
+                action="PAYMENT.REFUND",
+                entity_type="refund",
+                entity_id=refund.id,
+                after_data={
+                    "order_id": order_id,
+                    "refund_number": refund.refund_number,
+                    "refund_amount": str(refund_amount),
+                    "refund_method": refund.refund_method,
+                    "reason": refund.reason,
+                },
+            )
         db.commit()
 
         db.refresh(refund)

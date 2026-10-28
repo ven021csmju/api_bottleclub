@@ -1,8 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class PaymentCreate(BaseModel):
@@ -31,4 +31,5 @@ class PaymentResponse(BaseModel):
 class PaymentRefundRequest(BaseModel):
     refund_amount: Decimal = Field(..., gt=0, decimal_places=2)
     refund_method: str = Field(..., max_length=30)
-    reason: str
+    # Money out without a return: why, in words (kept in audit_logs).
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]

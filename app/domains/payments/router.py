@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.middleware.access import Access, order_branch
-from app.middleware.auth import get_access, require_permission
+from app.middleware.auth import get_access, get_audit_context, require_permission
 from app.db.models import User
+from app.shared.audit import AuditContext
+from app.shared.exceptions import ForbiddenException
 from app.shared.idempotency import run_idempotent
 
 from .schemas import PaymentCreate, PaymentRefundRequest, PaymentResponse
@@ -57,9 +59,17 @@ def process_refund(
     body: PaymentRefundRequest,
     user: User = Depends(require_permission("payments.refund", scope="any")),
     access: Access = Depends(get_access),
+    audit: AuditContext = Depends(get_audit_context),
     db: Session = Depends(get_db),
 ) -> RefundResponse:
+    """Money out without a return (no stock comes back): a Superadmin only
+    (Phase 40), with a reason; each one is in audit_logs (PAYMENT.REFUND).
+    Staff refund through POST /returns/ and PUT /returns/{id}/process."""
     access.ensure_at("payments.refund", order_branch(db, access.org_id, order_id), "Order")
+    if not access.superadmin:
+        raise ForbiddenException(
+            detail="Only a Superadmin refunds without a return; use POST /returns/", code="SUPERADMIN_ONLY"
+        )
     refund = PaymentService.process_refund(
         db=db,
         org_id=user.organization_id,
@@ -67,5 +77,6 @@ def process_refund(
         user_id=user.id,
         data=body.model_dump(),
         request_id=getattr(request.state, "request_id", ""),
+        audit=audit,
     )
     return RefundResponse.model_validate(refund)
