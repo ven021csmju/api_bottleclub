@@ -472,6 +472,10 @@ stock_transfers GROUP BY 1;` (any `partially_received` → settle by hand).
 
 ## Authentication
 
+A route that needs a login answers **401 `UNAUTHORIZED`** when the request has
+no `Authorization: Bearer <access token>` or a bad one, before any other check
+(Phase 40; it was 422 without the header).
+
 **Header:** `Authorization: Bearer <access_token>`
 
 ### POST `/auth/login`
@@ -701,12 +705,14 @@ Another branch than the caller's → 404 (38b).
 ## Roles `/roles`
 
 ### GET `/roles/permissions/all`
+Permission `roles.read` at any branch (Phase 40; before: any login).
 ```json
 // Response: [{ "id": 1, "code": "orders.create", "module": "orders", "description": "string" }]
 ```
 
 ### GET `/roles/`
 ### GET `/roles/{role_id}`
+Permission `roles.read` at any branch (Phase 40; before: any login).
 
 ### POST `/roles/`
 ```json
@@ -882,6 +888,36 @@ date too when it has one.
 | `POST /purchases` `po_number` | `PO-0001-000001` (per organization) | `PO-YYYYMMDD-0001` |
 | Refund of a returned unit | its line × (paid ÷ lines), rounded per unit | its line's share of what was paid (`prorate`) ÷ quantity: can differ by a satang |
 
+### Endpoint fixes (Phase 40)
+
+**Deploy: no migration; deploy the code.** Rollback: the previous release.
+
+**Breaking changes for the frontend — read the first line**
+
+| Call | Before 40 | 40 |
+|---|---|---|
+| **Any route that needs a login, called without `Authorization`** | **422 `VALIDATION_ERROR`** (`"Field required"`, mixed with any other missing field) | **401 `UNAUTHORIZED`** `"Not authenticated"`, before any other check of the request. A wrong or expired token stays 401. **Treat every 401 as "log in again"; a 422 now always means a bad request.** |
+| `GET /roles/`, `/roles/{id}`, `/roles/permissions/all` | any logged-in user | `roles.read` at any branch (Manager, Superadmin); Cashier / Kitchen / Bar → **403** |
+| `POST /payments/{order_id}/refund` | any holder of `payments.refund` (Manager); any `reason` | **Superadmin only** (else **403 `SUPERADMIN_ONLY`**, nothing written); `reason` required and not blank (**422**); written to `audit_logs` (`PAYMENT.REFUND`). Staff refund through `POST /returns/` + `PUT /returns/{id}/process`. |
+| `POST /slip-verify/upload`, `/checkslip` while the OCR service is down or times out | **422** `ocr_failed` "ไม่สามารถอ่านข้อความจากสลิปได้" | **200** `success: true`, `status: "review"`, "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจ", `data.pending_reason: "ocr_unavailable"`, `data.verification_id`; the slip waits in `GET /slip-verify/list?status=review` for staff to approve. A slip the OCR read and found nothing in: unchanged (422 `ocr_failed`). |
+| `GET /health/mongodb` | always 200 `{status, database, uri[, error]}` | **200** `{"status": "connected"}` / **503** `{"status": "disconnected"}`; no host, database name or error text. `GET /health` unchanged. |
+| `POST /slip-verify/checkslip` | — | **deprecated** (still served): every answer has `Deprecation: true` and `Link: </api/v1/slip-verify/upload>; rel="successor-version"` (exposed to browsers by CORS). Call `/upload`. |
+| `POST`, `PUT /catalog/suppliers/{id}/products[/{link}]` | **500** after saving (a retry then 409) | 201 / 200 with the link, `product_name`, `product_sku` |
+| `GET /audit/{log_id}` | **500** | 200 with the log (404 for another organization's) |
+| `GET /api/admin/promotions` (new) | — | every promotion, inactive and ended ones too; `promotions.read` at any branch (Manager, Superadmin); raw payload like `GET /api/promotions`, which stays public |
+
+**Rules**
+
+- **401 vs 422:** a route that needs a login checks the token first. No
+  `Authorization` header, an empty one, a scheme other than `Bearer`, or a bad
+  token → 401 `UNAUTHORIZED`. Only a request with a valid token can get 422.
+- **`coupons.update`** guards nothing yet: there is **no** `PUT /coupons/{id}`
+  (405). A coupon is changed by deleting it (`is_active: false`) and creating
+  another.
+- **OCR for staging:** staging never calls production's OCR (`:9000`); its
+  guard refuses `:9000` and it runs its own OCR on `127.0.0.1:9100`. Tests
+  point `OCR_SERVICE_URL` at a closed port.
+
 ---
 
 ## Catalog `/catalog`
@@ -940,6 +976,8 @@ POST   /catalog/suppliers/{id}/products      { "product_id", "cost_price", "supp
 PUT    /catalog/suppliers/{id}/products/{sp_id}  { "cost_price"?, "supplier_sku"? }
 DELETE /catalog/suppliers/{id}/products/{sp_id}  → 204
 ```
+Each link answers `{ id, supplier_id, product_id, cost_price, supplier_sku,
+product_name, product_sku }` (POST and PUT were 500 up to v0.1.14).
 
 ---
 
@@ -1097,6 +1135,9 @@ Header `Idempotency-Key` required (38b).
 Order of another organization → 404.
 
 ### POST `/payments/{order_id}/refund`
+Money out without a return (no stock comes back). **Superadmin only** (403
+`SUPERADMIN_ONLY`); `reason` required, not blank (422); audited as
+`PAYMENT.REFUND` (Phase 40).
 ```json
 { "refund_amount": 100.00, "refund_method": "cash", "reason": "string" }
 ```
@@ -1233,6 +1274,10 @@ legacy `/api/promotions` path and return **raw** payloads (no envelope); see
 `app/middleware/envelope.py:26-27` (`RAW_PREFIXES`).
 
 ### GET `/api/promotions`  `?featured=&page=&per_page=&is_active=`
+Public: running promotions only (active, not ended).
+### GET `/api/admin/promotions`
+Phase 40. Every promotion, inactive and ended ones too, by `sortOrder`;
+permission `promotions.read` at any branch. `{"promotions": [...]}` (raw).
 ### POST `/api/admin/promotions`
 #### Body: `{ "name": "...", "description": "...", "promotion_type": "...", ... }`
 `endsAt` (38c): when it ends (without an offset: store time); null = no end. An
@@ -1488,6 +1533,9 @@ Query: `?from_date=2026-09-01&to_date=2026-09-30`
 Query: `?page=&per_page=&user_id=&action=&entity_type=&date_from=&date_to=`
 
 ### GET `/audit/{log_id}`
+One log (`id`, `user_id`, `user_name`, `action`, `entity_type`, `entity_id`,
+`before_data`, `after_data`, `ip_address`, `created_at`); another organization's
+→ 404. (500 up to v0.1.14.)
 
 ---
 
@@ -1496,7 +1544,10 @@ Query: `?page=&per_page=&user_id=&action=&entity_type=&date_from=&date_to=`
 ### POST `/slip-verify/upload`
 Permission `payments.create`, or the caller created the order. Otherwise
 403 `FORBIDDEN`, whether the order exists or not. `POST /slip-verify/checkslip`
-is the same route under another name. `data.date` / `data.time` are the slip's
+is the same route under another name, **deprecated** since Phase 40
+(`Deprecation: true` on every answer; use `/upload`). OCR down or timed out
+(Phase 40): 200 `success: true`, `status: "review"`, `pending_reason:
+"ocr_unavailable"`; the slip waits for staff. `data.date` / `data.time` are the slip's
 own date and time (Thai local time, no offset), as read; the time is stored
 since Phase 36h (before, a slip with a readable time failed with 500).
 ```
