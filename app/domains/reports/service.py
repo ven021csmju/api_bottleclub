@@ -1,4 +1,6 @@
 from datetime import date
+from decimal import Decimal
+from itertools import groupby
 
 from sqlalchemy import func, select
 
@@ -7,6 +9,59 @@ from sqlalchemy.orm import Session
 from app.db.repositories.reports import ReportRepository
 from app.db.models import Customer, Order, PaymentVerification
 from app.shared.clock import store_today
+from app.shared.money import prorate
+
+UNCATEGORIZED = "Uncategorized"
+
+
+def _d(value) -> Decimal:
+    return Decimal(str(value or 0))
+
+
+def _money(row) -> dict:
+    """gross / discounts / coupon / net of a ReportRepository._money row; the
+    one place net_sales is computed: gross - every discount, before refunds."""
+    gross, discounts, coupons = _d(row.gross_sales), _d(row.discounts), _d(row.coupon_discounts)
+    return {
+        "gross_sales": gross,
+        "discounts": discounts,
+        "coupon_discounts": coupons,
+        "net_sales": gross - discounts - coupons,
+    }
+
+
+def _line_nets(rows) -> list[tuple]:
+    """(line, net) for ReportRepository.sold_lines rows: each line's total less
+    its share of the order's discounts (typed in + coupon), spread with
+    ``prorate`` as refunds spread payments. The nets of an order add up to its
+    net, so the nets of all lines add up to net_sales."""
+    out = []
+    for _, order_lines in groupby(rows, key=lambda r: r.order_id):
+        lines = list(order_lines)
+        shares = prorate(_d(lines[0].order_discount), [_d(line.line_total) for line in lines])
+        out.extend((line, _d(line.line_total) - share) for line, share in zip(lines, shares))
+    return out
+
+
+def _by_product(line_nets) -> list[dict]:
+    """The 10 products sold most (bottles), revenue after the order discounts."""
+    totals: dict[str, list] = {}
+    for line, net in line_nets:
+        t = totals.setdefault(line.product_name, [0, Decimal("0")])
+        t[0] += int(line.quantity)
+        t[1] += net
+    top = sorted(totals.items(), key=lambda kv: (-kv[1][0], kv[0]))[:10]
+    return [{"product_name": name, "total_qty": qty, "total_revenue": float(rev)} for name, (qty, rev) in top]
+
+
+def _by_category(line_nets) -> list[dict]:
+    """Revenue after the order discounts per category; they add up to net_sales."""
+    totals: dict[str, list] = {}
+    for line, net in line_nets:
+        t = totals.setdefault(line.category or UNCATEGORIZED, [Decimal("0"), 0])
+        t[0] += net
+        t[1] += int(line.quantity)
+    return [{"category": name, "revenue": float(rev), "qty": qty} for name, (rev, qty) in sorted(totals.items())]
 
 
 class ReportService:
@@ -54,13 +109,14 @@ class ReportService:
             .order_by(Order.created_at.desc())
             .limit(10)
         ).all()
-        top_products = ReportRepository.top_products(
+        lines = ReportRepository.sold_lines(
             db, organization_id, month_start, today, order_source="ecommerce"
         )
 
         return {
-            "sales_today": float(today_totals.total_sales),
-            "sales_this_month": float(month_totals.total_sales),
+            # net_sales: gross less every discount, before refunds
+            "sales_today": float(_money(today_totals)["net_sales"]),
+            "sales_this_month": float(_money(month_totals)["net_sales"]),
             "pending_orders_count": int(pending_orders),
             "pending_slips_count": int(pending_slips),
             "total_members": int(total_members),
@@ -77,11 +133,11 @@ class ReportService:
             ],
             "top_selling_wines": [
                 {
-                    "product_name": row.product_name,
-                    "sold_bottles": int(row.total_qty),
-                    "total_revenue": float(row.total_revenue),
+                    "product_name": row["product_name"],
+                    "sold_bottles": row["total_qty"],
+                    "total_revenue": row["total_revenue"],
                 }
-                for row in top_products
+                for row in _by_product(_line_nets(lines))
             ],
         }
 
@@ -93,27 +149,18 @@ class ReportService:
         date_to: date,
         branch_id: int | None = None,
         order_source: str | None = None,
+        by_category: bool = False,
     ) -> dict:
         totals = ReportRepository.sales_totals(
             db, organization_id, date_from, date_to, branch_id, order_source
         )
+        money = _money(totals)
+        total_orders = int(totals.order_count)
+        net = money["net_sales"]
 
-        total_sales = float(totals.total_sales)
-        total_orders = totals.total_orders
-        avg_order = total_sales / total_orders if total_orders else 0.0
-
-        top_products = ReportRepository.top_products(
+        line_nets = _line_nets(ReportRepository.sold_lines(
             db, organization_id, date_from, date_to, branch_id, order_source
-        )
-
-        top_products_list = [
-            {
-                "product_name": row.product_name,
-                "total_qty": int(row.total_qty),
-                "total_revenue": float(row.total_revenue),
-            }
-            for row in top_products
-        ]
+        ))
 
         sales_by_hour = ReportRepository.sales_by_hour(
             db, organization_id, date_from, date_to, branch_id, order_source
@@ -123,18 +170,19 @@ class ReportService:
             {
                 "hour": int(row.hour),
                 "order_count": int(row.order_count),
-                "sales": float(row.sales),
+                "sales": float(_money(row)["net_sales"]),
             }
             for row in sales_by_hour
         ]
 
         return {
-            "total_sales": total_sales,
+            **{k: float(v) for k, v in money.items()},
+            "total_sales": float(net),
             "total_orders": total_orders,
-            "average_order_value": avg_order,
-            "top_products": top_products_list,
+            "average_order_value": float(net) / total_orders if total_orders else 0.0,
+            "top_products": _by_product(line_nets),
             "sales_by_hour": sales_by_hour_list,
-            "sales_by_category": [],
+            "sales_by_category": _by_category(line_nets) if by_category else [],
         }
 
     @staticmethod
@@ -152,16 +200,17 @@ class ReportService:
             db, organization_id, target_date, branch_id
         )
 
-        total_revenue = float(totals.total_revenue)
-        total_ref = float(total_refunds)
+        money = _money(totals)
+        refunds = _d(total_refunds)
 
         return {
             "date": target_date,
             "branch_id": branch_id,
-            "total_orders": int(totals.total_orders),
-            "total_revenue": total_revenue,
-            "total_refunds": total_ref,
-            "net_sales": total_revenue - total_ref,
+            "total_orders": int(totals.order_count),
+            **{k: float(v) for k, v in money.items()},
+            "total_revenue": float(money["net_sales"]),
+            "total_refunds": float(refunds),
+            "net_after_refunds": float(money["net_sales"] - refunds),
         }
 
     @staticmethod
@@ -221,9 +270,6 @@ class ReportService:
         date_to: date,
         branch_id: int | None = None,
     ) -> dict:
-        totals = ReportRepository.sales_totals(
-            db, organization_id, date_from, date_to, branch_id
-        )
         rows = ReportRepository.financial_report(
             db, organization_id, date_from, date_to, branch_id
         )
@@ -234,49 +280,45 @@ class ReportService:
             db, organization_id, date_from, date_to, branch_id
         )
 
-        refund_by_date = {r.date: r.refunds for r in refund_rows}
+        refund_by_date = {r.date: _d(r.refunds) for r in refund_rows}
         payment_by_method = {r.payment_method: r.amount for r in payment_rows}
 
-        gross_sales = float(totals.total_sales)
-        discounts = 0.0
-        coupon_discounts = 0.0
-        tax = 0.0
+        total = {"gross_sales": Decimal("0"), "discounts": Decimal("0"), "coupon_discounts": Decimal("0"),
+                 "net_sales": Decimal("0")}
+        tax = Decimal("0")
         order_count = 0
         daily: list[dict] = []
         for row in rows:
-            row_date = row.date
+            money = _money(row)
+            refunds = refund_by_date.get(row.date, Decimal("0"))
             daily.append(
                 {
-                    "date": row_date,
-                    "gross_sales": float(row.gross_sales),
-                    "discounts": float(row.discounts),
-                    "coupon_discounts": float(row.coupon_discounts),
-                    "net_sales": float(row.gross_sales) - float(row.discounts)
-                    - float(refund_by_date.get(row_date, 0)),
-                    "tax": float(row.tax),
-                    "refunds": float(refund_by_date.get(row_date, 0)),
+                    "date": row.date,
+                    **{k: float(v) for k, v in money.items()},
+                    "tax": float(_d(row.tax)),
+                    "refunds": float(refunds),
+                    "net_after_refunds": float(money["net_sales"] - refunds),
                     "cogs": None,
                     "payment_methods": {},
                 }
             )
-            discounts += float(row.discounts)
-            coupon_discounts += float(row.coupon_discounts)
-            tax += float(row.tax)
+            for k in total:
+                total[k] += money[k]
+            tax += _d(row.tax)
+            order_count += int(row.order_count)
 
-        total_refunds = sum(float(v) for v in refund_by_date.values())
-        net_sales = gross_sales - discounts - total_refunds
+        # Refunds of the period, also on days without a sale.
+        total_refunds = sum(refund_by_date.values(), Decimal("0"))
 
         return {
             "date_from": date_from,
             "date_to": date_to,
             "branch_id": branch_id,
-            "gross_sales": gross_sales,
-            "discounts": discounts,
-            "coupon_discounts": coupon_discounts,
-            "net_sales": net_sales,
-            "tax": tax,
-            "refunds": total_refunds,
-            "total_orders": int(totals.total_orders),
+            **{k: float(v) for k, v in total.items()},
+            "tax": float(tax),
+            "refunds": float(total_refunds),
+            "net_after_refunds": float(total["net_sales"] - total_refunds),
+            "total_orders": order_count,
             "daily": daily,
             "payment_methods": payment_by_method,
         }

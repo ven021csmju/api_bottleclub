@@ -61,14 +61,11 @@ def get_sales_report(
             code="VALIDATION_ERROR",
         )
     order_source_value = order_source.value if order_source else None
-    result = ReportService.get_sales_report(
-        db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value
-    )
     # Optional ``group_by`` — currently only used to switch category grouping.
-    if group_by == "category":
-        result["sales_by_category"] = _category_breakdown(
-            db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value
-        )
+    result = ReportService.get_sales_report(
+        db, user.organization_id, resolved_from, resolved_to, branch_id, order_source_value,
+        by_category=group_by == "category",
+    )
     return SalesReportResponse(**result)
 
 
@@ -153,49 +150,3 @@ def get_loyalty_report(
     )
     return LoyaltyReportResponse(**result)
 
-
-def _category_breakdown(
-    db: Session,
-    organization_id: int,
-    date_from: date,
-    date_to: date,
-    branch_id: Optional[int],
-    order_source: Optional[str] = None,
-) -> list[dict]:
-    from app.db.repositories.reports.report_repository import SOLD_STATUSES
-    from app.db.models import Category, Product, OrderItem, Order
-    from sqlalchemy import func, select
-
-    from app.shared.clock import in_store_days
-
-    order_filter = [
-        Order.organization_id == organization_id,
-        Order.status.in_(SOLD_STATUSES),
-        *in_store_days(Order.paid_at, date_from, date_to),
-    ]
-    if branch_id:
-        order_filter.append(Order.branch_id == branch_id)
-    if order_source:
-        order_filter.append(Order.order_source == order_source)
-
-    rows = db.execute(
-        select(
-            func.coalesce(Category.name, "Uncategorized").label("category"),
-            func.coalesce(func.sum(OrderItem.line_total), 0).label("revenue"),
-            func.coalesce(func.sum(OrderItem.quantity), 0).label("qty"),
-        )
-        .select_from(OrderItem)
-        .join(Order, Order.id == OrderItem.order_id)
-        .join(Product, Product.id == OrderItem.product_id)
-        .outerjoin(Category, Category.id == Product.category_id)
-        .where(*order_filter)
-        # Category.name, not the coalesce(): its bound "Uncategorized" would be
-        # a different parameter in SELECT and GROUP BY (GroupingError, 500).
-        .group_by(Category.name)
-        .order_by(func.coalesce(Category.name, "Uncategorized"))
-    ).all()
-
-    return [
-        {"category": row.category, "revenue": float(row.revenue), "qty": int(row.qty)}
-        for row in rows
-    ]

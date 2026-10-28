@@ -41,6 +41,52 @@ class ReportRepository:
         return order_filter
 
     @staticmethod
+    def _money(order_filter: list, *keys):
+        """The money of the sold orders matching ``order_filter``, one row per
+        ``keys`` (none: one row for all):
+
+        - gross_sales: before every discount: what the orders charged
+          (grand_total) with every discount added back
+        - discounts: typed in, on lines (order_items.discount_amount) and on
+          the order (orders.discount_amount)
+        - coupon_discounts: orders.coupon_discount
+
+        So net = gross_sales - discounts - coupon_discounts is the orders'
+        grand_total; the caller computes it (ReportService, one place)."""
+        items = (
+            select(
+                OrderItem.order_id.label("order_id"),
+                func.sum(OrderItem.discount_amount).label("line_discounts"),
+            )
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(*order_filter)
+            .group_by(OrderItem.order_id)
+            .subquery()
+        )
+        discounts = func.coalesce(func.sum(items.c.line_discounts), 0) + func.coalesce(
+            func.sum(Order.discount_amount), 0
+        )
+        coupons = func.coalesce(func.sum(Order.coupon_discount), 0)
+        stmt = (
+            select(
+                *keys,
+                func.count(Order.id).label("order_count"),
+                (
+                    func.coalesce(func.sum(Order.grand_total), 0) + discounts + coupons
+                ).label("gross_sales"),
+                discounts.label("discounts"),
+                coupons.label("coupon_discounts"),
+                func.coalesce(func.sum(Order.tax_amount), 0).label("tax"),
+            )
+            .select_from(Order)
+            .outerjoin(items, items.c.order_id == Order.id)
+            .where(*order_filter)
+        )
+        if keys:
+            stmt = stmt.group_by(*keys).order_by(*keys)
+        return stmt
+
+    @staticmethod
     def sales_totals(
         db: Session,
         organization_id: int,
@@ -52,15 +98,10 @@ class ReportRepository:
         order_filter = ReportRepository._order_filter(
             organization_id, date_from, date_to, branch_id, order_source
         )
-        return db.execute(
-            select(
-                func.coalesce(func.sum(Order.grand_total), 0).label("total_sales"),
-                func.coalesce(func.count(Order.id), 0).label("total_orders"),
-            ).where(*order_filter)
-        ).one()
+        return db.execute(ReportRepository._money(order_filter)).one()
 
     @staticmethod
-    def top_products(
+    def sold_lines(
         db: Session,
         organization_id: int,
         date_from: date,
@@ -68,21 +109,29 @@ class ReportRepository:
         branch_id: int | None = None,
         order_source: str | None = None,
     ) -> list[tuple]:
+        """Every line of the sold orders, with its category and the order-level
+        discounts (typed in + coupon) to spread over the order's lines; by
+        order, then line, as ``prorate`` takes them."""
         order_filter = ReportRepository._order_filter(
             organization_id, date_from, date_to, branch_id, order_source
         )
-        return db.execute(
-            select(
-                OrderItem.product_name,
-                func.sum(OrderItem.quantity).label("total_qty"),
-                func.sum(OrderItem.line_total).label("total_revenue"),
-            )
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(*order_filter)
-            .group_by(OrderItem.product_name)
-            .order_by(func.sum(OrderItem.quantity).desc())
-            .limit(10)
-        ).all()
+        return list(
+            db.execute(
+                select(
+                    OrderItem.order_id,
+                    OrderItem.product_name,
+                    Category.name.label("category"),
+                    OrderItem.quantity,
+                    OrderItem.line_total,
+                    (Order.discount_amount + Order.coupon_discount).label("order_discount"),
+                )
+                .join(Order, Order.id == OrderItem.order_id)
+                .outerjoin(Product, Product.id == OrderItem.product_id)
+                .outerjoin(Category, Category.id == Product.category_id)
+                .where(*order_filter)
+                .order_by(OrderItem.order_id, OrderItem.id)
+            ).all()
+        )
 
     @staticmethod
     def sales_by_hour(
@@ -98,16 +147,7 @@ class ReportRepository:
         )
         # The hour (shop's wall clock, STORE_TIMEZONE) the sale was paid.
         hour = store_hour(Order.paid_at)
-        return db.execute(
-            select(
-                hour.label("hour"),
-                func.count(Order.id).label("order_count"),
-                func.coalesce(func.sum(Order.grand_total), 0).label("sales"),
-            )
-            .where(*order_filter)
-            .group_by(hour)
-            .order_by(hour)
-        ).all()
+        return list(db.execute(ReportRepository._money(order_filter, hour.label("hour"))).all())
 
     @staticmethod
     def daily_totals(
@@ -121,12 +161,7 @@ class ReportRepository:
         if branch_id:
             order_filter.append(Order.branch_id == branch_id)
 
-        return db.execute(
-            select(
-                func.coalesce(func.count(Order.id), 0).label("total_orders"),
-                func.coalesce(func.sum(Order.grand_total), 0).label("total_revenue"),
-            ).where(*order_filter)
-        ).one()
+        return db.execute(ReportRepository._money(order_filter)).one()
 
     @staticmethod
     def refund_total(
@@ -211,21 +246,7 @@ class ReportRepository:
             order_filter.append(Order.branch_id == branch_id)
 
         sales_day = store_sales_day(Order.paid_at)
-        return list(
-            db.execute(
-                select(
-                    sales_day.label("date"),
-                    func.coalesce(func.sum(Order.grand_total), 0).label("gross_sales"),
-                    func.coalesce(func.sum(Order.discount_amount), 0).label("discounts"),
-                    func.coalesce(func.sum(Order.coupon_discount), 0).label("coupon_discounts"),
-                    func.coalesce(func.sum(Order.tax_amount), 0).label("tax"),
-                    func.count(Order.id).label("order_count"),
-                )
-                .where(*order_filter)
-                .group_by(sales_day)
-                .order_by(sales_day)
-            ).all()
-        )
+        return list(db.execute(ReportRepository._money(order_filter, sales_day.label("date"))).all())
 
     @staticmethod
     def refund_summary(

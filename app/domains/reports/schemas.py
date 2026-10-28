@@ -10,7 +10,23 @@ class SalesReportRequest(BaseModel):
     branch_id: Optional[int] = None
 
 
+# Money in every report (Phase 38d), over the paid orders (paid / completed,
+# on the day paid):
+#   gross_sales       before every discount (sum of unit_price x quantity)
+#   discounts         typed in: on lines + on the order
+#   coupon_discounts  computed from a coupon
+#   net_sales         gross_sales - discounts - coupon_discounts = the orders'
+#                     grand_total: what was sold, before refunds
+# A line's revenue (by product, by category) is its total less its share of
+# the order's discounts (app.shared.money.prorate); they add up to net_sales.
+
+
 class SalesReportResponse(BaseModel):
+    gross_sales: float = 0.0
+    discounts: float = 0.0
+    coupon_discounts: float = 0.0
+    net_sales: float = 0.0
+    # = net_sales
     total_sales: float
     total_orders: int
     average_order_value: float
@@ -33,9 +49,15 @@ class DailySalesSummary(BaseModel):
     date: date
     branch_id: Optional[int] = None
     total_orders: int
+    gross_sales: float = 0.0
+    discounts: float = 0.0
+    coupon_discounts: float = 0.0
+    # Before refunds (up to v0.1.13: after them; that is net_after_refunds now).
+    net_sales: float
+    # = net_sales
     total_revenue: float
     total_refunds: float
-    net_sales: float
+    net_after_refunds: float = 0.0
 
 
 class InventoryItemRow(BaseModel):
@@ -62,13 +84,13 @@ class InventoryReportResponse(BaseModel):
 class FinancialSummaryRow(BaseModel):
     date: date
     gross_sales: float
-    # Typed in (orders.discount_amount) and computed from a coupon
-    # (orders.coupon_discount), apart; grand_total already has both off.
     discounts: float
     coupon_discounts: float = 0.0
+    # Before refunds (up to v0.1.13: after them; that is net_after_refunds now).
     net_sales: float
     tax: float
     refunds: float
+    net_after_refunds: float = 0.0
     cogs: Optional[float] = None
     payment_methods: dict[str, float]
 
@@ -78,13 +100,13 @@ class FinancialReportResponse(BaseModel):
     date_to: date
     branch_id: Optional[int] = None
     gross_sales: float
-    # Typed in (orders.discount_amount) and computed from a coupon
-    # (orders.coupon_discount), apart; grand_total already has both off.
     discounts: float
     coupon_discounts: float = 0.0
+    # Before refunds (up to v0.1.13: after them; that is net_after_refunds now).
     net_sales: float
     tax: float
     refunds: float
+    net_after_refunds: float = 0.0
     total_orders: int
     payment_methods: dict[str, float]
     daily: list[FinancialSummaryRow]

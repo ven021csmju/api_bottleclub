@@ -129,16 +129,17 @@ class TestSales:
 
 def test_only_completed_refunds_are_counted(client, world, unsettled_refunds, as_):
     day = _get(client, as_, f"/reports/daily-summary?date={D27}")
-    assert (day["total_refunds"], day["net_sales"]) == (5, 25)
+    assert (day["total_refunds"], day["net_after_refunds"]) == (5, 25)
     report = _get(client, as_, f"/reports/financial?date_from={D27}&date_to={D28}")
     assert [(d["date"], d["refunds"]) for d in report["daily"]] == [(D27, 5), (D28, 0)]
-    assert (report["refunds"], report["net_sales"]) == (5, 65)
+    assert (report["refunds"], report["net_after_refunds"]) == (5, 65)
 
 
 def test_financial_days_and_refunds(client, world, edges, as_):
     report = _get(client, as_, f"/reports/financial?date_from={D27}&date_to={D28}")
     assert [(d["date"], d["gross_sales"], d["refunds"]) for d in report["daily"]] == [(D27, 30, 5), (D28, 40, 0)]
-    assert (report["gross_sales"], report["refunds"], report["net_sales"]) == (70, 5, 65)
+    # net_sales is before refunds (38d); net_after_refunds takes them off
+    assert (report["gross_sales"], report["refunds"], report["net_sales"], report["net_after_refunds"]) == (70, 5, 70, 65)
     assert report["payment_methods"] == {"cash": 70}
 
 
