@@ -31,7 +31,7 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, current_shift, is_fully_paid, paid_net
+from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, paid_net
 from app.shared.ordering import generate_order_number
 
 
@@ -588,7 +588,9 @@ class OrderService:
         """
         idempotency_key = data.get("idempotency_key")
 
-        order = OrderRepository.get_org_order(db, org_id, order_id)
+        # Row lock: a checkout and a POST /payments/ of one order are serialized,
+        # so the second sees what the first settled (Phase 43).
+        order = OrderRepository.get_org_order_for_update(db, org_id, order_id)
         if not order:
             raise NotFoundException(detail="Order not found")
 
@@ -646,10 +648,22 @@ class OrderService:
 
         Shared by POS checkout and slip verification. Only flushes: the caller
         owns the transaction (commit) and any post-commit events.
+
+        What completed payments (POST /payments/) already settled counts
+        (Phase 43): points and payments cover only what is still due, and
+        nothing is left to settle is 400 ORDER_ALREADY_PAID. Up to v0.1.16
+        the whole grand_total was settled again on top of them.
         """
         if order.status not in OrderService.CHECKOUTABLE_STATUSES:
             raise InvalidOrderStateException(
                 detail=f"Cannot checkout order in '{order.status}' status"
+            )
+
+        already = paid_net(db, order.id)
+        if already > 0 and already >= amount_due(order):
+            raise BadRequestException(
+                detail=f"The order is already paid ({already} of {amount_due(order)})",
+                code="ORDER_ALREADY_PAID",
             )
 
         org_id = order.organization_id
@@ -673,7 +687,7 @@ class OrderService:
                         f"{customer.loyalty_points_balance}, requested: {redeem_points}"
                     )
                 )
-            max_credit = int(order.grand_total) // OrderService.POINTS_VALUE_PER_BAHT
+            max_credit = int(Decimal(str(order.grand_total)) - already) // OrderService.POINTS_VALUE_PER_BAHT
             redeemed = min(redeem_points, max_credit)
             if redeemed == 0:
                 raise BadRequestException(detail="Points do not cover any amount due")
@@ -697,7 +711,8 @@ class OrderService:
             customer.loyalty_points_balance = after
             order.loyalty_points_redeemed = redeemed
 
-        due = order.grand_total - Decimal(redeemed)
+        # What is still due: neither the points nor earlier payments are paid twice.
+        due = Decimal(str(order.grand_total)) - Decimal(redeemed) - already
 
         # ---- Payments ----
         if not payments:
@@ -755,13 +770,15 @@ class OrderService:
             PaymentRepository.add_payment(db, payment)
             recorded.append(payment)
 
-        order.amount_paid = paid_total
-        order.change_amount = paid_total - due
+        # Added to what earlier payments handed over, as POST /payments/ does.
+        order.amount_paid = Decimal(str(order.amount_paid)) + paid_total
+        order.change_amount = Decimal(str(order.change_amount)) + (paid_total - due)
 
         # ---- Loyalty earn on net spend ----
         points_earned = 0
         if customer is not None and redeemed < int(order.grand_total):
-            spend_whole = int(due)
+            # The whole order's net spend, not only what this call settled.
+            spend_whole = int(Decimal(str(order.grand_total)) - Decimal(redeemed))
             points_earned = (
                 spend_whole // OrderService.POINTS_EARN_PER_BAHT
                 if OrderService.POINTS_EARN_PER_BAHT

@@ -9,7 +9,7 @@ from app.config.settings import settings
 from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
-from app.domains.shifts.drawer import is_fully_paid
+from app.domains.shifts.drawer import amount_due, is_fully_paid, paid_net
 from app.services.fraud_detection import FraudAssessment, FraudDetectionService
 from app.services.image_service import MIME_EXTENSIONS, ImageService, UnsupportedImageType
 from app.services.ocr_service import OCRService
@@ -47,6 +47,11 @@ REJECTABLE_STATUSES = frozenset({
 HELD_FOR_BANK_CHECK_REASON = "รอตรวจกับธนาคาร (auto-verify ปิด)"
 
 
+def _still_due(db: Session, order: Order) -> Decimal:
+    """What a slip must settle: the money due less what payments already settled (Phase 43)."""
+    return amount_due(order) - paid_net(db, order.id)
+
+
 def _order_is_paid(db: Session, order: Order) -> bool:
     """True once the order is settled or its payments and points cover the total."""
     if order.status in _SETTLED_ORDER_STATUSES:
@@ -59,18 +64,19 @@ def decide_status(
     *,
     amount: Decimal | None,
     reference_found: bool,
-    grand_total: Decimal,
+    due: Decimal,
     reference_duplicate: bool,
 ) -> str:
     """Verification status from the parsed slip and its fraud assessment.
 
     A field the OCR could not read is not evidence of fraud: such a slip
     goes to staff ``review`` and is ``rejected`` only when the other signals
-    alone reach the reject threshold.
+    alone reach the reject threshold. ``due`` is what is still to pay on the
+    order (grand_total up to v0.1.16, which ignored earlier payments).
     """
     if reference_duplicate:
         return "duplicate_reference"
-    if amount is not None and grand_total > 0 and amount != grand_total:
+    if amount is not None and due > 0 and amount != due:
         return "amount_mismatch"
     if assessment.has_signal("receiver_mismatch"):
         return "receiver_mismatch"
@@ -262,14 +268,15 @@ class SlipVerifyService:
             created_by=user.id,
         )
 
-        # 10. Fraud assessment
+        # 10. Fraud assessment, against what is still due
+        due = _still_due(db, order)
         failed_attempts = SlipVerifyRepository.get_failed_attempts_count(db, order_id)
         assessment = FraudDetectionService.assess(
             ocr_avg_confidence=parsed.avg_confidence,
             amount_confidence=parsed.amount.confidence if parsed.amount else 0.0,
             reference_confidence=parsed.reference.confidence if parsed.reference else 0.0,
             ocr_amount=parsed.amount.value if parsed.amount else None,
-            expected_amount=Decimal(str(order.grand_total)),
+            expected_amount=due,
             ocr_reference=parsed.reference.value if parsed.reference else None,
             reference_duplicate=ref_duplicate,
             image_duplicate=False,
@@ -288,7 +295,7 @@ class SlipVerifyService:
             assessment,
             amount=parsed.amount.value if parsed.amount else None,
             reference_found=parsed.reference is not None,
-            grand_total=Decimal(str(order.grand_total)),
+            due=due,
             reference_duplicate=ref_duplicate,
         )
 
@@ -366,7 +373,7 @@ class SlipVerifyService:
                 "status": "amount_mismatch",
                 "message": "จำนวนเงินไม่ตรงกับรายการ",
                 "data": {
-                    "expected_amount": float(order.grand_total),
+                    "expected_amount": float(due),
                     "detected_amount": float(parsed.amount.value) if parsed.amount else None,
                     "risk_score": assessment.total_score,
                 },
@@ -497,10 +504,11 @@ class SlipVerifyService:
         if verification.status not in APPROVABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be approved")
 
-        if confirmed_amount != Decimal(str(order.grand_total)):
+        due = _still_due(db, order)
+        if confirmed_amount != due:
             raise AppException(
                 status_code=422,
-                detail="confirmed_amount must equal the order total",
+                detail=f"confirmed_amount must equal the amount still due ({due})",
                 code="AMOUNT_MISMATCH",
             )
         # The slip's own OCR reference is expected to match; any other use is a reuse.

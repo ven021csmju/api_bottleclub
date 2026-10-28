@@ -44,6 +44,8 @@ def svc_modules(monkeypatch):
         def get_org_order(db, org, oid):
             return state["anchor"]
 
+        get_org_order_for_update = get_org_order
+
     class LoyaltyRepoStub:
         @staticmethod
         def find_org_customer(db, org, cid):
@@ -61,6 +63,8 @@ def svc_modules(monkeypatch):
     monkeypatch.setattr(svc, "OrderRepository", OrderRepoStub)
     monkeypatch.setattr(svc, "LoyaltyRepository", LoyaltyRepoStub)
     monkeypatch.setattr(svc, "PaymentRepository", PaymentRepoStub)
+    # No earlier payments on the order (the db is a mock).
+    monkeypatch.setattr(svc, "paid_net", lambda db, order_id: Decimal("0"))
     return state
 
 
@@ -174,7 +178,7 @@ class TestCheckout:
         from app.domains.orders import service as svc
 
         class Stub:
-            get_org_order = MagicMock(return_value=None)
+            get_org_order = get_org_order_for_update = MagicMock(return_value=None)
             get_stations_for_products = staticmethod(lambda *a, **k: {})
 
         monkeypatch.setattr(svc, "OrderRepository", Stub)

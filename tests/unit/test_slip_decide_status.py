@@ -23,7 +23,7 @@ def _assess(**overrides):
 def _status(assessment, *, amount=TOTAL, reference_found=True, duplicate=False):
     return decide_status(
         assessment, amount=amount, reference_found=reference_found,
-        grand_total=TOTAL, reference_duplicate=duplicate,
+        due=TOTAL, reference_duplicate=duplicate,
     )
 
 

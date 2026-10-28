@@ -940,6 +940,18 @@ date too when it has one.
 | `GET /orders/?shift_id=` | ignored: every order of the branch | the orders of that shift (`orders.shift_id`); a shift of another branch / missing / another cashier's without `orders.read_branch` → **404** `Shift not found` |
 | `GET /catalog/products`, `/catalog/products/{id}`, create/update answers | `station` only (`null` for a product that follows its category) | also **`effective_station`** (`kitchen`/`bar`/`none`, the screen its order lines go to); `GET /catalog/products?station=kitchen|bar|none` filters on it (422 otherwise). `station` unchanged. |
 
+### Split payments (Phase 43)
+
+An order may be paid in parts: `POST /payments/` (cash, card, ...) for a part,
+then checkout or a slip for the rest. **Still due** = `grand_total` − points
+redeemed − what its completed payments already settled (net of change).
+
+| Call | Before 43 (v0.1.16) | 43 |
+|---|---|---|
+| `POST /orders/{id}/checkout` after `POST /payments/` took part | settled the **whole** `grand_total` again: a 350 order paid 100 + 350 = 450 in `payments`, X-report and refund limit; `amount_paid` overwritten (350) | payments cover only what is **still due** (less → 400 "less than amount due (…)", a non-cash payment above it → 400 `OVERPAYMENT`); points at most what is still due; `amount_paid` = everything handed over (100 + 250 = 350), `change_amount` from what was still due. Payments already cover it → **400 `ORDER_ALREADY_PAID`** |
+| `POST /slip-verify/{id}/approve` after a part was paid | `confirmed_amount` had to equal `grand_total` (and the whole total was settled again) | `confirmed_amount` = what is still due, else 422 `AMOUNT_MISMATCH` "confirmed_amount must equal the amount still due (…)" |
+| `POST /slip-verify/upload` after a part was paid | the slip was compared with `grand_total` (`amount_mismatch` for the rest) | compared with what is still due; `amount_mismatch.data.expected_amount` = still due |
+
 ---
 
 ## Catalog `/catalog`
@@ -1171,6 +1183,8 @@ Rate limited like the staff route; over the limit →
 }
 ```
 Header `Idempotency-Key` required (38b).
+A part of the total is allowed; the payment that covers what is still due makes
+the order `paid`, and checkout or a slip then takes only the rest (Phase 43).
 
 ### GET `/payments/{order_id}`
 Order of another organization → 404.
@@ -1704,7 +1718,7 @@ app first; every field is required (missing or blank → 422).
 ```
 | Error | Code |
 |-------|------|
-| `confirmed_amount` ≠ order total | 422 `AMOUNT_MISMATCH` |
+| `confirmed_amount` ≠ what is still due (`grand_total` less earlier payments, Phase 43) | 422 `AMOUNT_MISMATCH` |
 | `bank_reference` already used by another slip or payment | 409 `DUPLICATE_REFERENCE` |
 | order already paid | 409 `ORDER_ALREADY_PAID` |
 | status not approvable (`duplicate_reference`, `duplicate_image`, `rejected`, ...) | 400 |

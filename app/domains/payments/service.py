@@ -27,7 +27,8 @@ class PaymentService:
         user_id: int,
         data: dict,
     ) -> Payment:
-        order = PaymentRepository.get_org_order(db, org_id, order_id)
+        # Row lock: a payment and a checkout of one order are serialized (Phase 43).
+        order = ReturnRepository.lock_org_order(db, org_id, order_id)
 
         if not order:
             raise NotFoundException(detail="Order not found")

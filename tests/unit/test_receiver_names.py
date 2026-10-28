@@ -66,7 +66,7 @@ class TestFraudCheck:
         assert assessment.has_signal("receiver_mismatch")
         status = decide_status(
             assessment, amount=Decimal("100.00"), reference_found=True,
-            grand_total=Decimal("100.00"), reference_duplicate=False,
+            due=Decimal("100.00"), reference_duplicate=False,
         )
         assert status == "receiver_mismatch"
 
