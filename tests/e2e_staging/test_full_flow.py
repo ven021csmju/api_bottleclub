@@ -6,6 +6,7 @@ Every value is invented. Amounts are chosen so each total is distinct.
 """
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -79,9 +80,14 @@ def test_a_catalog(api, rec, flow, sa_credentials):
     rec.check(s, "create category", created(resp), "200/201", resp.status_code, resp.status_code)
     rec.eq(s, "a category goes to no screen unless set", "none", data(resp).get("station"))
     flow["category"] = data(resp).get("id")
+    # The cheese plate in a category of its own: step k spreads a discount over two.
+    resp = api.post("/catalog/categories", "sa", json={"name": f"E2E Food {RUN}"})
+    rec.check(s, "create a second category", created(resp), "200/201", resp.status_code, resp.status_code)
+    flow["category_food"] = data(resp).get("id")
 
     for key, product in (("p1", P1), ("p2", P2), ("p3", P3), ("p4", P4)):
-        resp = api.post("/catalog/products", "sa", json={**product, "category_id": flow["category"]})
+        category = flow["category_food"] if key == "p3" else flow["category"]
+        resp = api.post("/catalog/products", "sa", json={**product, "category_id": category})
         body = data(resp)
         rec.check(s, f"create product {key}", created(resp), "200/201", resp.status_code, resp.status_code)
         rec.eq(s, f"{key} barcode/price stored", (product["barcode"], D(product["selling_price"])),
@@ -113,8 +119,9 @@ def test_b_purchasing(api, rec, flow):
     rec.check(s, "create PO", created(resp), "200/201", resp.status_code, resp.status_code)
     rec.eq(s, "PO total", D(24 * 200 + 12 * 250), D(po.get("total_amount", 0)))
     rec.eq(s, "PO status", "draft", po.get("status"))
-    rec.check(s, "PO number has no date (purchases counter)", str(po.get("po_number", "")).startswith("PO-"),
-              "PO-…", po.get("po_number"))
+    rec.check(s, "PO number from document_sequences (PO-YYYYMMDD-NNNN)",
+              re.fullmatch(r"PO-\d{8}-\d{4}", str(po.get("po_number", ""))) is not None,
+              "PO-YYYYMMDD-NNNN", po.get("po_number"))
 
     resp = api.post(f"/purchases/{po['id']}/approve", "sa")
     rec.eq(s, "approve PO", (200, "approved"), (resp.status_code, data(resp).get("status")), resp.status_code)
@@ -671,33 +678,59 @@ def test_j_shift(api, rec, flow):
 # ---------------------------------------------------------------------------
 def test_k_reports(api, rec, flow):
     s = "k"
-    needs(flow, "sales")
+    needs(flow, "sales", "manager")
     A, d = flow["A"], today()
-    sold = sum(flow["sales"].values(), D(0))
+
+    # Order 6: the Branch Admin sells a red (Wine) and a cheese plate (Food)
+    # with 10.00 typed off the order: 530 -> 520. Spread over the lines in
+    # proportion: 10 x 350/530 = 6.6037.. -> 6.60 on the red, 3.40 on the cheese.
+    resp = api.post("/orders/", "manager", json={"branch_id": A, "discount_amount": "10.00", "items": [
+        {"product_id": flow["p1"], "quantity": 1}, {"product_id": flow["p3"], "quantity": 1}]})
+    o6 = data(resp)
+    rec.eq(s, "order 6: 350 + 180 less 10.00 typed in", (200, D(10), D(520)),
+           (resp.status_code, D(o6.get("discount_amount", 0)), D(o6.get("grand_total", 0))), resp.status_code)
+    resp = api.post(f"/orders/{o6.get('id')}/checkout", "manager", json={
+        "payments": [{"payment_method": "cash", "amount": "520.00"}]})
+    rec.eq(s, "checkout order 6: cash 520", 200, resp.status_code, resp.status_code)
+    if resp.status_code == 200:
+        flow["sales"]["o6"] = D(520)
+        flow["stock"]["p1"] -= 1
+
+    net = sum(flow["sales"].values(), D(0))          # what the paid orders charged
     n_sold = len(flow["sales"])
     refunds = flow.get("refunds", D(0))
+    typed, coupons = (D(10) if "o6" in flow["sales"] else D(0)), flow.get("coupon_discounts", D(0))
+    gross = net + typed + coupons
+    # Food: the cheese of order 1 (180, no discount) and of order 6 (180 - 3.40)
+    food = D(180) + (D("176.60") if "o6" in flow["sales"] else D(0))
+
+    def money(report):
+        return tuple(D(str(report.get(k, 0))) for k in ("gross_sales", "discounts", "coupon_discounts", "net_sales"))
 
     resp = api.get(f"/reports/daily-summary?date={d}&branch_id={A}", "sa")
     day = data(resp)
     rec.eq(s, "daily-summary 200", 200, resp.status_code, resp.status_code)
     rec.eq(s, f"daily-summary orders ({n_sold} sold)", n_sold, day.get("total_orders"))
-    rec.eq(s, f"daily-summary revenue {sold}", sold, D(day.get("total_revenue", 0)))
-    rec.eq(s, f"daily-summary refunds {refunds}", refunds, D(day.get("total_refunds", 0)))
-    rec.eq(s, "daily-summary net", sold - refunds, D(day.get("net_sales", 0)))
+    rec.eq(s, "daily-summary gross / typed in / coupons / net (each off once)", (gross, typed, coupons, net), money(day))
+    rec.eq(s, f"daily-summary revenue = net {net}", net, D(str(day.get("total_revenue", 0))))
+    rec.eq(s, f"daily-summary refunds {refunds}, net after them", (refunds, net - refunds),
+           (D(str(day.get("total_refunds", 0))), D(str(day.get("net_after_refunds", 0)))))
     rec.eq(s, "the slip order is 'paid' (not completed) and still counted", "paid",
            data(api.get(f"/orders/{flow.get('o2')}", "sa")).get("status"))
 
     resp = api.get(f"/reports/sales?date_from={d}&date_to={d}&branch_id={A}&group_by=category", "sa")
     sales = data(resp)
     rec.eq(s, "sales 200", 200, resp.status_code, resp.status_code)
-    rec.eq(s, "sales total", sold, D(sales.get("total_sales", 0)))
+    rec.eq(s, "sales gross / typed in / coupons / net", (gross, typed, coupons, net), money(sales))
+    rec.eq(s, "sales total = net", net, D(str(sales.get("total_sales", 0))))
     rec.eq(s, "sales orders", n_sold, sales.get("total_orders"))
     top = {p["product_name"]: p["total_qty"] for p in sales.get("top_products", [])}
-    rec.eq(s, "top products qty (p1 2, p2 3, p3 1)", {P1["name"]: 2, P2["name"]: 3, P3["name"]: 1}, top)
-    cat = {c["category"]: D(c["revenue"]) for c in sales.get("sales_by_category", [])}
-    # By line totals: an order-level discount (the coupon's 42) is not spread over categories.
-    rec.eq(s, "category revenue (line totals, before the coupon)",
-           {f"E2E Wine {RUN}": sold + flow.get("coupon_discounts", D(0))}, cat)
+    rec.eq(s, "top products qty (p1 3, p2 3, p3 2)", {P1["name"]: 3, P2["name"]: 3, P3["name"]: 2}, top)
+    cat = {c["category"]: D(str(c["revenue"])) for c in sales.get("sales_by_category", [])}
+    # After each order's discounts (the coupon's 42 on order 4, the 10 typed off order 6).
+    rec.eq(s, "category revenue after the order discounts; they add up to net",
+           {f"E2E Wine {RUN}": net - food, f"E2E Food {RUN}": food}, cat)
+    rec.eq(s, "hours add up to net", net, sum((D(str(h["sales"])) for h in sales.get("sales_by_hour", [])), D(0)))
     hour = datetime.now(BKK).hour
     rec.check(s, "sales_by_hour uses the Bangkok hour", all(abs(h["hour"] - hour) <= 1 for h in sales.get("sales_by_hour", [])),
               f"≈{hour}", [h["hour"] for h in sales.get("sales_by_hour", [])])
@@ -705,13 +738,13 @@ def test_k_reports(api, rec, flow):
     resp = api.get(f"/reports/financial?date_from={d}&date_to={d}&branch_id={A}", "sa")
     fin = data(resp)
     rec.eq(s, "financial 200", 200, resp.status_code, resp.status_code)
-    rec.eq(s, "financial gross", sold, D(fin.get("gross_sales", 0)))
-    rec.eq(s, "financial refunds", refunds, D(fin.get("refunds", 0)))
-    rec.eq(s, "financial: coupon discounts apart from typed-in ones", flow.get("coupon_discounts", D(0)),
-           D(fin.get("coupon_discounts", 0)))
-    methods = {k: D(v) for k, v in (fin.get("payment_methods") or {}).items()}
+    rec.eq(s, "financial gross / typed in / coupons / net", (gross, typed, coupons, net), money(fin))
+    rec.eq(s, "financial refunds, net after them", (refunds, net - refunds),
+           (D(str(fin.get("refunds", 0))), D(str(fin.get("net_after_refunds", 0)))))
+    methods = {k: D(str(v)) for k, v in (fin.get("payment_methods") or {}).items()}
     rec.eq(s, "financial payment methods (cash net of change; slip as transfer)",
-           {"cash": flow["sales"]["o1"] + D(400) + flow["sales"].get("o4", D(0)), "bank_transfer": D(420)}, methods)
+           {"cash": flow["sales"]["o1"] + D(400) + flow["sales"].get("o4", D(0)) + flow["sales"].get("o6", D(0)),
+            "bank_transfer": D(420)}, methods)
 
     resp = api.get(f"/reports/inventory?branch_id={A}", "sa")
     inv = {i["product_id"]: i["on_hand"] for i in data(resp).get("items", [])}
