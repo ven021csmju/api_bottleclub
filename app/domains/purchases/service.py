@@ -13,7 +13,6 @@ from app.domains.purchases.schemas import (
     PurchaseReceivingResponse,
 )
 from app.db.models import (
-    InventoryLot,
     PurchaseOrder,
     PurchaseOrderItem,
     PurchaseReceiving,
@@ -301,31 +300,21 @@ class PurchaseService:
             PurchaseRepository.add_receiving_item(db, receiving_item)
             receiving_items.append(receiving_item)
 
-            # Create or update inventory lot
-            lot = PurchaseRepository.find_lot(
-                db, branch_id, po_item.product_id, item_data.lot_number
+            # One statement: the lot is created once, or its quantity grows,
+            # even when another receipt of the same lot lands at the same time.
+            lot_id = PurchaseRepository.upsert_lot(
+                db,
+                branch_id=branch_id,
+                product_id=po_item.product_id,
+                lot_number=item_data.lot_number,
+                quantity=item_data.quantity_received,
+                cost_price=item_data.cost_price,
+                expiry_date=item_data.expiry_date,
+                purchase_receiving_id=receiving.id,
             )
-            if lot:
-                lot.quantity += item_data.quantity_received
-                lot.cost_price = item_data.cost_price
-                if item_data.expiry_date:
-                    lot.expiry_date = item_data.expiry_date
-            else:
-                lot = InventoryLot(
-                    branch_id=branch_id,
-                    product_id=po_item.product_id,
-                    lot_number=item_data.lot_number,
-                    quantity=item_data.quantity_received,
-                    cost_price=item_data.cost_price,
-                    expiry_date=item_data.expiry_date,
-                    purchase_receiving_id=receiving.id,
-                )
-                PurchaseRepository.add_lot(db, lot)
-
-            db.flush()
 
             # Update receiving item with lot reference
-            receiving_item.inventory_lot_id = lot.id
+            receiving_item.inventory_lot_id = lot_id
 
             # One statement: the ledger line starts where on_hand really was,
             # even when another receipt of the product lands at the same time.
@@ -344,7 +333,7 @@ class PurchaseService:
                 quantity_after=on_hand_before + item_data.quantity_received,
                 reference_type="purchase_receiving",
                 reference_id=receiving.id,
-                lot_id=lot.id,
+                lot_id=lot_id,
                 notes=f"Received via {receiving_number}",
                 user_id=user_id,
             )

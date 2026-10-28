@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     Branch,
     Inventory,
-    InventoryLot,
     Product,
     PurchaseOrder,
     PurchaseOrderItem,
@@ -130,22 +129,38 @@ class PurchaseRepository:
         return item
 
     @staticmethod
-    def add_lot(db: Session, lot: InventoryLot) -> InventoryLot:
-        db.add(lot)
-        db.flush()
-        return lot
-
-    @staticmethod
-    def find_lot(
-        db: Session, branch_id: int, product_id: int, lot_number: str
-    ) -> InventoryLot | None:
-        return db.scalar(
-            select(InventoryLot).where(
-                InventoryLot.branch_id == branch_id,
-                InventoryLot.product_id == product_id,
-                InventoryLot.lot_number == lot_number,
-            )
-        )
+    def upsert_lot(
+        db: Session,
+        branch_id: int,
+        product_id: int,
+        lot_number: str,
+        quantity: int,
+        cost_price,
+        expiry_date,
+        purchase_receiving_id: int,
+    ) -> int:
+        """Add ``quantity`` to the lot (branch, product, lot_number), creating
+        it if the branch has none; the lot's id. One statement on the unique
+        (branch_id, product_id, lot_number): two receipts of a new lot at once
+        both land in one row. The cost becomes this receipt's; the expiry date
+        too when it has one. A lot keeps the receiving that created it."""
+        return db.execute(
+            text(
+                """
+                INSERT INTO inventory_lots (branch_id, product_id, lot_number, quantity, cost_price,
+                                            expiry_date, purchase_receiving_id, created_at, updated_at)
+                VALUES (:bid, :pid, :lot, :qty, :cost, :expiry, :rid, NOW(), NOW())
+                ON CONFLICT (branch_id, product_id, lot_number)
+                DO UPDATE SET quantity = inventory_lots.quantity + EXCLUDED.quantity,
+                              cost_price = EXCLUDED.cost_price,
+                              expiry_date = COALESCE(EXCLUDED.expiry_date, inventory_lots.expiry_date),
+                              updated_at = NOW()
+                RETURNING id
+                """
+            ),
+            {"bid": branch_id, "pid": product_id, "lot": lot_number, "qty": quantity, "cost": cost_price,
+             "expiry": expiry_date, "rid": purchase_receiving_id},
+        ).scalar_one()
 
     @staticmethod
     def add_stock_movement(db: Session, movement: StockMovement) -> None:

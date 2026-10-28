@@ -15,6 +15,8 @@ still inside its transaction.
 Phase 38d:
 - two purchase orders created at once: two numbers, both created
   (count + 1 gave both the same number; one failed on the unique po_number)
+- two receipts of the same new lot at once: one lot row with both quantities
+  (find-then-insert inserted it twice; one failed on uq_inventory_lot)
 """
 from __future__ import annotations
 
@@ -270,3 +272,44 @@ def test_two_purchase_orders_created_at_once(db_engine: Engine, place, monkeypat
         numbers = list(s.scalars(select(PurchaseOrder.po_number).where(PurchaseOrder.organization_id == place["org"])))
     assert len(numbers) == 2 and len(set(numbers)) == 2, numbers
 
+
+def test_two_receipts_of_one_new_lot(db_engine: Engine, place, monkeypatch):
+    from app.db.models import InventoryLot, PurchaseOrder, PurchaseOrderItem, PurchaseReceivingItem
+    from app.db.repositories.purchases import PurchaseRepository
+    from app.domains.purchases.schemas import PurchaseReceivingCreate
+    from app.domains.purchases.service import PurchaseService
+
+    pos = []
+    with Session(db_engine) as s:
+        for n in range(2):
+            po = PurchaseOrder(organization_id=place["org"], branch_id=place["src"], supplier_id=place["supplier"],
+                               po_number=f"PO-{place['tag']}-L{n}", status="approved", created_by=place["user"])
+            s.add(po)
+            s.flush()
+            item = PurchaseOrderItem(purchase_order_id=po.id, product_id=place["product"], quantity_ordered=5,
+                                     unit_cost=Decimal("200"))
+            s.add(item)
+            s.flush()
+            pos.append((po.id, item.id))
+        s.commit()
+    # Before 38d the receipt looked the lot up here and inserted it when missing:
+    # held, both look before either inserts. Now one upsert, held the same way.
+    _slow(monkeypatch, PurchaseRepository, "find_lot")
+    _slow(monkeypatch, PurchaseRepository, "upsert_lot")
+
+    def receive(db: Session, i: int) -> None:
+        po, item = pos[i]
+        PurchaseService.receive_purchase_order(db, place["org"], po, place["src"], PurchaseReceivingCreate(
+            received_items=[{"purchase_order_item_id": item, "quantity_received": [3, 4][i],
+                             "lot_number": "LOT-SAME", "cost_price": ["200.00", "210.00"][i]}]), place["user"])
+
+    assert _race(db_engine, receive) == ["ok", "ok"]
+    with Session(db_engine) as s:
+        lots = list(s.execute(select(InventoryLot.id, InventoryLot.quantity).where(
+            InventoryLot.branch_id == place["src"], InventoryLot.product_id == place["product"])))
+        linked = set(s.scalars(select(PurchaseReceivingItem.inventory_lot_id).where(
+            PurchaseReceivingItem.lot_number == "LOT-SAME", PurchaseReceivingItem.product_id == place["product"])))
+    assert [q for _, q in lots] == [7], lots
+    assert linked == {lots[0][0]}
+    on_hand, ledger = _stock(db_engine, place["src"], place["product"])
+    assert on_hand == 17 and _chained(ledger, 10), ledger
