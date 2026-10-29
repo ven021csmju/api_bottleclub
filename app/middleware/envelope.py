@@ -90,22 +90,27 @@ class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
         else:
             data, meta = payload, None
 
-        _headers = {k: v for k, v in response.headers.items()}
-        _headers.pop("content-length", None)
-        _headers.pop("transfer-encoding", None)
         wrapped = JSONResponse(
             content=build_envelope(data, meta, request_id),
             status_code=response.status_code,
-            headers=_headers,
         )
-        return wrapped
+        return _with_headers_of(response, wrapped)
 
 
-def _rebuild_response(
-    response: Response,
-    body: bytes,
-    headers: dict | None = None,
-) -> Response:
+#: Headers of the downstream response the rebuilt one does not take over.
+_LENGTH_HEADERS = (b"content-length", b"transfer-encoding")
+
+
+def _with_headers_of(source: Response, target: Response) -> Response:
+    """``target`` with every header of ``source`` but its length. Raw headers,
+    not a dict: a dict would keep one ``Set-Cookie`` of several (Phase 45)."""
+    target.raw_headers = [h for h in target.raw_headers if h[0] == b"content-length"] + [
+        h for h in source.raw_headers if h[0].lower() not in _LENGTH_HEADERS
+    ]
+    return target
+
+
+def _rebuild_response(response: Response, body: bytes) -> Response:
     """Return a streaming response with ``body`` re-attached.
 
     ``BaseHTTPMiddleware`` wraps the downstream response in a stream, so once
@@ -113,9 +118,4 @@ def _rebuild_response(
     a fresh ``StreamingResponse`` instead of returning the original response,
     which would otherwise yield an empty stream to the caller.
     """
-    _headers = {k: v for k, v in response.headers.items()}
-    if headers:
-        _headers.update(headers)
-    _headers.pop("content-length", None)
-    _headers.pop("transfer-encoding", None)
-    return StreamingResponse(iter([body]), status_code=response.status_code, headers=_headers)
+    return _with_headers_of(response, StreamingResponse(iter([body]), status_code=response.status_code))
