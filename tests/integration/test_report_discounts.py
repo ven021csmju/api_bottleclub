@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.shared.clock import store_now
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, drawers, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, online, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 # Phase 46: cash is taken only in an open shift (409 SHIFT_REQUIRED).
@@ -71,7 +71,7 @@ def sold(client: TestClient, session: Session, world, shop, as_) -> dict:
         assert resp.status_code in (200, 201), resp.text
         return resp.json()["data"]
 
-    o1 = order(items=both, discount_amount="10.00", order_source="ecommerce")
+    o1 = online(session, order(items=both, discount_amount="10.00"))
     resp = client.post(f"{API}/payments/", headers=idem(ba),
                        json={"order_id": o1["id"], "payment_method": "bank_transfer", "amount": "520.00"})
     assert resp.status_code in (200, 201), resp.text

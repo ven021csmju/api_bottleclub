@@ -53,7 +53,10 @@ def _make_product(session, org_id, name, sku, price):
 
 
 class TestOrderSourceCreate:
-    """GAP 1: POST /api/v1/orders persists and returns order_source."""
+    """GAP 1: POST /api/v1/orders persists and returns order_source.
+
+    Phase 46: this route is the POS's; another channel is 422 and makes no
+    order (up to v0.1.18 it made one no shift owned)."""
 
     def _create(self, client, auth, seed_branch, product_id, order_source):
         payload = {
@@ -71,29 +74,18 @@ class TestOrderSourceCreate:
         body = resp.json()["data"]
         assert body["order_source"] == "pos"
 
-    def test_create_ecommerce(self, client, session, auth, seed_branch, seed_user):
-        product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
-        resp = self._create(client, auth, seed_branch, product.id, "ecommerce")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["data"]["order_source"] == "ecommerce"
-
     def test_create_pos(self, client, session, auth, seed_branch, seed_user):
         product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
         resp = self._create(client, auth, seed_branch, product.id, "pos")
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["order_source"] == "pos"
 
-    def test_create_qr(self, client, session, auth, seed_branch, seed_user):
+    @pytest.mark.parametrize("source", ["ecommerce", "qr", "phone"])
+    def test_another_channel_is_422_and_no_order(self, client, session, auth, seed_branch, seed_user, source):
         product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
-        resp = self._create(client, auth, seed_branch, product.id, "qr")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["data"]["order_source"] == "qr"
-
-    def test_create_phone(self, client, session, auth, seed_branch, seed_user):
-        product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
-        resp = self._create(client, auth, seed_branch, product.id, "phone")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["data"]["order_source"] == "phone"
+        resp = self._create(client, auth, seed_branch, product.id, source)
+        assert resp.status_code == 422, resp.text
+        assert session.query(Order).filter_by(organization_id=seed_user["org_id"]).count() == 0
 
     def test_reject_invalid_order_source(self, client, session, auth, seed_branch, seed_user):
         product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
@@ -102,17 +94,19 @@ class TestOrderSourceCreate:
 
     def test_order_source_persisted_in_db(self, client, session, auth, seed_branch, seed_user):
         product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
-        resp = self._create(client, auth, seed_branch, product.id, "ecommerce")
+        resp = self._create(client, auth, seed_branch, product.id, "pos")
         assert resp.status_code == 200, resp.text
         order_id = resp.json()["data"]["id"]
         order = session.get(Order, order_id)
-        assert order.order_source == "ecommerce"
+        assert order.order_source == "pos"
 
     def test_get_returns_order_source(self, client, session, auth, seed_branch, seed_user):
-        product = _make_product(session, seed_user["org_id"], "A", "A-1", 50)
-        create = self._create(client, auth, seed_branch, product.id, "qr")
-        order_id = create.json()["data"]["id"]
-        resp = client.get(f"/api/v1/orders/{order_id}", headers=auth)
+        # Made by another channel (not this route): GET still names it.
+        order = Order(organization_id=seed_user["org_id"], branch_id=seed_branch, order_number="QR-46-1",
+                      status="pending", user_id=seed_user["user_id"], order_source="qr")
+        session.add(order)
+        session.flush()
+        resp = client.get(f"/api/v1/orders/{order.id}", headers=auth)
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["order_source"] == "qr"
 

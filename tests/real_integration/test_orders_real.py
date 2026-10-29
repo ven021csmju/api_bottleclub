@@ -33,7 +33,7 @@ def test_create_order_get_order_and_cancel_cleanup(
                 "unit_price": str(product["selling_price"]),
             }
         ],
-        "order_source": "ecommerce",
+        "order_source": "pos",
         "idempotency_key": f"real-api-test-{uuid.uuid4()}",
     }
     created = api_client.post(
@@ -42,7 +42,7 @@ def test_create_order_get_order_and_cancel_cleanup(
     assert created.status_code == 200, created.text
     order = response_data(created)
     assert order["id"]
-    assert order["order_source"] == "ecommerce"
+    assert order["order_source"] == "pos"
     assert order["grand_total"] == str(product["selling_price"])
     assert order["status"] == "pending"
 
@@ -52,7 +52,7 @@ def test_create_order_get_order_and_cancel_cleanup(
     assert fetched.status_code == 200, fetched.text
     fetched_order = response_data(fetched)
     assert fetched_order["id"] == order["id"]
-    assert fetched_order["order_source"] == "ecommerce"
+    assert fetched_order["order_source"] == "pos"
 
     cancelled = api_client.post(
         f"/api/v1/orders/{order['id']}/cancel",
@@ -83,7 +83,7 @@ def test_client_price_cannot_override_catalog_price(
                     "unit_price": "0.01",
                 }
             ],
-            "order_source": "ecommerce",
+            "order_source": "pos",
             "idempotency_key": f"real-api-price-test-{uuid.uuid4()}",
         },
     )

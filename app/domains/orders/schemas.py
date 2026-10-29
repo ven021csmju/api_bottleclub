@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,7 +29,9 @@ class OrderCreate(BaseModel):
     coupon_code: Optional[str] = Field(None, min_length=1, max_length=100)
     notes: Optional[str] = None
     idempotency_key: Optional[str] = None
-    order_source: OrderSource = Field(OrderSource.POS, description="Sales channel that created the order")
+    # This route is the POS's (Phase 46): another channel would make an order
+    # no shift or drawer owns. Online orders (34c) get their own route.
+    order_source: Literal["pos"] = Field("pos", description="Sales channel: only `pos` on this route (else 422)")
 
 
 class OrderItemResponse(BaseModel):

@@ -92,6 +92,16 @@ def new_order(client: TestClient, headers: dict, branch_id: int, items: list[tup
     return resp.json()["data"]
 
 
+def online(session: Session, order: dict) -> dict:
+    """Make a POS order an online one. POST /orders/ makes POS orders only
+    (Phase 46); an online order comes in by another channel."""
+    from app.db.models import Order
+
+    session.get(Order, order["id"]).order_source = "ecommerce"
+    session.commit()
+    return order
+
+
 def checkout(client: TestClient, headers: dict, order_id: int, *payments: tuple[str, str], **extra):
     return client.post(f"{API}/orders/{order_id}/checkout", headers=idem(headers), json={
         "payments": [{"payment_method": m, "amount": a} for m, a in payments], **extra})
