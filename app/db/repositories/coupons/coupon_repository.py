@@ -45,6 +45,21 @@ class CouponRepository:
         ).scalar_one_or_none()
 
     @staticmethod
+    def lock_org_coupon(db: Session, organization_id: int, coupon_id: int) -> Coupon | None:
+        """The organization's coupon, row-locked until commit and reloaded."""
+        return db.execute(
+            select(Coupon)
+            .where(Coupon.id == coupon_id, Coupon.organization_id == organization_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def ever_used(db: Session, coupon_id: int) -> bool:
+        """True once any order used it, a use given back by a cancel included."""
+        return db.scalar(select(CouponUsage.id).where(CouponUsage.coupon_id == coupon_id).limit(1)) is not None
+
+    @staticmethod
     def lock_coupon(db: Session, coupon_id: int) -> Coupon | None:
         return db.execute(
             select(Coupon).where(Coupon.id == coupon_id)

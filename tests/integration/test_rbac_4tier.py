@@ -46,7 +46,9 @@ def slip_a(session: Session, world, orders) -> int:
 
 
 PROMOTION = {"name": "Tier promo", "discount_type": "percentage", "discount_value": "10"}
-APPROVE = {"confirmed_amount": "100", "bank_reference": "REF-TIER1", "note": "ok"}
+# Order a1 is 100 with 10 already paid in cash (scope_fixtures): the slip settles the 90 still due
+# (Phase 43; up to v0.1.16 it settled the whole 100 again).
+APPROVE = {"confirmed_amount": "90", "bank_reference": "REF-TIER1", "note": "ok"}
 
 
 # --- Cashier (POS) ---------------------------------------------------------

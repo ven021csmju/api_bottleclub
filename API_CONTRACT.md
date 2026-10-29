@@ -940,6 +940,22 @@ date too when it has one.
 | `GET /orders/?shift_id=` | ignored: every order of the branch | the orders of that shift (`orders.shift_id`); a shift of another branch / missing / another cashier's without `orders.read_branch` → **404** `Shift not found` |
 | `GET /catalog/products`, `/catalog/products/{id}`, create/update answers | `station` only (`null` for a product that follows its category) | also **`effective_station`** (`kitchen`/`bar`/`none`, the screen its order lines go to); `GET /catalog/products?station=kitchen|bar|none` filters on it (422 otherwise). `station` unchanged. |
 
+### Split payments (Phase 43)
+
+An order may be paid in parts: `POST /payments/` (cash, card, ...) for a part,
+then checkout or a slip for the rest. **Still due** = `grand_total` − points
+redeemed − what its completed payments already settled (net of change).
+
+| Call | Before 43 (v0.1.16) | 43 |
+|---|---|---|
+| `POST /orders/{id}/checkout` after `POST /payments/` took part | settled the **whole** `grand_total` again: a 350 order paid 100 + 350 = 450 in `payments`, X-report and refund limit; `amount_paid` overwritten (350) | payments cover only what is **still due** (less → 400 "less than amount due (…)", a non-cash payment above it → 400 `OVERPAYMENT`); points at most what is still due; `amount_paid` = everything handed over (100 + 250 = 350), `change_amount` from what was still due. Payments already cover it → **400 `ORDER_ALREADY_PAID`** |
+| `POST /slip-verify/{id}/approve` after a part was paid | `confirmed_amount` had to equal `grand_total` (and the whole total was settled again) | `confirmed_amount` = what is still due, else 422 `AMOUNT_MISMATCH` "confirmed_amount must equal the amount still due (…)" |
+| `POST /slip-verify/upload` after a part was paid | the slip was compared with `grand_total` (`amount_mismatch` for the rest) | compared with what is still due; `amount_mismatch.data.expected_amount` = still due |
+| Points earned (order with a customer) | at checkout or slip only, on what that call settled; an order paid in full by `POST /payments/` earned **none** | when the order becomes **fully paid**, whichever way (checkout, `POST /payments/`, slip): `grand_total` − points redeemed, **once per order** (a replayed request or a second path adds nothing; a `POST /loyalty/earn` with `reference_type: "order"` for it counts as its points). `loyalty_points_earned` on the order. |
+| A slip for **more** than is still due (`POST /slip-verify/upload`) | `amount_mismatch` (refusal; after a part paid in cash, a slip for the whole total **settled it again**) | **200** `success: true`, `status: "review"`, `message: "ยอดในสลิปเกินยอดค้างชำระ รอเจ้าหน้าที่ตรวจสอบ"`, `data.pending_reason: "over_due"`, `data.expected_amount` = still due; `failure_reason` `"ยอดในสลิป 100.00 เกินยอดค้างชำระ 70.00"`. Never settled by itself (either auto-verify setting). Less than due stays `amount_mismatch`. |
+| `POST /slip-verify/{id}/approve` with `confirmed_amount` **more** than is still due | 422 `AMOUNT_MISMATCH` when ≠ `grand_total` (= `grand_total` was taken even after a cash part) | **400 `OVERPAYMENT`** `"confirmed_amount (100.00) is more than the amount still due (70.00)"`: approve what is still due (the transfer's extra is the shop's to give back). Less than due: 422 `AMOUNT_MISMATCH`. |
+| `PATCH /coupons/{id}` | **405** (no way to change a coupon; delete + create lost its uses) | `coupons.update` at organization level (Superadmin). Changes only the fields sent: `max_uses_per_customer` (`null` = no limit), `end_date`, `is_active`, `max_uses` (`null` = no limit). `code`, `discount_type`, `discount_value` only while the coupon was **never used** (else **409 `COUPON_IN_USE`**). Any other field / empty body / `null` for a required field → 422. Audited `COUPON.UPDATE`. |
+
 ---
 
 ## Catalog `/catalog`
@@ -1171,6 +1187,8 @@ Rate limited like the staff route; over the limit →
 }
 ```
 Header `Idempotency-Key` required (38b).
+A part of the total is allowed; the payment that covers what is still due makes
+the order `paid`, and checkout or a slip then takes only the rest (Phase 43).
 
 ### GET `/payments/{order_id}`
 Order of another organization → 404.
@@ -1364,6 +1382,30 @@ With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 
 ### GET `/coupons/`  `?page=&per_page=`
 ### GET `/coupons/{coupon_id}`
+### PATCH `/coupons/{coupon_id}` (Phase 43)
+Permission `coupons.update` at organization level (Superadmin; branch roles → 403).
+Only the fields sent change; the answer is the coupon (as GET).
+```json
+{
+  "max_uses_per_customer": null,
+  "end_date": "2026-12-31T23:59:59",
+  "is_active": true,
+  "max_uses": 100
+}
+```
+| Field | |
+|---|---|
+| `max_uses_per_customer` | int > 0, or `null` = no per-customer limit (used without a customer) |
+| `end_date` | after `start_date` (else 422); without an offset: store time |
+| `is_active` | `true` / `false` (not `null`) |
+| `max_uses` | int > 0, at least `used_count` (else 422 `COUPON_MAX_USES_BELOW_USED`), or `null` = no limit |
+| `code`, `discount_type`, `discount_value` | only while no order ever used the coupon (a cancelled one included), else **409 `COUPON_IN_USE`**; a percent at most 100; a taken code → 409 |
+
+Any other field (`min_order_amount`, `max_discount`, `branch_id`, `start_date`,
+`promotion_id`, ...) or an empty body → 422. Another organization's coupon → 404.
+Each change is an `audit_logs` row `COUPON.UPDATE` (`entity_type: "coupon"`,
+before/after of the fields that changed).
+
 ### DELETE `/coupons/{coupon_id}` → 204
 
 ### POST `/coupons/validate`
@@ -1425,6 +1467,10 @@ With a limit, no `customer_id` → **422 `COUPON_CUSTOMER_REQUIRED`**.
 ---
 
 ## Loyalty `/loyalty`
+
+Orders earn points by themselves when fully paid (Phase 43): `grand_total` less
+the points redeemed, once per order. A manual earn with `reference_type: "order"`
+counts as that order's points (the order then earns no more).
 
 ### POST `/loyalty/earn`
 ```json
@@ -1666,7 +1712,9 @@ names, date, low confidence) never make a slip `rejected` on their own;
 failed attempts adding up to the reject threshold.
 
 `review` is not an error for the customer: the slip was received. A `review`
-caused by the risk score has `pending_reason: "risk_review"`. Failure results
+caused by the risk score has `pending_reason: "risk_review"`; a slip for more
+than the order still owes has `pending_reason: "over_due"` and
+`expected_amount` (what is still due), with either setting (Phase 43). Failure results
 (`amount_mismatch`, `duplicate_reference`, `duplicate_image`, `ocr_failed`,
 ...) are the same with either setting. Uploading for an order that is already paid returns
 `order_already_paid` (400). A slip that was `rejected` or `ocr_failed` may be
@@ -1682,7 +1730,7 @@ Way out of each verification status (every status except `verified` has one):
 | `pending` | no (`duplicate_image`) | yes | yes |
 | `review` | no (`duplicate_image`) | yes | yes |
 | `ocr_failed` | yes | yes | yes |
-| `amount_mismatch` | no (`duplicate_image`) | yes (`confirmed_amount` = order total) | yes |
+| `amount_mismatch` | no (`duplicate_image`) | yes (`confirmed_amount` = what is still due) | yes |
 | `receiver_mismatch` | no (`duplicate_image`) | yes, after checking the receiver | yes |
 | `duplicate_reference` | after a reject | no | yes |
 | `duplicate_image` | after a reject | no | yes |
@@ -1704,7 +1752,8 @@ app first; every field is required (missing or blank → 422).
 ```
 | Error | Code |
 |-------|------|
-| `confirmed_amount` ≠ order total | 422 `AMOUNT_MISMATCH` |
+| `confirmed_amount` more than what is still due (`grand_total` less earlier payments, Phase 43) | 400 `OVERPAYMENT` (the detail says what is still due) |
+| `confirmed_amount` less than what is still due | 422 `AMOUNT_MISMATCH` |
 | `bank_reference` already used by another slip or payment | 409 `DUPLICATE_REFERENCE` |
 | order already paid | 409 `ORDER_ALREADY_PAID` |
 | status not approvable (`duplicate_reference`, `duplicate_image`, `rejected`, ...) | 400 |

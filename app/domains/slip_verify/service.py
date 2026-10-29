@@ -9,7 +9,7 @@ from app.config.settings import settings
 from app.db.models import Order, PaymentVerification, User
 from app.db.repositories.slip_verify import SlipVerifyRepository
 from app.domains.orders.service import OrderService
-from app.domains.shifts.drawer import is_fully_paid
+from app.domains.shifts.drawer import amount_due, is_fully_paid, paid_net
 from app.services.fraud_detection import FraudAssessment, FraudDetectionService
 from app.services.image_service import MIME_EXTENSIONS, ImageService, UnsupportedImageType
 from app.services.ocr_service import OCRService
@@ -47,6 +47,17 @@ REJECTABLE_STATUSES = frozenset({
 HELD_FOR_BANK_CHECK_REASON = "รอตรวจกับธนาคาร (auto-verify ปิด)"
 
 
+def over_due_reason(amount: Decimal, due: Decimal) -> str:
+    """failure_reason of a slip for more than the order still owes (Phase 43):
+    it is never settled by itself; staff decide (approve what is due, or reject)."""
+    return f"ยอดในสลิป {amount} เกินยอดค้างชำระ {due}"
+
+
+def _still_due(db: Session, order: Order) -> Decimal:
+    """What a slip must settle: the money due less what payments already settled (Phase 43)."""
+    return amount_due(order) - paid_net(db, order.id)
+
+
 def _order_is_paid(db: Session, order: Order) -> bool:
     """True once the order is settled or its payments and points cover the total."""
     if order.status in _SETTLED_ORDER_STATUSES:
@@ -59,18 +70,22 @@ def decide_status(
     *,
     amount: Decimal | None,
     reference_found: bool,
-    grand_total: Decimal,
+    due: Decimal,
     reference_duplicate: bool,
 ) -> str:
     """Verification status from the parsed slip and its fraud assessment.
 
     A field the OCR could not read is not evidence of fraud: such a slip
     goes to staff ``review`` and is ``rejected`` only when the other signals
-    alone reach the reject threshold.
+    alone reach the reject threshold. ``due`` is what is still to pay on the
+    order (grand_total up to v0.1.16, which ignored earlier payments).
     """
     if reference_duplicate:
         return "duplicate_reference"
-    if amount is not None and grand_total > 0 and amount != grand_total:
+    # More than is still due: staff decide, the slip never settles by itself (Phase 43).
+    if amount is not None and due > 0 and amount > due:
+        return "review"
+    if amount is not None and due > 0 and amount != due:
         return "amount_mismatch"
     if assessment.has_signal("receiver_mismatch"):
         return "receiver_mismatch"
@@ -262,14 +277,15 @@ class SlipVerifyService:
             created_by=user.id,
         )
 
-        # 10. Fraud assessment
+        # 10. Fraud assessment, against what is still due
+        due = _still_due(db, order)
         failed_attempts = SlipVerifyRepository.get_failed_attempts_count(db, order_id)
         assessment = FraudDetectionService.assess(
             ocr_avg_confidence=parsed.avg_confidence,
             amount_confidence=parsed.amount.confidence if parsed.amount else 0.0,
             reference_confidence=parsed.reference.confidence if parsed.reference else 0.0,
             ocr_amount=parsed.amount.value if parsed.amount else None,
-            expected_amount=Decimal(str(order.grand_total)),
+            expected_amount=due,
             ocr_reference=parsed.reference.value if parsed.reference else None,
             reference_duplicate=ref_duplicate,
             image_duplicate=False,
@@ -288,7 +304,7 @@ class SlipVerifyService:
             assessment,
             amount=parsed.amount.value if parsed.amount else None,
             reference_found=parsed.reference is not None,
-            grand_total=Decimal(str(order.grand_total)),
+            due=due,
             reference_duplicate=ref_duplicate,
         )
 
@@ -297,9 +313,13 @@ class SlipVerifyService:
         held_for_bank_check = final_status == "verified" and not settings.SLIP_AUTO_VERIFY
         if held_for_bank_check:
             final_status = "review"
-        failure_reason = (
-            HELD_FOR_BANK_CHECK_REASON if held_for_bank_check else _get_failure_reason(final_status)
-        )
+        over_due = final_status == "review" and parsed.amount is not None and due > 0 and parsed.amount.value > due
+        if over_due:
+            failure_reason = over_due_reason(parsed.amount.value, due)
+        else:
+            failure_reason = (
+                HELD_FOR_BANK_CHECK_REASON if held_for_bank_check else _get_failure_reason(final_status)
+            )
 
         # 12. Update verification record; a verified slip settles the order
         payment_id = None
@@ -366,7 +386,7 @@ class SlipVerifyService:
                 "status": "amount_mismatch",
                 "message": "จำนวนเงินไม่ตรงกับรายการ",
                 "data": {
-                    "expected_amount": float(order.grand_total),
+                    "expected_amount": float(due),
                     "detected_amount": float(parsed.amount.value) if parsed.amount else None,
                     "risk_score": assessment.total_score,
                 },
@@ -388,7 +408,9 @@ class SlipVerifyService:
                 "success": True,
                 "status": "review",
                 "message": (
-                    "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
+                    "ยอดในสลิปเกินยอดค้างชำระ รอเจ้าหน้าที่ตรวจสอบ"
+                    if over_due
+                    else "ได้รับสลิปแล้ว รอเจ้าหน้าที่ตรวจสอบกับธนาคาร"
                     if held_for_bank_check
                     else "สลิปอยู่ระหว่างการตรวจสอบ"
                 ),
@@ -398,7 +420,11 @@ class SlipVerifyService:
                     "amount": float(parsed.amount.value) if parsed.amount else None,
                     "reference": parsed.reference.value if parsed.reference else None,
                     "risk_score": assessment.total_score,
-                    "pending_reason": "bank_check" if held_for_bank_check else "risk_review",
+                    "pending_reason": (
+                        "over_due" if over_due else "bank_check" if held_for_bank_check else "risk_review"
+                    ),
+                    # What the order still owes, when the slip is for more.
+                    "expected_amount": float(due) if over_due else None,
                 },
             }
 
@@ -497,10 +523,16 @@ class SlipVerifyService:
         if verification.status not in APPROVABLE_STATUSES:
             raise BadRequestException(detail="This verification cannot be approved")
 
-        if confirmed_amount != Decimal(str(order.grand_total)):
+        due = _still_due(db, order)
+        if confirmed_amount > due:
+            raise BadRequestException(
+                detail=f"confirmed_amount ({confirmed_amount}) is more than the amount still due ({due})",
+                code="OVERPAYMENT",
+            )
+        if confirmed_amount != due:
             raise AppException(
                 status_code=422,
-                detail="confirmed_amount must equal the order total",
+                detail=f"confirmed_amount must equal the amount still due ({due})",
                 code="AMOUNT_MISMATCH",
             )
         # The slip's own OCR reference is expected to match; any other use is a reuse.

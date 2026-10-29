@@ -31,7 +31,7 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, current_shift, is_fully_paid, paid_net
+from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, paid_net
 from app.shared.ordering import generate_order_number
 
 
@@ -588,7 +588,9 @@ class OrderService:
         """
         idempotency_key = data.get("idempotency_key")
 
-        order = OrderRepository.get_org_order(db, org_id, order_id)
+        # Row lock: a checkout and a POST /payments/ of one order are serialized,
+        # so the second sees what the first settled (Phase 43).
+        order = OrderRepository.get_org_order_for_update(db, org_id, order_id)
         if not order:
             raise NotFoundException(detail="Order not found")
 
@@ -646,10 +648,22 @@ class OrderService:
 
         Shared by POS checkout and slip verification. Only flushes: the caller
         owns the transaction (commit) and any post-commit events.
+
+        What completed payments (POST /payments/) already settled counts
+        (Phase 43): points and payments cover only what is still due, and
+        nothing is left to settle is 400 ORDER_ALREADY_PAID. Up to v0.1.16
+        the whole grand_total was settled again on top of them.
         """
         if order.status not in OrderService.CHECKOUTABLE_STATUSES:
             raise InvalidOrderStateException(
                 detail=f"Cannot checkout order in '{order.status}' status"
+            )
+
+        already = paid_net(db, order.id)
+        if already > 0 and already >= amount_due(order):
+            raise BadRequestException(
+                detail=f"The order is already paid ({already} of {amount_due(order)})",
+                code="ORDER_ALREADY_PAID",
             )
 
         org_id = order.organization_id
@@ -673,7 +687,7 @@ class OrderService:
                         f"{customer.loyalty_points_balance}, requested: {redeem_points}"
                     )
                 )
-            max_credit = int(order.grand_total) // OrderService.POINTS_VALUE_PER_BAHT
+            max_credit = int(Decimal(str(order.grand_total)) - already) // OrderService.POINTS_VALUE_PER_BAHT
             redeemed = min(redeem_points, max_credit)
             if redeemed == 0:
                 raise BadRequestException(detail="Points do not cover any amount due")
@@ -697,7 +711,8 @@ class OrderService:
             customer.loyalty_points_balance = after
             order.loyalty_points_redeemed = redeemed
 
-        due = order.grand_total - Decimal(redeemed)
+        # What is still due: neither the points nor earlier payments are paid twice.
+        due = Decimal(str(order.grand_total)) - Decimal(redeemed) - already
 
         # ---- Payments ----
         if not payments:
@@ -755,43 +770,63 @@ class OrderService:
             PaymentRepository.add_payment(db, payment)
             recorded.append(payment)
 
-        order.amount_paid = paid_total
-        order.change_amount = paid_total - due
+        # Added to what earlier payments handed over, as POST /payments/ does.
+        order.amount_paid = Decimal(str(order.amount_paid)) + paid_total
+        order.change_amount = Decimal(str(order.change_amount)) + (paid_total - due)
 
-        # ---- Loyalty earn on net spend ----
-        points_earned = 0
-        if customer is not None and redeemed < int(order.grand_total):
-            spend_whole = int(due)
-            points_earned = (
-                spend_whole // OrderService.POINTS_EARN_PER_BAHT
-                if OrderService.POINTS_EARN_PER_BAHT
-                else spend_whole
-            )
-            if points_earned > 0:
-                before = customer.loyalty_points_balance
-                after = before + points_earned
-                LoyaltyRepository.add_transaction(
-                    db,
-                    LoyaltyTransaction(
-                        customer_id=order.customer_id,
-                        transaction_type="earn",
-                        points=points_earned,
-                        points_before=before,
-                        points_after=after,
-                        reference_type="order",
-                        reference_id=order.id,
-                        notes="Points earned at checkout",
-                        user_id=user_id,
-                    ),
-                )
-                customer.loyalty_points_balance = after
-                order.loyalty_points_earned = points_earned
+        OrderService.award_points(db, order, user_id)
 
         order.status = "paid"
         order.paid_at = datetime.now(timezone.utc)
 
         db.flush()
         return recorded
+
+    @staticmethod
+    def award_points(db: Session, order: Order, user_id: int) -> int:
+        """Loyalty points for a fully paid order, whichever way it was paid
+        (checkout, POST /payments/, a slip): the whole order's net spend
+        (grand_total less the points redeemed), once per order (Phase 43).
+
+        The caller holds the order's row lock, so two payments that complete
+        one order cannot both award. Returns the points awarded now (0 when the
+        order has no customer or was awarded already). Only flushes.
+        """
+        if order.customer_id is None or order.loyalty_points_earned:
+            return 0
+        if LoyaltyRepository.earned_on_order(db, order.id):
+            return 0
+        spend_whole = int(amount_due(order))
+        points = (
+            spend_whole // OrderService.POINTS_EARN_PER_BAHT
+            if OrderService.POINTS_EARN_PER_BAHT
+            else spend_whole
+        )
+        if points <= 0:
+            return 0
+        customer = LoyaltyRepository.find_org_customer(db, order.organization_id, order.customer_id)
+        if customer is None:
+            return 0
+        before = customer.loyalty_points_balance
+        after = before + points
+        LoyaltyRepository.add_transaction(
+            db,
+            LoyaltyTransaction(
+                customer_id=order.customer_id,
+                transaction_type="earn",
+                points=points,
+                points_before=before,
+                points_after=after,
+                reference_type="order",
+                reference_id=order.id,
+                notes="Points earned on the paid order",
+                user_id=user_id,
+            ),
+        )
+        customer.loyalty_points_balance = after
+        order.loyalty_points_earned = points
+        db.flush()
+        return points
 
     @staticmethod
     def complete_order(db: Session, org_id: int, order_id: int) -> Order:

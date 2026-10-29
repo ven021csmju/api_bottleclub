@@ -24,6 +24,17 @@ class LoyaltyRepository:
         db.add(transaction)
 
     @staticmethod
+    def earned_on_order(db: Session, order_id: int) -> bool:
+        """True once points were earned on the order (an ``earn`` row referencing it)."""
+        return db.scalar(
+            select(LoyaltyTransaction.id).where(
+                LoyaltyTransaction.transaction_type == "earn",
+                LoyaltyTransaction.reference_type == "order",
+                LoyaltyTransaction.reference_id == order_id,
+            ).limit(1)
+        ) is not None
+
+    @staticmethod
     def get_pending_expiring_points(db: Session, customer_id: int, now: datetime, thirty_days: datetime) -> int:
         return (
             db.scalar(

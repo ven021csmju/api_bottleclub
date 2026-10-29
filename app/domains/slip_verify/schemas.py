@@ -124,7 +124,8 @@ class SlipUploadData(BaseModel):
     """``data`` of a slip upload; which fields are set depends on ``status``:
     verified / review: verification_id, order_id, amount, reference, risk_score
     (verified also bank, date, time, sender_name, receiver_name, verified_at;
-    review also pending_reason: bank_check | risk_review | ocr_unavailable);
+    review also pending_reason: bank_check | risk_review | ocr_unavailable | over_due,
+    over_due with expected_amount = what the order still owes);
     amount_mismatch: expected_amount, detected_amount, risk_score;
     duplicate_image / duplicate_reference: existing_verification_id
     (duplicate_image also existing_order_id); other refusals: risk_score."""
