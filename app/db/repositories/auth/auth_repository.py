@@ -204,5 +204,8 @@ class AuthRepository:
                 username=username,
                 ip_address=ip_address,
                 success=success,
+                # The moment itself, not the transaction's start: login_guard
+                # orders attempts and unlocks by it (Phase 48-0).
+                attempted_at=func.clock_timestamp(),
             )
         )

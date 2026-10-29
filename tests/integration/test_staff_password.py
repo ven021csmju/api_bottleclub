@@ -205,16 +205,22 @@ class TestChangePassword:
     def test_wrong_current_password_counts_as_a_failed_login(
         self, client: TestClient, staff: User, session: Session
     ):
+        from app.db.models import LoginAttempt
+
         token = _login(client, STAFF["username"], STAFF["password"]).json()["data"]["access_token"]
         resp = _change(client, token, "not-the-password", NEW_PASSWORD)
         assert resp.status_code == 400 and resp.json()["code"] == "INVALID_CURRENT_PASSWORD"
-        session.refresh(staff)
-        assert staff.failed_login_attempts == 1
+        # Up to v0.1.21 users.failed_login_attempts / locked_until (the whole account);
+        # since Phase 48-0 a failed login of this (username, IP) in login_attempts.
+        failures = select(LoginAttempt).where(LoginAttempt.username == STAFF["username"],
+                                              LoginAttempt.success.is_(False))
+        session.expire_all()
+        assert len(session.scalars(failures).all()) == 1
 
         for _ in range(4):
             _change(client, token, "not-the-password", NEW_PASSWORD)
-        session.refresh(staff)
-        assert staff.locked_until is not None
+        session.expire_all()
+        assert len(session.scalars(failures).all()) == 5
         resp = _change(client, token, STAFF["password"], NEW_PASSWORD)
         assert resp.status_code == 400 and resp.json()["code"] == "ACCOUNT_LOCKED"
         assert _login(client, STAFF["username"], STAFF["password"]).status_code == 401
