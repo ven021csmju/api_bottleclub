@@ -956,6 +956,23 @@ redeemed − what its completed payments already settled (net of change).
 | `POST /slip-verify/{id}/approve` with `confirmed_amount` **more** than is still due | 422 `AMOUNT_MISMATCH` when ≠ `grand_total` (= `grand_total` was taken even after a cash part) | **400 `OVERPAYMENT`** `"confirmed_amount (100.00) is more than the amount still due (70.00)"`: approve what is still due (the transfer's extra is the shop's to give back). Less than due: 422 `AMOUNT_MISMATCH`. |
 | `PATCH /coupons/{id}` | **405** (no way to change a coupon; delete + create lost its uses) | `coupons.update` at organization level (Superadmin). Changes only the fields sent: `max_uses_per_customer` (`null` = no limit), `end_date`, `is_active`, `max_uses` (`null` = no limit). `code`, `discount_type`, `discount_value` only while the coupon was **never used** (else **409 `COUPON_IN_USE`**). Any other field / empty body / `null` for a required field → 422. Audited `COUPON.UPDATE`. |
 
+### CORS origins (Phase 44)
+
+**Deploy: set `CORS_ORIGINS` in the API's environment first, then the code.** Without it a production API does not start.
+
+| | Before 44 (v0.1.17) | 44 |
+|---|---|---|
+| Default (variable not set) | two Vercel apps + `http://localhost:3000/3001/5173/5174` | **none**: no browser origin is allowed |
+| `ENVIRONMENT=production` without `CORS_ORIGINS` (or empty) | started with the default | **does not start**: `CORS_ORIGINS must be set in production (no default)` (the settings fail at import; systemd keeps retrying) |
+| Format of `CORS_ORIGINS` | JSON list only | **comma-separated** `https://a.example,https://b.example` (no quotes: safe in a systemd `EnvironmentFile`), or a JSON list as before; spaces around commas and repeats are ignored |
+| Each origin | any string | exactly `scheme://host[:port]`: http/https, lower case, **no path, no trailing `/`**, no query, no user. Anything else stops the app at start with the bad origin named. Production: **https only** |
+| `*` / wildcards (`*`, `https://*.vercel.app`) | `*` accepted (with credentials) | **refused** in every environment: credentials (`Authorization`, cookies) are always allowed, so origins are exact. No `allow_origin_regex`: a Vercel preview URL (`<project>-git-<branch>-<team>.vercel.app`, `<project>-<hash>.vercel.app`) is another origin and gets no CORS headers |
+| An allowed origin | `Access-Control-Allow-Origin: <origin>`, `Access-Control-Allow-Credentials: true` | unchanged (expose headers as in Phase 42) |
+| Any other origin | no `Access-Control-Allow-Origin` (the browser reads nothing); preflight `OPTIONS` → 400 | unchanged |
+
+Calls without an `Origin` header (curl, server to server, the mobile app) are not affected: CORS is a browser rule.
+
+
 ---
 
 ## Catalog `/catalog`

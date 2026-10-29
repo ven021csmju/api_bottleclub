@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator, model_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -14,6 +16,52 @@ _UNSAFE_JWT_DEFAULTS = {
     "change-me-in-production",
     "change-me-to-a-long-random-string-at-least-32-characters",
 }
+
+
+def parse_cors_origins(raw: str, environment: str) -> list[str]:
+    """The browser origins CORS_ORIGINS allows: comma-separated or a JSON list.
+
+    The API answers with credentials (cookies/Authorization), so each origin
+    must be exact: scheme://host[:port], lower case, no path or trailing ``/``,
+    no ``*`` anywhere. Production needs at least one, all https; there is no
+    default (Phase 44).
+    """
+    raw = raw.strip()
+    if raw.startswith("["):
+        try:
+            values = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"CORS_ORIGINS is not a JSON list: {exc.msg}") from exc
+        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+            raise ValueError("CORS_ORIGINS must be a JSON list of strings")
+    else:
+        values = raw.split(",")
+    origins = [v.strip() for v in values if v.strip()]
+    production = environment.strip().lower() == "production"
+    for origin in origins:
+        if "*" in origin:
+            raise ValueError(f"CORS_ORIGINS: no wildcard with credentials: {origin!r}")
+        parts = urlsplit(origin)
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or parts.path
+            or parts.query
+            or parts.fragment
+            or origin != f"{parts.scheme}://{parts.netloc}"
+            or origin != origin.lower()
+            or any(c.isspace() for c in origin)
+        ):
+            raise ValueError(
+                f"CORS_ORIGINS: not an origin (scheme://host[:port], lower case, no path or trailing /): {origin!r}"
+            )
+        if production and parts.scheme != "https":
+            raise ValueError(f"CORS_ORIGINS: production allows https origins only: {origin!r}")
+    if production and not origins:
+        raise ValueError("CORS_ORIGINS must be set in production (no default)")
+    return list(dict.fromkeys(origins))
 
 
 class Settings(BaseSettings):
@@ -46,14 +94,10 @@ class Settings(BaseSettings):
     # account gets no role; staff accounts cannot sign in with Google.
     GOOGLE_DEFAULT_ORGANIZATION_ID: int | None = None
 
-    CORS_ORIGINS: list[str] = [
-        "https://the-bottle-club-ai.vercel.app",
-        "https://front-posimon.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",
-        "http://localhost:5174",
-    ]
+    # Browser origins allowed by CORS: comma-separated (or a JSON list), e.g.
+    # "https://pos.example.com,https://admin.example.com". Empty (default): no
+    # origin. Production refuses to start without it (parse_cors_origins).
+    CORS_ORIGINS: str = ""
 
     # POST /auth/register. Unset: open outside production/staging, closed in
     # production/staging (403 REGISTRATION_DISABLED).
@@ -126,6 +170,10 @@ class Settings(BaseSettings):
         return [name.strip() for name in self.SHOP_RECEIVER_NAMES.split(",") if name.strip()]
 
     @property
+    def cors_origins(self) -> list[str]:
+        return parse_cors_origins(self.CORS_ORIGINS, self.ENVIRONMENT)
+
+    @property
     def registration_enabled(self) -> bool:
         if self.REGISTRATION_ENABLED is not None:
             return self.REGISTRATION_ENABLED
@@ -142,6 +190,13 @@ class Settings(BaseSettings):
             ZoneInfo(value)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"STORE_TIMEZONE is not a known time zone: {value!r}") from exc
+        return value
+
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def validate_cors_origins(cls, value: str, info: ValidationInfo) -> str:
+        # Here and not in the model validator: an error shows only this value.
+        parse_cors_origins(value, info.data.get("ENVIRONMENT", ""))
         return value
 
     @field_validator("STORE_DAY_START_HOUR")

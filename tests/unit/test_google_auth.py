@@ -55,6 +55,7 @@ def test_callback_rejects_invalid_state_without_calling_google(monkeypatch):
 
 def test_google_login_sets_production_state_and_nonce_cookies(monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "CORS_ORIGINS", "https://pos.example.com")  # production needs one
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "client-id")
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "server-secret")
     monkeypatch.setattr(

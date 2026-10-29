@@ -22,7 +22,8 @@ _PROD_DB_URL = "postgresql+psycopg://user:pass@prod-host:5432/prod_db"
 
 
 def _make_settings(**overrides) -> Settings:
-    return Settings(**overrides)
+    # Production needs CORS_ORIGINS since Phase 44 (tests/unit/test_cors_origins.py).
+    return Settings(**{"CORS_ORIGINS": "https://pos.example.com", **overrides})
 
 
 def test_production_rejects_dev_database_default():

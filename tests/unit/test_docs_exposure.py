@@ -9,6 +9,7 @@ def _client(monkeypatch, environment: str) -> TestClient:
     from app import main
 
     monkeypatch.setattr(main.settings, "ENVIRONMENT", environment)
+    monkeypatch.setattr(main.settings, "CORS_ORIGINS", "https://pos.example.com")  # production needs one
     return TestClient(main.create_app())  # no `with`: lifespan not started
 
 
