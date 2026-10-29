@@ -46,7 +46,8 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
-    refresh_token: str
+    #: Left out in cookie mode (X-Auth-Mode: cookie): it is in the cookie.
+    refresh_token: str | None = None
     #: True: every route but POST /auth/change-password (and logout) answers
     #: 403 PASSWORD_CHANGE_REQUIRED until the password is changed.
     password_change_required: bool = False

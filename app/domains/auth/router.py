@@ -22,6 +22,7 @@ from .schemas import (
     TokenResponse,
     UserProfileResponse,
 )
+from .cookie import answer
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
@@ -121,56 +122,59 @@ def google_callback(
     return token_response
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, response_model_exclude_none=True)
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
 def login(
     request: Request,
+    response: Response,
     body: LoginRequest,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
     user_agent = request.headers.get("User-Agent", "")
-    return AuthService.login(
+    return answer(request, response, AuthService.login(
         db=db,
         username=body.username,
         password=body.password,
         ip_address=ip_address,
         user_agent=user_agent,
         request_id=getattr(request.state, "request_id", ""),
-    )
+    ))
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True)
 @limiter.limit(settings.RATE_LIMIT_REFRESH)
 def refresh(
     request: Request,
+    response: Response,
     body: RefreshTokenRequest,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
-    return AuthService.refresh_token(
+    return answer(request, response, AuthService.refresh_token(
         db=db,
         raw_refresh_token=body.refresh_token,
         ip_address=ip_address,
-    )
+    ))
 
 
-@router.post("/change-password", response_model=TokenResponse)
+@router.post("/change-password", response_model=TokenResponse, response_model_exclude_none=True)
 @limiter.limit(settings.RATE_LIMIT_CHANGE_PASSWORD)
 def change_password(
     request: Request,
+    response: Response,
     body: ChangePasswordRequest,
     user: User = Depends(get_authenticated_user),
     db: Session = Depends(get_db),
 ) -> TokenResponse:
-    return AuthService.change_password(
+    return answer(request, response, AuthService.change_password(
         db=db,
         user=user,
         current_password=body.current_password,
         new_password=body.new_password,
         ip_address=request.client.host if request.client else "",
         user_agent=request.headers.get("User-Agent", ""),
-    )
+    ))
 
 
 @router.post("/logout", status_code=204)
