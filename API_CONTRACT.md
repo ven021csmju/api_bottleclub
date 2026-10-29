@@ -507,6 +507,8 @@ no `Authorization: Bearer <access token>` or a bad one, before any other check
   `PASSWORD_CHANGE_REQUIRED`, `/auth/refresh` too.
 - Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED` (only
   after a correct password); an admin resets it.
+- `X-Auth-Mode: cookie` (Phase 45): no `refresh_token` in the body; it is in
+  the HttpOnly cookie `__Host-bc_refresh`. See "Refresh token in a cookie (Phase 45)".
 
 ### GET `/auth/google` → 302 to Google, then GET `/auth/google/callback`
 Temporary rules until Google accounts are linked by their subject:
@@ -531,13 +533,18 @@ elsewhere). 5 requests per hour per client IP (`RATE_LIMIT_REGISTER`), then 429.
 
 ### POST `/auth/refresh`
 ```json
-// Request
+// Request (body mode)
 { "refresh_token": "string" }
+// Request (cookie mode, Phase 45): no body, X-Auth-Mode: cookie, credentials: "include"
 
-// Response 200 → same as login response
+// Response 200 → same as login response (no refresh_token in cookie mode: a new cookie)
 ```
 401 `TOKEN_REVOKED` for a refresh token issued before the last password change;
-403 `PASSWORD_CHANGE_REQUIRED` while the password is temporary.
+403 `PASSWORD_CHANGE_REQUIRED` while the password is temporary. A token already
+rotated → 401 `REFRESH_TOKEN_REUSED` and its family revoked (Phase 45). Without
+`refresh_token` the cookie is read: 403 `CSRF_REJECTED` unless `X-Auth-Mode:
+cookie` from an origin of `AUTH_COOKIE_ORIGINS`; no cookie → 401
+`REFRESH_TOKEN_MISSING`.
 
 ### POST `/auth/change-password`
 Allowed while `password_change_required` (that is what it is for).
@@ -559,7 +566,8 @@ Allowed while `password_change_required` (that is what it is for).
 - Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED`.
 - On success every refresh token of the user is revoked and every access token
   issued before is refused (401 `TOKEN_REVOKED`), on every device. Use the
-  returned pair.
+  returned pair (with `X-Auth-Mode: cookie`: the new refresh token is in the
+  cookie, not the body).
 
 ### POST `/auth/logout`
 ```json
@@ -569,9 +577,12 @@ Allowed while `password_change_required` (that is what it is for).
 // Response 204 No Content
 ```
 With `refresh_token`: that token is revoked (only if it is the caller's own).
-Without a body: **every** refresh token of the caller is revoked. The access
-token itself stays valid until it expires (at most 15 minutes); discard it.
-Allowed while `password_change_required`.
+Without a body: **every** refresh token of the caller is revoked; with
+`X-Auth-Mode: cookie` (Phase 45) the cookie's token only (403
+`CSRF_REJECTED` from an origin not in `AUTH_COOKIE_ORIGINS`). The answer
+always deletes the refresh cookie (`Max-Age=0`). The access token itself
+stays valid until it expires (at most 15 minutes); discard it. Allowed while
+`password_change_required`.
 
 ### GET `/auth/me`
 ```json
@@ -1012,6 +1023,74 @@ send **the same request with the same key**. **Frontend: on 409
 Read-only check on production (owner, `bottleclub_ro`):
 `scripts/prod_checks/cash_without_shift.sql` lists completed cash payments
 and cash refunds with no shift, split into before / after the first shift.
+
+### Refresh token in a cookie (Phase 45)
+
+**Deploy: apply migration `021_refresh_token_family.sql`, set
+`AUTH_COOKIE_ORIGINS` in the API's environment, then the code.** Each origin of
+`AUTH_COOKIE_ORIGINS` must also be in `CORS_ORIGINS`, or the API does not
+start (`AUTH_COOKIE_ORIGINS must be in CORS_ORIGINS too: <origin>`). Empty
+(the default): no web may use the cookie; the body mode works as before.
+
+A web on a subdomain of the API's site (`pos.wayneven.uk` → `api.wayneven.uk`)
+can leave the refresh token out of JavaScript: send **`X-Auth-Mode: cookie`**
+and `fetch(..., {credentials: "include"})`. The API then keeps the refresh
+token in an **HttpOnly cookie** the script can neither read nor send by hand.
+The access token stays in the body: keep it **in memory only** (not
+localStorage); after a reload, get a new one with `POST /auth/refresh`.
+
+| | Body mode (no header; vercel.app, scripts, the mobile app) | Cookie mode (`X-Auth-Mode: cookie`) |
+|---|---|---|
+| `POST /auth/login`, `/auth/change-password` | `refresh_token` in the body | **no `refresh_token`** in the body; `Set-Cookie: __Host-bc_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=604800` (7 days, `REFRESH_TOKEN_EXPIRE_DAYS`), no `Domain` |
+| `POST /auth/refresh` | body `{refresh_token}` (required: without it the request is read as cookie mode, below) | **no body** (or `{}`): the cookie's token, rotated: a new cookie, no `refresh_token` in the body. A body token still wins over the cookie |
+| `POST /auth/logout` (with `Authorization: Bearer`) | body `{refresh_token}`: that token; no body: every token of the user | **no body**: the cookie's token (no cookie: every token of the user) |
+| Cookie in the answer of logout | **deleted** (`Max-Age=0`) | **deleted** |
+
+**CSRF.** `POST /auth/refresh` and `/auth/logout` read the cookie only when the
+request has `X-Auth-Mode: cookie` **and** an `Origin` of `AUTH_COOKIE_ORIGINS`;
+any other request that would read it → **403 `CSRF_REJECTED`**, nothing
+rotated or revoked. A browser sends both by itself with the `fetch` above
+(`Origin` is set by the browser; the custom header needs a CORS preflight,
+which only `CORS_ORIGINS` pass). `SameSite=Strict` keeps the cookie off other
+sites; the `Origin` check keeps it off the other origins of the same site
+(another subdomain of `wayneven.uk`).
+
+| Answer | When |
+|---|---|
+| 403 `CSRF_REJECTED` | refresh/logout would read the cookie without `X-Auth-Mode: cookie`, or from an `Origin` not in `AUTH_COOKIE_ORIGINS` (or no `Origin`) |
+| 401 `REFRESH_TOKEN_MISSING` | an allowed cookie-mode refresh, but no cookie (never logged in in cookie mode, logged out, expired) → log in |
+| 401 `REFRESH_TOKEN_REUSED` | a refresh token that was already rotated (or logged out) used again, body or cookie: **its family is revoked** (that login and every token its refreshes rotated it into), so the newer token is refused too → log in. The user's other logins (other devices) stay |
+| 401 `UNAUTHORIZED` / `TOKEN_REVOKED`, 403 `PASSWORD_CHANGE_REQUIRED` | as before |
+
+**One refresh at a time.** Two refreshes with the same token are run one after
+the other: the second finds the token rotated and is **401
+`REFRESH_TOKEN_REUSED`, which logs that login out**. A web must not refresh
+twice at once: one refresh in flight per browser (e.g. `navigator.locks`
+across tabs), and React StrictMode must not double-call it on mount.
+
+**One cookie per browser for the API.** The cookie belongs to the API's host
+(`api.wayneven.uk`), not to the web: every web of `AUTH_COOKIE_ORIGINS` in the
+same browser shares it. A login in one replaces the cookie of the other (the
+other then refreshes as the new login), a logout in one logs the other out.
+
+**Over plain http** (a web on `http://localhost:5173` against a staging API on
+http), outside production, the cookie is **`bc_refresh`** with the same
+attributes: browsers keep a `Secure` cookie from `http://localhost` but refuse
+a `__Host-` one there (Chromium: `InvalidPrefix`). Production (and any https
+request) is always `__Host-bc_refresh`. Nothing changes for the web: it never
+names the cookie.
+
+| | Before 45 (v0.1.19) | 45 |
+|---|---|---|
+| Refresh token | in the body only | body, or HttpOnly cookie with `X-Auth-Mode: cookie` |
+| `POST /auth/refresh` without `refresh_token` | 422 `VALIDATION_ERROR` | cookie mode: 403 `CSRF_REJECTED` / 401 `REFRESH_TOKEN_MISSING` / 200 |
+| A rotated refresh token used again | 401; the newer token went on working | 401 **`REFRESH_TOKEN_REUSED`**, its family revoked |
+| `TokenResponse.refresh_token` | always there | **left out** in cookie mode |
+| Several `Set-Cookie` in one answer (e.g. `GET /auth/google/callback` deleting two cookies) | only the last one sent | all sent |
+
+Migration 021 adds `refresh_tokens.family_id` (NULL for tokens stored before:
+linked at their first refresh). The code before 45 works on 021. Rollback:
+the code first, then `021_refresh_token_family.rollback.sql`.
 
 
 ---
