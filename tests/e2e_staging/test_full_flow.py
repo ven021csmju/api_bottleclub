@@ -678,7 +678,7 @@ def test_j_shift(api, rec, flow):
 # ---------------------------------------------------------------------------
 def test_k_reports(api, rec, flow):
     s = "k"
-    needs(flow, "sales", "manager")
+    needs(flow, "sales", "manager", "register")
     A, d = flow["A"], today()
 
     # Order 6: the Branch Admin sells a red (Wine) and a cheese plate (Food)
@@ -689,12 +689,29 @@ def test_k_reports(api, rec, flow):
     o6 = data(resp)
     rec.eq(s, "order 6: 350 + 180 less 10.00 typed in", (200, D(10), D(520)),
            (resp.status_code, D(o6.get("discount_amount", 0)), D(o6.get("grand_total", 0))), resp.status_code)
-    resp = api.post(f"/orders/{o6.get('id')}/checkout", "manager", json={
-        "payments": [{"payment_method": "cash", "amount": "520.00"}]})
-    rec.eq(s, "checkout order 6: cash 520", 200, resp.status_code, resp.status_code)
+    # Cash needs an open shift (Phase 46): with none (step j closed the
+    # cashier's) it is 409 SHIFT_REQUIRED and the order stays unpaid.
+    cash = {"payments": [{"payment_method": "cash", "amount": "520.00"}]}
+    resp = api.post(f"/orders/{o6.get('id')}/checkout", "manager", json=cash)
+    body = resp.json() if resp.content else {}
+    after = data(api.get(f"/orders/{o6.get('id')}", "manager"))
+    rec.eq(s, "cash with no open shift: 409 SHIFT_REQUIRED, order still pending",
+           (409, "SHIFT_REQUIRED", A, "pending", D(0)),
+           (resp.status_code, body.get("code"), body.get("branch_id"), after.get("status"), D(after.get("amount_paid", 0))),
+           resp.status_code)
+    resp = api.post("/shifts/open", "manager", json={"branch_id": A, "register_id": flow["register"], "opening_cash": "0.00"})
+    rec.check(s, "Branch Admin opens a shift", created(resp), "200/201", resp.status_code, resp.status_code)
+    k_shift = data(resp).get("id")
+    resp = api.post(f"/orders/{o6.get('id')}/checkout", "manager", json=cash)
+    paid = rows(data(api.get(f"/payments/{o6.get('id')}", "manager")))
+    rec.eq(s, "checkout order 6: cash 520 in that shift", (200, [k_shift]),
+           (resp.status_code, [p.get("shift_id") for p in paid]), resp.status_code)
     if resp.status_code == 200:
         flow["sales"]["o6"] = D(520)
         flow["stock"]["p1"] -= 1
+    resp = api.put(f"/shifts/{k_shift}/close", "manager", json={"closing_cash": "520.00"})
+    rec.eq(s, "close it with the 520", (200, "closed", D(520)),
+           (resp.status_code, data(resp).get("status"), D(data(resp).get("total_cash_sales", 0))), resp.status_code)
 
     net = sum(flow["sales"].values(), D(0))          # what the paid orders charged
     n_sold = len(flow["sales"])

@@ -8,7 +8,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.domains.orders.service import OrderService
 from app.db.repositories.returns import ReturnRepository
 from app.domains.returns.service import PAID_STATUSES
-from app.domains.shifts.drawer import CASH, amount_due, current_shift, paid_net, refunded
+from app.domains.shifts.drawer import CASH, amount_due, order_drawer, paid_net, refunded
 from app.services import user_events
 from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
@@ -50,8 +50,9 @@ class PaymentService:
                 detail=f"{method} payment ({amount}) exceeds the remaining due ({remaining}); only cash gives change",
                 code="OVERPAYMENT",
             )
+        # Cash with no open shift is 409 SHIFT_REQUIRED (Phase 46).
+        shift = order_drawer(db, order, user_id, [method])
         net = min(amount, remaining)
-        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
 
         payment = Payment(
             order_id=order_id,
@@ -124,7 +125,8 @@ class PaymentService:
                 detail=f"Refund ({refund_amount}) exceeds what is left to refund ({left})",
                 code="REFUND_EXCEEDS_PAID",
             )
-        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
+        # Cash paid out with no open shift is 409 SHIFT_REQUIRED (Phase 46).
+        shift = order_drawer(db, order, user_id, [data["refund_method"]])
 
         refund_number = generate_refund_number(db)
 

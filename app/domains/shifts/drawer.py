@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Payment, Refund, Shift
+from app.shared.exceptions import AppException
 
 CASH = "cash"
 
@@ -32,6 +33,25 @@ def current_shift(
         shift = db.scalars(
             select(Shift).where(Shift.id == shift_id, Shift.branch_id == branch_id, Shift.status == "open")
         ).first()
+    return shift
+
+
+def order_drawer(db: Session, order, user_id: int, methods, branch_id: int | None = None) -> Shift | None:
+    """The drawer (``current_shift``) that takes or pays out the money of ``order``
+    at ``branch_id`` (default: the order's branch).
+
+    Cash among ``methods`` needs one (Phase 46): with no open shift it is
+    409 SHIFT_REQUIRED, raised before anything is written. Any other method
+    goes on without a shift (as before)."""
+    branch_id = order.branch_id if branch_id is None else branch_id
+    shift = current_shift(db, branch_id, user_id, order.register_id, order.shift_id)
+    if shift is None and any(m == CASH for m in methods):
+        raise AppException(
+            status_code=409,
+            detail="Cash needs an open shift at this branch: open a shift first",
+            code="SHIFT_REQUIRED",
+            extra={"branch_id": branch_id},
+        )
     return shift
 
 

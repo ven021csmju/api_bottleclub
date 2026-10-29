@@ -31,7 +31,7 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, paid_net
+from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, order_drawer, paid_net
 from app.shared.ordering import generate_order_number
 
 
@@ -599,6 +599,12 @@ class OrderService:
         if idempotency_key and order.status in ("paid", "completed", "refunded"):
             return order
 
+        # Cash with no open shift is 409 SHIFT_REQUIRED before the coupon
+        # or the points are touched (Phase 46); an order that cannot be checked
+        # out is left to settle_order's answer.
+        if order.status in OrderService.CHECKOUTABLE_STATUSES:
+            order_drawer(db, order, user_id, (p["payment_method"] for p in data.get("payments") or []))
+
         if data.get("coupon_code"):
             OrderService._coupon_at_checkout(db, order, data["coupon_code"])
 
@@ -665,6 +671,9 @@ class OrderService:
                 detail=f"The order is already paid ({already} of {amount_due(order)})",
                 code="ORDER_ALREADY_PAID",
             )
+
+        # Before the points: cash with no open shift writes nothing (Phase 46).
+        shift = order_drawer(db, order, user_id, (p["payment_method"] for p in payments))
 
         org_id = order.organization_id
         customer = None
@@ -752,7 +761,6 @@ class OrderService:
                 detail="A payment would settle nothing: send only what is needed", code="OVERPAYMENT",
             )
 
-        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
         recorded: list[Payment] = []
         for (pay, amount), net in zip(handed, nets):
             payment = Payment(
