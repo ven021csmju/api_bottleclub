@@ -42,6 +42,12 @@ def answer(request: Request, response: Response, tokens: TokenResponse) -> Token
     return tokens.model_copy(update={"refresh_token": None})
 
 
+def clear(response: Response) -> None:
+    """Delete the cookie (Max-Age=0). A __Host- cookie is deleted only with
+    the attributes it was set with."""
+    response.delete_cookie(REFRESH_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+
+
 def ensure_cookie_request(request: Request) -> None:
     origin = request.headers.get("Origin", "")
     if not cookie_mode(request) or origin not in settings.auth_cookie_origins:

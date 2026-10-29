@@ -22,7 +22,7 @@ from .schemas import (
     TokenResponse,
     UserProfileResponse,
 )
-from .cookie import answer, refresh_token_from_cookie
+from .cookie import REFRESH_COOKIE, answer, clear, cookie_mode, ensure_cookie_request, refresh_token_from_cookie
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
@@ -185,13 +185,20 @@ def logout(
     user: User = Depends(get_authenticated_user),
     db: Session = Depends(get_db),
 ) -> Response:
+    raw = body.refresh_token if body else None
+    if not raw and cookie_mode(request):
+        # The cookie's token; no cookie: every token, as with no body.
+        ensure_cookie_request(request)
+        raw = request.cookies.get(REFRESH_COOKIE)
     AuthService.logout(
         db=db,
         user_id=user.id,
-        raw_refresh_token=body.refresh_token if body else None,
+        raw_refresh_token=raw,
         request_id=getattr(request.state, "request_id", ""),
     )
-    return Response(status_code=204)
+    response = Response(status_code=204)
+    clear(response)  # in either mode: a browser that had the cookie drops it
+    return response
 
 
 @router.get("/me", response_model=UserProfileResponse)

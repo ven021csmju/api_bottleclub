@@ -64,7 +64,8 @@ class RefreshTokenRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
-    #: The refresh token to revoke. Left out: every refresh token of the user.
+    #: The refresh token to revoke. Left out: the cookie's with X-Auth-Mode:
+    #: cookie (Phase 45), else (or with no cookie) every refresh token of the user.
     refresh_token: str | None = None
 
 
