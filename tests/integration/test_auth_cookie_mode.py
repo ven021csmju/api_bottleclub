@@ -61,3 +61,26 @@ def test_change_password_in_cookie_mode(https: TestClient, session, seed_user):
     assert resp.status_code == 200, resp.text
     assert "refresh_token" not in resp.json()["data"]
     assert is_live(session, _the_cookie(resp)) is True
+
+
+def test_over_plain_http_outside_production_it_is_bc_refresh(client: TestClient, session, seed_user, cookie_origin):
+    """A browser refuses a __Host- cookie from http://localhost (Chromium: InvalidPrefix)
+    but keeps a Secure one: a web on localhost against a staging API over http."""
+    resp = login(client, seed_user, COOKIE)
+    assert resp.status_code == 200, resp.text
+    assert refresh_cookie(resp) is None
+    (header,) = set_cookies(resp)
+    name, _, rest = header.partition("=")
+    assert name == "bc_refresh"
+    assert {"httponly", "secure", "samesite=strict", "path=/"} <= {a.strip().lower() for a in rest.split(";")[1:]}
+    old = rest.split(";")[0].strip('"')
+    resp = client.post(f"{API}/auth/refresh", headers={**COOKIE, "Origin": cookie_origin, "Cookie": f"bc_refresh={old}"})
+    assert resp.status_code == 200, resp.text
+    assert is_live(session, old) is False
+
+
+def test_production_is_always_host_prefixed(client: TestClient, seed_user, monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    resp = login(client, seed_user, COOKIE)  # http as uvicorn sees it behind a proxy that does not say https
+    assert resp.status_code == 200, resp.text
+    assert refresh_cookie(resp) is not None
