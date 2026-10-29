@@ -16,6 +16,7 @@ from app.domains.roles.access import (
     ensure_superadmin_remains,
 )
 from app.middleware.access import ALL_BRANCHES, Access
+from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import generate_temporary_password, hash_password
@@ -125,16 +126,35 @@ class UserService:
         return user, password
 
     @staticmethod
-    def reset_password(db: Session, access: Access, user_id: int) -> tuple[User, str]:
-        """Give the user a new temporary password and end all their sessions."""
+    def reset_password(
+        db: Session, access: Access, user_id: int, audit: AuditContext | None = None
+    ) -> tuple[User, str]:
+        """Give the user a new temporary password and end all their sessions.
+        Audited: it also ends the user's login locks (login_guard, Phase 48-0)."""
         user = UserService.get_visible_user(db, access, user_id, "users.update")
         ensure_not_self(access, user, "password here: use POST /auth/change-password")
         ensure_can_manage(db, access, user)
         password = _set_temporary_password(user)
         AuthRepository.revoke_refresh_tokens(db, user.id)
+        if audit is not None:
+            log_audit(db=db, ctx=audit, action="USER.PASSWORD_RESET", entity_type="user", entity_id=user.id,
+                      at=func.clock_timestamp())
         db.commit()
         db.refresh(user)
         return user, password
+
+    @staticmethod
+    def unlock_login(db: Session, access: Access, user_id: int, audit: AuditContext) -> datetime:
+        """End every lock of the user's logins and the slow-down (login_guard
+        counts only the failures after this audit line). Same rule as a
+        password reset: users.update where the user has a role, never one's own."""
+        user = UserService.get_visible_user(db, access, user_id, "users.update")
+        ensure_not_self(access, user, "login lock")
+        ensure_can_manage(db, access, user)
+        log_audit(db=db, ctx=audit, action="USER.LOGIN_UNLOCK", entity_type="user", entity_id=user.id,
+                  at=func.clock_timestamp())
+        db.commit()
+        return datetime.now(timezone.utc)
 
     @staticmethod
     def update_user(db: Session, access: Access, user_id: int, data: UserUpdate) -> User:

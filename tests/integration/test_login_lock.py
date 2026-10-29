@@ -10,6 +10,8 @@ answer said which usernames exist). Now:
 - a login that succeeds from an IP starts that count again;
 - more than 20 wrong in an hour from any IPs: each login of the username waits
   0.5 s per extra failure, at most 5 s; no lock;
+- the Branch Admin (users.update where the user works) or the Superadmin
+  unlocks (POST /users/{id}/unlock-login, audited); a password reset does too;
 - an unknown username, a wrong password and a locked (username, IP) get the
   same answer after the same bcrypt work.
 """
@@ -24,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.shared.security import hash_password
-from tests.integration.scope_fixtures import API, world  # noqa: F401  (fixtures)
+from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
 
@@ -105,6 +107,40 @@ def test_unknown_wrong_and_locked_get_one_answer_after_the_same_work(client: Tes
     assert _answer(_login(client, OUTSIDER, username="no-such-cashier")) == INVALID
 
 
+def test_the_branch_admin_unlocks_and_it_is_audited(client: TestClient, tunnel, session: Session, as_):
+    from app.db.models import AuditLog
+
+    _wrong(client, TILL)
+    assert _login(client, TILL).status_code == 401
+    resp = client.post(f"{API}/users/{tunnel.users['pos_a']}/unlock-login", headers=as_("ba_a", "A"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["user_id"] == tunnel.users["pos_a"]
+    assert _login(client, TILL).status_code == 200
+    session.expire_all()
+    audit = session.scalars(select(AuditLog).where(AuditLog.action == "USER.LOGIN_UNLOCK")).one()
+    assert (audit.entity_type, audit.entity_id, audit.user_id) == ("user", tunnel.users["pos_a"], tunnel.users["ba_a"])
+
+
+@pytest.mark.parametrize("caller, target, status", [
+    ("ba_a", "pos_b", 404),     # a cashier of another branch: not visible
+    ("pos_a2", "pos_a", 403),   # a cashier holds no users.update
+    ("ba_a", "ba_a", 403),      # one's own: SELF_CHANGE
+    ("ba_a", "sa", 403),        # a Superadmin: only a Superadmin
+    ("sa", "ba_a", 200),
+])
+def test_who_may_unlock(client: TestClient, tunnel, as_, caller, target, status):
+    resp = client.post(f"{API}/users/{tunnel.users[target]}/unlock-login", headers=as_(caller, "A"))
+    assert resp.status_code == status, resp.text
+
+
+def test_a_password_reset_unlocks_too(client: TestClient, tunnel, as_):
+    _wrong(client, TILL)
+    resp = client.post(f"{API}/users/{tunnel.users['pos_a']}/reset-password", headers=as_("ba_a", "A"))
+    assert resp.status_code == 200, resp.text
+    resp = _login(client, TILL, resp.json()["data"]["temporary_password"])
+    assert resp.status_code == 200, resp.text
+
+
 def _failures(session: Session, username: str, count: int, ips: int = 10) -> None:
     """``count`` wrong passwords spread over ``ips`` IPs (fewer than 5 each), just now."""
     from app.db.models import LoginAttempt
@@ -128,6 +164,21 @@ def test_many_ips_slow_the_account_and_never_lock_it(client: TestClient, tunnel,
     _failures(session, "pos_a", failures)
     assert _login(client, TILL).status_code == 200  # slowed, not refused
     assert waits == ([] if delay is None else [delay])
+
+
+def test_an_unlock_ends_the_slow_down(client: TestClient, tunnel, session, monkeypatch, as_):
+    from app.domains.auth import router
+
+    waits = []
+
+    async def wait(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(router, "_wait", wait)
+    _failures(session, "pos_a", 30)
+    client.post(f"{API}/users/{tunnel.users['pos_a']}/unlock-login", headers=as_("ba_a", "A"))
+    assert _login(client, TILL).status_code == 200
+    assert waits == []
 
 
 def test_failures_older_than_an_hour_do_not_slow(client: TestClient, tunnel, session, monkeypatch):

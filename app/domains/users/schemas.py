@@ -71,6 +71,12 @@ class UserCreatedResponse(UserResponse):
     temporary_password: str
 
 
+class LoginUnlockResponse(BaseModel):
+    user_id: int
+    #: Every lock of the user's logins (any IP) and the slow-down end now (Phase 48-0).
+    unlocked_at: datetime.datetime
+
+
 class PasswordResetResponse(BaseModel):
     user_id: int
     #: Shown once; the user must change it at the next login.

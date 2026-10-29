@@ -3,10 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.middleware.access import Access
-from app.middleware.auth import get_access, get_current_user, require_permission
+from app.middleware.auth import get_access, get_audit_context, get_current_user, require_permission
 from app.db.models import User
+from app.shared.audit import AuditContext
 
 from .schemas import (
+    LoginUnlockResponse,
     PasswordResetResponse,
     UserCreate,
     UserCreatedResponse,
@@ -79,12 +81,25 @@ def reset_password(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("users.update", scope="any")),
     access: Access = Depends(get_access),
+    audit: AuditContext = Depends(get_audit_context),
 ) -> PasswordResetResponse:
-    user, password = UserService.reset_password(db, access, user_id)
+    user, password = UserService.reset_password(db, access, user_id, audit)
     response.headers["Cache-Control"] = "no-store"
     return PasswordResetResponse(
         user_id=user.id, temporary_password=password, temp_password_expires_at=user.temp_password_expires_at
     )
+
+
+@router.post("/{user_id}/unlock-login", response_model=LoginUnlockResponse)
+def unlock_login(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("users.update", scope="any")),
+    access: Access = Depends(get_access),
+    audit: AuditContext = Depends(get_audit_context),
+) -> LoginUnlockResponse:
+    """Phase 48-0: a cashier locked out by wrong passwords logs in again at once."""
+    return LoginUnlockResponse(user_id=user_id, unlocked_at=UserService.unlock_login(db, access, user_id, audit))
 
 
 @router.delete("/{user_id}", status_code=204)

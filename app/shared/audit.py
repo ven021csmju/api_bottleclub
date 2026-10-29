@@ -25,7 +25,10 @@ def log_audit(
     before_data: dict[str, Any] | None = None,
     after_data: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    at: Any = None,
 ) -> None:
+    """``at``: the moment to record (a SQL expression such as ``func.clock_timestamp()``);
+    None: the column's default (the transaction's start)."""
     audit_log = AuditLog(
         user_id=ctx.user_id,
         organization_id=ctx.organization_id,
@@ -39,4 +42,6 @@ def log_audit(
         request_id=ctx.request_id,
         metadata=metadata,
     )
+    if at is not None:
+        audit_log.created_at = at
     AuditRepository.add_audit_log(db, audit_log)
