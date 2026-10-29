@@ -1,6 +1,7 @@
 """Headers a browser frontend can read (Phase 42, item 3): CORS exposes the
 request id, the idempotent-replay flag, Deprecation/Link and Retry-After;
 a 429 says how long to wait. v0.1.15 exposed only Deprecation and Link."""
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import EXPOSED_HEADERS, create_app
@@ -8,6 +9,14 @@ from app.shared.idempotency import REPLAYED_HEADER
 
 ORIGIN = "http://localhost:5173"
 WANTED = {"x-request-id", "idempotent-replayed", "deprecation", "link", "retry-after"}
+
+
+@pytest.fixture(autouse=True)
+def _origin(monkeypatch):
+    # No origin by default since Phase 44: allow ORIGIN for these tests.
+    from app import main
+
+    monkeypatch.setattr(main.settings, "CORS_ORIGINS", ORIGIN)
 
 
 def _exposed(resp) -> set[str]:
