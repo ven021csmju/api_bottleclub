@@ -22,7 +22,7 @@ from .schemas import (
     TokenResponse,
     UserProfileResponse,
 )
-from .cookie import answer
+from .cookie import answer, refresh_token_from_cookie
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
@@ -147,13 +147,14 @@ def login(
 def refresh(
     request: Request,
     response: Response,
-    body: RefreshTokenRequest,
+    body: RefreshTokenRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
+    raw = body.refresh_token if body else None
     return answer(request, response, AuthService.refresh_token(
         db=db,
-        raw_refresh_token=body.refresh_token,
+        raw_refresh_token=raw or refresh_token_from_cookie(request),
         ip_address=ip_address,
     ))
 

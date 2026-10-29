@@ -59,7 +59,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+    #: Left out: the one of the cookie (X-Auth-Mode: cookie, Phase 45).
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
