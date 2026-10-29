@@ -204,7 +204,11 @@ def test_another_origin_gets_none(monkeypatch, origin):
     assert "access-control-allow-origin" not in pre.headers
 
 
-def test_no_origin_configured_allows_none(monkeypatch):
-    client = _client(monkeypatch, "")
-    resp = client.get("/health", headers={"Origin": "http://localhost:5173"})
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "https://the-bottle-club-ai.vercel.app",
+                                    "https://front-posimon.vercel.app"])
+def test_nothing_set_allows_no_origin(monkeypatch, origin):
+    from app import main
+
+    monkeypatch.setattr(main.settings, "CORS_ORIGINS", Settings.model_fields["CORS_ORIGINS"].default)
+    resp = TestClient(main.create_app()).get("/health", headers={"Origin": origin})
     assert "access-control-allow-origin" not in resp.headers
