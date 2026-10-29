@@ -508,7 +508,7 @@ no `Authorization: Bearer <access token>` or a bad one, before any other check
 - Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED` (only
   after a correct password); an admin resets it.
 - `X-Auth-Mode: cookie` (Phase 45): no `refresh_token` in the body; it is in
-  the HttpOnly cookie `__Host-bc_refresh`. See "Refresh token in a cookie (Phase 45)".
+  the HttpOnly cookie of the web's origin (`__Host-bc_refresh_<id>`). See "Refresh token in a cookie (Phase 45)".
 
 ### GET `/auth/google` → 302 to Google, then GET `/auth/google/callback`
 Temporary rules until Google accounts are linked by their subject:
@@ -1041,15 +1041,17 @@ localStorage); after a reload, get a new one with `POST /auth/refresh`.
 
 | | Body mode (no header; vercel.app, scripts, the mobile app) | Cookie mode (`X-Auth-Mode: cookie`) |
 |---|---|---|
-| `POST /auth/login`, `/auth/change-password` | `refresh_token` in the body | **no `refresh_token`** in the body; `Set-Cookie: __Host-bc_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=604800` (7 days, `REFRESH_TOKEN_EXPIRE_DAYS`), no `Domain` |
+| `POST /auth/login`, `/auth/change-password` | `refresh_token` in the body | **no `refresh_token`** in the body; `Set-Cookie: __Host-bc_refresh_<id>=…; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=604800` (7 days, `REFRESH_TOKEN_EXPIRE_DAYS`), no `Domain`; `<id>` = the web's origin (below) |
 | `POST /auth/refresh` | body `{refresh_token}` (required: without it the request is read as cookie mode, below) | **no body** (or `{}`): the cookie's token, rotated: a new cookie, no `refresh_token` in the body. A body token still wins over the cookie |
 | `POST /auth/logout` (with `Authorization: Bearer`) | body `{refresh_token}`: that token; no body: every token of the user | **no body**: the cookie's token (no cookie: every token of the user) |
 | Cookie in the answer of logout | **deleted** (`Max-Age=0`) | **deleted** |
 
-**CSRF.** `POST /auth/refresh` and `/auth/logout` read the cookie only when the
-request has `X-Auth-Mode: cookie` **and** an `Origin` of `AUTH_COOKIE_ORIGINS`;
-any other request that would read it → **403 `CSRF_REJECTED`**, nothing
-rotated or revoked. A browser sends both by itself with the `fetch` above
+**CSRF.** Every cookie-mode request (`X-Auth-Mode: cookie` at login,
+change-password, refresh, logout) and every request that would read the
+cookie (refresh with no body token) needs an `Origin` of
+`AUTH_COOKIE_ORIGINS`, checked **before anything is done**; any other → **403
+`CSRF_REJECTED`**: no login, no password change, nothing stored, rotated or
+revoked (Phase 45b: the `Origin` names the cookie). A browser sends both by itself with the `fetch` above
 (`Origin` is set by the browser; the custom header needs a CORS preflight,
 which only `CORS_ORIGINS` pass). `SameSite=Strict` keeps the cookie off other
 sites; the `Origin` check keeps it off the other origins of the same site
@@ -1057,7 +1059,7 @@ sites; the `Origin` check keeps it off the other origins of the same site
 
 | Answer | When |
 |---|---|
-| 403 `CSRF_REJECTED` | refresh/logout would read the cookie without `X-Auth-Mode: cookie`, or from an `Origin` not in `AUTH_COOKIE_ORIGINS` (or no `Origin`) |
+| 403 `CSRF_REJECTED` | cookie mode from an `Origin` not in `AUTH_COOKIE_ORIGINS` (or no `Origin`), or refresh with no body token and no `X-Auth-Mode: cookie` |
 | 401 `REFRESH_TOKEN_MISSING` | an allowed cookie-mode refresh, but no cookie (never logged in in cookie mode, logged out, expired) → log in |
 | 401 `REFRESH_TOKEN_REUSED` | a refresh token that was already rotated (or logged out) used again, body or cookie: **its family is revoked** (that login and every token its refreshes rotated it into), so the newer token is refused too → log in. The user's other logins (other devices) stay |
 | 401 `UNAUTHORIZED` / `TOKEN_REVOKED`, 403 `PASSWORD_CHANGE_REQUIRED` | as before |
@@ -1065,20 +1067,26 @@ sites; the `Origin` check keeps it off the other origins of the same site
 **One refresh at a time.** Two refreshes with the same token are run one after
 the other: the second finds the token rotated and is **401
 `REFRESH_TOKEN_REUSED`, which logs that login out**. A web must not refresh
-twice at once: one refresh in flight per browser (e.g. `navigator.locks`
-across tabs), and React StrictMode must not double-call it on mount.
+twice at once: one refresh in flight per web (e.g. `navigator.locks`, which is
+per origin: across the web's tabs), and React StrictMode must not double-call
+it on mount. Backlog: a short grace window for this (not done).
 
-**One cookie per browser for the API.** The cookie belongs to the API's host
-(`api.wayneven.uk`), not to the web: every web of `AUTH_COOKIE_ORIGINS` in the
-same browser shares it. A login in one replaces the cookie of the other (the
-other then refreshes as the new login), a logout in one logs the other out.
+**One cookie per web (Phase 45b).** The cookie belongs to the API's host
+(`api.wayneven.uk`), so the browser sends every web's cookie to it; the API
+reads, sets and deletes only the one **of the request's `Origin`**:
+`__Host-bc_refresh_<id>`, `<id>` = the first 8 hex of `sha256(origin)` (e.g.
+of `https://pos.wayneven.uk`). POS and Admin in one browser keep their own
+sessions: a manager's login in Admin does not touch the POS tab's (v0.1.20:
+the POS tab then refreshed as the manager), a logout in one leaves the
+other. Tabs of the **same** web share their web's cookie (one session per web
+per browser).
 
 **Over plain http** (a web on `http://localhost:5173` against a staging API on
-http), outside production, the cookie is **`bc_refresh`** with the same
-attributes: browsers keep a `Secure` cookie from `http://localhost` but refuse
+http), outside production, the prefix is **`bc_refresh_`** (same `<id>`, same
+attributes): browsers keep a `Secure` cookie from `http://localhost` but refuse
 a `__Host-` one there (Chromium: `InvalidPrefix`). Production (and any https
-request) is always `__Host-bc_refresh`. Nothing changes for the web: it never
-names the cookie.
+request) is always `__Host-bc_refresh_<id>`. Nothing changes for the web: it
+never names the cookie.
 
 | | Before 45 (v0.1.19) | 45 |
 |---|---|---|
@@ -1086,6 +1094,8 @@ names the cookie.
 | `POST /auth/refresh` without `refresh_token` | 422 `VALIDATION_ERROR` | cookie mode: 403 `CSRF_REJECTED` / 401 `REFRESH_TOKEN_MISSING` / 200 |
 | A rotated refresh token used again | 401; the newer token went on working | 401 **`REFRESH_TOKEN_REUSED`**, its family revoked |
 | `TokenResponse.refresh_token` | always there | **left out** in cookie mode |
+| Cookie of POS and Admin in one browser | — (v0.1.20: one shared cookie) | **one per web** (v0.1.21), by `Origin` |
+| Cookie mode from no allowed `Origin` | — (v0.1.20: login and change-password went on) | **403 `CSRF_REJECTED`** before anything (v0.1.21) |
 | Several `Set-Cookie` in one answer (e.g. `GET /auth/google/callback` deleting two cookies) | only the last one sent | all sent |
 
 Migration 021 adds `refresh_tokens.family_id` (NULL for tokens stored before:
