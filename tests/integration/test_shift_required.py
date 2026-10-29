@@ -6,7 +6,8 @@ shift's X-report or close. Now cash in a checkout, POST /payments/, a refund
 or a processed return with no drawer (``current_shift``) is 409
 SHIFT_REQUIRED (``branch_id`` in the body), and nothing is written: not the
 order, payments, points, coupon use, stock, refund nor the idempotency key
-(the same request goes through once a shift is open).
+(the same request goes through once a shift is open). Any other method goes
+on without a shift and takes the shift when there is one, as before.
 """
 from __future__ import annotations
 
@@ -130,6 +131,25 @@ def test_post_payments_cash_without_a_shift_writes_nothing(client: TestClient, s
                        json={"order_id": order["id"], "payment_method": "cash", "amount": "400.00"})
     _refused(resp, world.A)
     assert _state(session, world, order["id"], member) == before
+
+
+def test_other_methods_go_on_without_a_shift(client: TestClient, session, world, shop, as_):
+    pos = as_("pos_a", "A")
+    order = new_order(client, pos, world.A, [(shop.wine, 1)])
+    resp = client.post(f"{API}/payments/", headers=idem(pos),
+                       json={"order_id": order["id"], "payment_method": "qr_code", "amount": "100.00"})
+    assert resp.status_code == 200, resp.text
+    assert checkout(client, pos, order["id"], ("credit_card", "250.00")).status_code == 200
+    assert _payments(session, order["id"]) == [("qr_code", Decimal("100.00"), None),
+                                               ("credit_card", Decimal("250.00"), None)]
+
+
+def test_other_methods_take_the_shift_when_there_is_one(client: TestClient, session, world, shop, as_):
+    pos = as_("pos_a", "A")
+    shift = open_shift(client, pos, world.A, shop.register_a)
+    order = new_order(client, pos, world.A, [(shop.wine, 1)])
+    assert checkout(client, pos, order["id"], ("credit_card", "350.00")).status_code == 200
+    assert _payments(session, order["id"]) == [("credit_card", Decimal("350.00"), shift)]
 
 
 @pytest.fixture()
