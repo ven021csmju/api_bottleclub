@@ -20,6 +20,7 @@ from app.services import user_events
 from app.services.ocr_service import OCRResult
 from app.shared.security import create_access_token
 from tests.integration.conftest import grant, idem
+from tests.integration.money_fixtures import seed_drawer  # noqa: F401  (fixtures)
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +314,7 @@ class TestOrderEvents:
         assert resp.status_code == 400
         assert record_sync == []  # failed order -> nothing published
 
+    @pytest.mark.usefixtures("seed_drawer")  # Phase 46: cash needs an open shift
     def test_checkout_publishes_purchase_completed(self, client, session, seed_user, seed_branch, multiperm_headers, record_sync):
         product = _seed_product(session, seed_user["org_id"], "BEER-003", branch_id=seed_branch)
         session.commit()
@@ -500,6 +502,7 @@ class TestLoyaltyEvents:
 # ---------------------------------------------------------------------------
 
 class TestRefundReturnEvents:
+    @pytest.mark.usefixtures("seed_drawer")  # Phase 46: cash needs an open shift
     def test_payment_refund_publishes_refund_created(self, client, session, seed_user, seed_branch, multiperm_headers, record_sync):
         product = _seed_product(session, seed_user["org_id"], "BEER-005", branch_id=seed_branch)
         session.commit()
@@ -527,6 +530,7 @@ class TestRefundReturnEvents:
         assert record_sync[-1]["data"]["order_id"] == order_id
         assert record_sync[-1]["data"]["refund_id"] == resp.json()["data"]["id"]
 
+    @pytest.mark.usefixtures("seed_drawer")  # Phase 46: cash needs an open shift
     def test_return_publishes_return_created(self, client, session, seed_user, seed_branch, multiperm_headers, record_sync):
         product = _seed_product(session, seed_user["org_id"], "BEER-006", branch_id=seed_branch)
         session.commit()

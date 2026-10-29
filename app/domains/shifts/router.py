@@ -8,6 +8,7 @@ from app.domains.shifts.schemas import (
     CashMovementCreate,
     ShiftCashMovementResponse,
     ShiftClose,
+    ShiftCloseResponse,
     ShiftListResponse,
     ShiftOpen,
     ShiftResponse,
@@ -53,16 +54,19 @@ def open_shift(
     )
 
 
-@router.put("/{shift_id}/close", response_model=ShiftResponse)
+@router.put("/{shift_id}/close", response_model=ShiftCloseResponse)
 def close_shift(
     shift_id: int,
     data: ShiftClose,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("shifts.close", scope="any")),
     access: Access = Depends(get_access),
-) -> ShiftResponse:
+) -> ShiftCloseResponse:
     _scoped_shift(db, access, shift_id, "shifts.close")
-    return ShiftService.close_shift(db, user.organization_id, shift_id, user.id, data.closing_cash)
+    shift = ShiftService.close_shift(db, user.organization_id, shift_id, user.id, data.closing_cash)
+    return ShiftCloseResponse(
+        **ShiftResponse.model_validate(shift).model_dump(), warnings=ShiftService.close_warnings(db, shift)
+    )
 
 
 @router.post(

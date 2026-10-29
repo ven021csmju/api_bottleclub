@@ -128,7 +128,9 @@ class TestTrackOrderRateLimit:
 
 
 class TestCreateOrder:
-    def test_ecommerce_matching_price_uses_catalog_price(
+    # The two price tests sent order_source=ecommerce up to v0.1.18; the route is
+    # the POS's since Phase 46 (another channel is 422, test_order_source.py).
+    def test_matching_price_uses_catalog_price(
         self, client: TestClient, auth_headers: dict, seed_branch: int, seed_user: dict, session
     ):
         product = Product(
@@ -146,7 +148,6 @@ class TestCreateOrder:
             headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
-                "order_source": "ecommerce",
                 "items": [
                     {"product_id": product.id, "quantity": 2, "unit_price": "125.00"}
                 ],
@@ -157,7 +158,7 @@ class TestCreateOrder:
         assert data["grand_total"] == "250.00"
         assert data["items"][0]["unit_price"] == "125.00"
 
-    def test_ecommerce_mismatched_price_is_rejected_before_stock_deduction(
+    def test_mismatched_price_is_rejected_before_stock_deduction(
         self, client: TestClient, auth_headers: dict, seed_branch: int, seed_user: dict, session
     ):
         product = Product(
@@ -178,7 +179,6 @@ class TestCreateOrder:
             headers=idem(auth_headers),
             json={
                 "branch_id": seed_branch,
-                "order_source": "ecommerce",
                 "items": [
                     {"product_id": product.id, "quantity": 2, "unit_price": "0.01"}
                 ],

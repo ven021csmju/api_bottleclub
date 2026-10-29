@@ -30,6 +30,18 @@ class ShiftResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ShiftWarning(BaseModel):
+    code: str
+    detail: str
+    count: int
+
+
+class ShiftCloseResponse(ShiftResponse):
+    #: What the close does not block but the cashier should see (Phase 46):
+    #: UNPAID_ORDERS_WITHOUT_SHIFT, the branch's unpaid POS orders of no shift.
+    warnings: list[ShiftWarning] = []
+
+
 class ShiftListResponse(BaseModel):
     shifts: list[ShiftResponse]
     total: int

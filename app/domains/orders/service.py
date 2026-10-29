@@ -12,6 +12,7 @@ from app.db.models import (
     Order,
     OrderItem,
     Payment,
+    Shift,
     StockMovement,
 )
 from app.db.repositories.coupons import CouponRepository
@@ -31,7 +32,9 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, paid_net
+from app.domains.shifts.drawer import (
+    CASH, amount_due, attach_to_shift, current_shift, is_fully_paid, order_drawer, paid_net,
+)
 from app.shared.ordering import generate_order_number
 
 
@@ -163,12 +166,20 @@ class OrderService:
         OrderService._check_discounts(data, products_map, can_discount)
 
         # A POS sale belongs to the drawer it is rung up at: the cashier's open
-        # shift at the branch (or the register's), unless the client names one.
+        # shift at the branch (or the register's), unless the client names one
+        # (the router has checked it is open, of the branch and the caller's).
         # Its unpaid orders keep that shift from closing (38b).
         shift_id = data.get("shift_id")
-        if shift_id is None and order_source == "pos":
-            shift = current_shift(db, branch_id, user_id, data.get("register_id"))
-            shift_id = shift.id if shift else None
+        register_id = data.get("register_id")
+        shift = None
+        if shift_id is not None:
+            shift = db.get(Shift, shift_id)
+        elif order_source == "pos":
+            shift = current_shift(db, branch_id, user_id, register_id)
+        if shift is not None:
+            shift_id = shift.id
+            # ... and to that shift's register when it names none (Phase 46).
+            register_id = register_id if register_id is not None else shift.register_id
 
         order_number = generate_order_number(db, branch.code)
 
@@ -180,7 +191,7 @@ class OrderService:
             customer_id=data.get("customer_id"),
             user_id=user_id,
             shift_id=shift_id,
-            register_id=data.get("register_id"),
+            register_id=register_id,
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
             order_source=order_source,
@@ -333,7 +344,7 @@ class OrderService:
         customer_id: int | None = None,
         user_id: int | None = None,
         date_field: str = "created_at",
-        shift_id: int | None = None,
+        shift_id: int | str | None = None,
     ) -> dict:
         items, total = OrderRepository.list_orders(
             db, org_id, branch_id, page, per_page, status,
@@ -599,6 +610,12 @@ class OrderService:
         if idempotency_key and order.status in ("paid", "completed", "refunded"):
             return order
 
+        # Cash with no open shift is 409 SHIFT_REQUIRED before the coupon
+        # or the points are touched (Phase 46); an order that cannot be checked
+        # out is left to settle_order's answer.
+        if order.status in OrderService.CHECKOUTABLE_STATUSES:
+            order_drawer(db, order, user_id, (p["payment_method"] for p in data.get("payments") or []))
+
         if data.get("coupon_code"):
             OrderService._coupon_at_checkout(db, order, data["coupon_code"])
 
@@ -665,6 +682,9 @@ class OrderService:
                 detail=f"The order is already paid ({already} of {amount_due(order)})",
                 code="ORDER_ALREADY_PAID",
             )
+
+        # Before the points: cash with no open shift writes nothing (Phase 46).
+        shift = order_drawer(db, order, user_id, (p["payment_method"] for p in payments))
 
         org_id = order.organization_id
         customer = None
@@ -752,7 +772,7 @@ class OrderService:
                 detail="A payment would settle nothing: send only what is needed", code="OVERPAYMENT",
             )
 
-        shift = current_shift(db, order.branch_id, user_id, order.register_id, order.shift_id)
+        attach_to_shift(order, shift)
         recorded: list[Payment] = []
         for (pay, amount), net in zip(handed, nets):
             payment = Payment(

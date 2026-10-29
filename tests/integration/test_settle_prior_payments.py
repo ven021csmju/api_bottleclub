@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, new_order, open_shift, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, new_order, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -38,8 +38,8 @@ def _settled(session: Session, order_id: int) -> Decimal:
 
 
 @pytest.fixture()
-def part_paid(client: TestClient, world, shop, as_) -> dict:
-    """A wine (350) with 100 cash taken by POST /payments/: 250 still due."""
+def part_paid(client: TestClient, world, shop, as_, drawers) -> dict:
+    """A wine (350) with 100 cash taken by POST /payments/ in the cashier's shift: 250 still due."""
     order = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)])
     _pay(client, as_, order["id"], "100.00")
     return order
@@ -75,6 +75,7 @@ def test_too_little_for_what_is_still_due_is_refused(client: TestClient, part_pa
     assert "250" in resp.json()["detail"]
 
 
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_points_cover_part_of_what_is_still_due(client: TestClient, session, world, shop, as_):
     from app.db.models import Customer
 
@@ -90,6 +91,7 @@ def test_points_cover_part_of_what_is_still_due(client: TestClient, session, wor
     assert _settled(session, order["id"]) == Decimal("250")
 
 
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_points_and_a_little_cash_settle_what_is_still_due(client: TestClient, session, world, shop, as_):
     from app.db.models import Customer
 
@@ -104,6 +106,7 @@ def test_points_and_a_little_cash_settle_what_is_still_due(client: TestClient, s
     assert resp.json()["data"]["loyalty_points_redeemed"] == 49
 
 
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_an_order_payments_already_cover_is_already_paid(client: TestClient, session, world, shop, as_):
     """Settled money on an order that is still open (e.g. a payment recorded
     while it was not checkoutable): checkout adds nothing."""

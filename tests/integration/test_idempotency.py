@@ -14,10 +14,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import WINE_PRICE, checkout, new_order, on_hand, shop  # noqa: F401
+from tests.integration.money_fixtures import checkout, drawers, new_order, on_hand, shop  # noqa: F401, WINE_PRICE  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
-pytestmark = pytest.mark.integration
+# Phase 46: cash is taken only in an open shift (409 SHIFT_REQUIRED).
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("drawers")]
 
 
 def _order_body(world, shop, quantity: int = 2) -> dict:

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, new_order, on_hand, open_shift, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, new_order, on_hand, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -112,6 +112,7 @@ def test_only_a_paid_order_can_be_returned(client: TestClient, session, world, s
     assert _refunds(session, order["id"]) == []
 
 
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_refunds_never_exceed_what_was_paid(client: TestClient, session, world, shop, as_):
     """An order discount of 80: paid 800 for 880 of lines; every return together refunds 800."""
     pos = as_("pos_a", "A")
@@ -138,6 +139,7 @@ def test_a_payment_refund_counts_against_the_same_limit(client: TestClient, sess
     assert [r[0] for r in _refunds(session, sale["id"])] == [Decimal("800.00"), Decimal("80.00")]
 
 
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_a_mixed_payment_needs_a_refund_method(client: TestClient, session, world, shop, as_):
     pos = as_("pos_a", "A")
     order = new_order(client, pos, world.A, [(shop.wine, 1)])

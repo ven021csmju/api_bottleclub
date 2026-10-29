@@ -100,6 +100,19 @@ class ShiftService:
         return shift
 
     @staticmethod
+    def close_warnings(db: Session, shift: Shift) -> list[dict]:
+        """Unpaid POS orders of the branch that no shift holds do not block a
+        close (they are of no shift), but are named once it is done (Phase 46)."""
+        count = ShiftRepository.count_unpaid_without_shift(db, shift.branch_id)
+        if not count:
+            return []
+        return [{
+            "code": "UNPAID_ORDERS_WITHOUT_SHIFT",
+            "detail": f"{count} unpaid order(s) of this branch belong to no shift: GET /orders/?shift_id=none",
+            "count": count,
+        }]
+
+    @staticmethod
     def add_cash_movement(
         db: Session,
         org_id: int,

@@ -18,6 +18,18 @@ class ShiftRepository:
         ))
 
     @staticmethod
+    def count_unpaid_without_shift(db: Session, branch_id: int) -> int:
+        """Unpaid POS orders of the branch that no shift holds (Phase 46)."""
+        return db.scalar(
+            select(func.count()).select_from(Order).where(
+                Order.branch_id == branch_id,
+                Order.shift_id.is_(None),
+                Order.order_source == "pos",
+                Order.status.in_(UNPAID_STATUSES),
+            )
+        ) or 0
+
+    @staticmethod
     def find_open_shift(
         db: Session, branch_id: int, register_id: int
     ) -> Shift | None:

@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from app.middleware.auth import (
     require_station_item_permission,
 )
 from app.middleware.rate_limit import limiter
-from app.db.models import Order, Shift, User
+from app.db.models import Order, Register, Shift, User
 from app.config.settings import settings
 from app.shared.audit import AuditContext
 from app.shared.clock import StoreDateTime
@@ -78,6 +78,7 @@ def create_order(
     the tracking token as null (it is shown once)."""
 
     def run() -> OrderCreationResponse:
+        _ensure_shift_and_register_for_sale(db, access, body.shift_id, body.register_id, branch_id)
         order, tracking_token = OrderService.create_order(
             db=db,
             org_id=user.organization_id,
@@ -137,6 +138,22 @@ def _ensure_shift_of_branch(db: Session, access: Access, shift_id: int, branch_i
         raise NotFoundException(detail="Shift not found")
 
 
+def _ensure_shift_and_register_for_sale(
+    db: Session, access: Access, shift_id: int | None, register_id: int | None, branch_id: int
+) -> None:
+    """A shift_id sent with a new order: an open shift of the branch, the caller's
+    own or the caller holds orders.read_branch there; a register_id: of the
+    branch. 404 otherwise (Phase 46; up to v0.1.18 any id the foreign key took)."""
+    if shift_id is not None:
+        _ensure_shift_of_branch(db, access, shift_id, branch_id)
+        if db.get(Shift, shift_id).status != "open":
+            raise NotFoundException(detail="Shift not found")
+    if register_id is not None:
+        register = db.get(Register, register_id)
+        if register is None or register.branch_id != branch_id:
+            raise NotFoundException(detail="Register not found")
+
+
 @router.get("/", response_model=OrderListResponse)
 def list_orders(
     user: User = Depends(require_permission("orders.read")),
@@ -153,15 +170,19 @@ def list_orders(
     ),
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
-    shift_id: Optional[int] = Query(
-        None, description="Only the orders of this shift (of the X-Branch-Id branch; another's needs orders.read_branch)"
+    shift_id: Optional[Union[int, Literal["none"]]] = Query(
+        None,
+        description=(
+            "Only the orders of this shift (of the X-Branch-Id branch; another's needs orders.read_branch), "
+            "or `none`: the orders with no shift (e.g. with status=pending, the bills rung up before a shift opened)"
+        ),
     ),
 ) -> OrderListResponse:
     if not access.can(READ_BRANCH, branch_id):
         if user_filter is not None and user_filter != user.id:
             raise ForbiddenException(detail=f"Missing required permission: {READ_BRANCH}")
         user_filter = user.id
-    if shift_id is not None:
+    if shift_id is not None and shift_id != "none":
         _ensure_shift_of_branch(db, access, shift_id, branch_id)
     result = OrderService.list_orders(
         db=db,

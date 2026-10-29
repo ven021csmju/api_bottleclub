@@ -13,10 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, new_order, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, new_order, online, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
-pytestmark = pytest.mark.integration
+# Phase 46: cash is taken only in an open shift (409 SHIFT_REQUIRED).
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("drawers")]
 
 D27, D28 = "2026-10-27", "2026-10-28"
 CREATED = datetime(2026, 10, 26, 10, 0, tzinfo=timezone.utc)    # 17:00 on the 26th, Bangkok
@@ -44,7 +45,7 @@ def sales(client: TestClient, session, world, shop, as_) -> None:
     assert checkout(client, pos, o1["id"], ("cash", "1000.00")).status_code == 200
     _stamp(session, o1["id"], PAID_27)
 
-    o2 = new_order(client, pos, world.A, [(shop.wine, 1)], order_source="ecommerce")
+    o2 = online(session, new_order(client, pos, world.A, [(shop.wine, 1)]))
     resp = client.post(f"{API}/payments/", headers=idem(ba),
                        json={"order_id": o2["id"], "payment_method": "bank_transfer", "amount": "350.00"})
     assert resp.status_code in (200, 201), resp.text
@@ -95,7 +96,7 @@ def test_financial_payment_methods_are_net_and_name_the_transfer(client, world, 
 
 def test_ecommerce_dashboard_counts_the_paid_transfer(client, session, world, shop, as_):
     """'Today' of the dashboard: an e-commerce order paid by transfer just now."""
-    o = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)], order_source="ecommerce")
+    o = online(session, new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)]))
     resp = client.post(f"{API}/payments/", headers=idem(as_("ba_a", "A")),
                        json={"order_id": o["id"], "payment_method": "bank_transfer", "amount": "350.00"})
     assert resp.status_code in (200, 201), resp.text

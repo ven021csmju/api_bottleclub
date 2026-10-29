@@ -45,6 +45,12 @@ def test_the_catalog_price_or_none_is_sold_at_the_catalog_price(client: TestClie
     assert on_hand(session, world.A, shop.wine) == 48
 
 
-def test_ecommerce_follows_the_same_rule(client: TestClient, world, shop, as_):
-    resp = _post(client, as_, world, shop.wine, "1.00", source="ecommerce")
-    assert (resp.status_code, resp.json()["code"]) == (422, "PRICE_MISMATCH")
+def test_ecommerce_follows_the_same_rule(session, world, shop):
+    # POST /orders/ makes POS orders only since Phase 46: the rule is the service's.
+    from app.domains.orders.service import OrderService
+    from app.shared.exceptions import AppException
+
+    with pytest.raises(AppException) as refused:
+        OrderService.create_order(session, world.org, world.A, world.users["pos_a"], {
+            "order_source": "ecommerce", "items": [{"product_id": shop.wine, "quantity": 2, "unit_price": "1.00"}]})
+    assert (refused.value.status_code, refused.value.code) == (422, "PRICE_MISMATCH")

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Inventory, Order, Refund, Return, ReturnItem, StockMovement
 from app.db.repositories.returns import ReturnRepository
-from app.domains.shifts.drawer import current_shift, paid_net, payment_methods, refunded
+from app.domains.shifts.drawer import order_drawer, paid_net, payment_methods, refunded
 from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
@@ -181,6 +181,9 @@ class ReturnService:
                     code="REFUND_METHOD_REQUIRED",
                 )
             refund_method = methods.pop()
+        # Cash paid out with no open shift is 409 SHIFT_REQUIRED, before the
+        # restock (Phase 46).
+        shift = order_drawer(db, order, user_id, [refund_method] if amount > 0 else [], ret.branch_id)
 
         for item in ret.items:
             if not item.restock:
@@ -205,7 +208,6 @@ class ReturnService:
             ))
 
         if amount > 0:
-            shift = current_shift(db, ret.branch_id, user_id, order.register_id, order.shift_id)
             refund = Refund(
                 order_id=order.id,
                 refund_number=generate_refund_number(db),

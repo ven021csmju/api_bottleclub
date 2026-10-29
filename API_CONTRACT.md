@@ -972,6 +972,47 @@ redeemed − what its completed payments already settled (net of change).
 
 Calls without an `Origin` header (curl, server to server, the mobile app) are not affected: CORS is a browser rule.
 
+### Cash and shifts (Phase 46)
+
+**Deploy: no migration, code only.** Cash is taken and paid out only in an
+open shift. Before Phase 46 (v0.1.18) a cashier with no open shift took cash:
+the payment got `shift_id: null`, so it was in the sales reports but in no
+shift's X-report, close or `expected_cash`.
+
+**The drawer** that takes or pays out money is the first open one of: the
+caller's shift at the order's branch, the shift on the order's register, the
+order's own shift. Cash with none → **409 `SHIFT_REQUIRED`**:
+
+```json
+{ "branch_id": 1, "detail": "Cash needs an open shift at this branch: open a shift first",
+  "code": "SHIFT_REQUIRED", "request_id": "..." }
+```
+
+Nothing is written (no payment, points, coupon use, restock or refund) and
+the `Idempotency-Key` is not kept: open a shift (`POST /shifts/open`), then
+send **the same request with the same key**. **Frontend: on 409
+`SHIFT_REQUIRED` take the cashier to the open-shift screen** for
+`branch_id`, then retry; never show it as a payment failure.
+
+| Call | Before 46 (v0.1.18) | 46 |
+|---|---|---|
+| `POST /orders/{id}/checkout` with any `cash` payment (cash alone or beside a card) | 200 with no shift (`shift_id: null`) | **409 `SHIFT_REQUIRED`** with no drawer. Checked before the coupon and the points. A state error (e.g. a cancelled order) still answers first |
+| `POST /payments/` `payment_method: cash` | 200 with no shift | **409 `SHIFT_REQUIRED`** (after the amount checks: `OVERPAYMENT` first) |
+| `POST /payments/{id}/refund` `refund_method: cash` | refunded from no drawer | **409 `SHIFT_REQUIRED`**: the Superadmin needs a drawer, theirs or the order's still-open shift; another method needs none |
+| `PUT /returns/{id}/process` refunding cash (`refund_method: cash`, or `original` on a cash sale) | refunded from no drawer | **409 `SHIFT_REQUIRED`**, the return stays `pending` and nothing is restocked. Also when the sale's shift has closed and the Branch Admin has none |
+| Card, debit, QR, transfer, e-wallet, slips | — | **unchanged**: no shift needed; the payment records the shift when there is one |
+| `POST /orders/` with no open shift | POS order of no shift | **unchanged**: allowed (a bill opened before the shift). The checkout or `POST /payments/` that takes its money **in a shift gives the order that shift** (and its register when it has none). Online orders are left of no shift |
+| `POST /orders/` in a shift | `register_id` only as sent | also the **shift's register** when none is sent |
+| `GET /orders/?shift_id=none` | 422 | the orders of **no shift**; `?shift_id=none&status=pending` = the open bills rung up before a shift. Any other text → 422 |
+| `PUT /shifts/{id}/close` | answer: the shift | the shift **plus `warnings`**: `[{"code": "UNPAID_ORDERS_WITHOUT_SHIFT", "count": 2, "detail": "2 unpaid order(s) of this branch belong to no shift: GET /orders/?shift_id=none"}]`, or `[]`. They do **not** block the close (unpaid orders **of the shift** still do: 409 `SHIFT_HAS_PENDING_ORDERS`) |
+| `POST /orders/` with `shift_id` | any id the database took: a closed shift, another branch's or organization's | an **open** shift of the order's branch, the caller's own (or the caller holds `orders.read_branch` there); else **404 `Shift not found`**, no order |
+| `POST /orders/` with `register_id` | any id | a register of the order's branch; else **404 `Register not found`** |
+| `POST /orders/` with `order_source` | `pos`, `ecommerce`, `qr`, `phone` | **`pos` only** (or left out); anything else **422** (`VALIDATION_ERROR`), no order. Online orders (34c) will get their own route; `order_source` on answers and the `?order_source=` report filter are unchanged |
+
+Read-only check on production (owner, `bottleclub_ro`):
+`scripts/prod_checks/cash_without_shift.sql` lists completed cash payments
+and cash refunds with no shift, split into before / after the first shift.
+
 
 ---
 
@@ -1092,15 +1133,22 @@ Query: `?branch_id=&threshold=10`
 ```
 Header `Idempotency-Key` required (or the body's `idempotency_key`); see Phase 38b.
 `coupon_code`: the system computes `coupon_discount` (not with `discount_amount`); see Phase 38c.
+`shift_id` / `register_id` (Phase 46): an open shift of the branch, the caller's own (or
+`orders.read_branch`), else 404 `Shift not found`; a register of the branch, else 404
+`Register not found`. `order_source`: `pos` only (422 otherwise). No open shift: the order
+is made with `shift_id: null` and takes the shift of the payment that takes its money.
 
 ### GET `/orders/`
-Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=&shift_id=`
+Query: `?page=&per_page=&status=&date_from=&date_to=&date_field=created_at|paid_at&customer_id=&user_id=&shift_id=<id>|none`
 
 `shift_id` (Phase 42): only the orders of that shift (`orders.shift_id`, the
 orders a shift close counts). The shift must be of the `X-Branch-Id` branch and
 the caller's own, or the caller holds `orders.read_branch` there; else **404**
 `"Shift not found"` (another branch, another organization, missing). E.g. the
 unpaid orders of my shift: `?shift_id=12&status=pending`.
+
+`shift_id=none` (Phase 46): the orders of no shift, e.g. the bills rung up
+before a shift opened: `?shift_id=none&status=pending`.
 
 ### GET `/orders/{reference}` — ID หรือ order_number
 
@@ -1206,6 +1254,9 @@ Rate limited like the staff route; over the limit →
 Header `Idempotency-Key` required (38b).
 A part of the total is allowed; the payment that covers what is still due makes
 the order `paid`, and checkout or a slip then takes only the rest (Phase 43).
+`cash` with no open shift (the caller's, the order's register's or the
+order's) → **409 `SHIFT_REQUIRED`** `branch_id` (Phase 46): open a shift, then
+retry with the same key.
 
 ### GET `/payments/{order_id}`
 Order of another organization → 404.
@@ -1217,6 +1268,7 @@ Money out without a return (no stock comes back). **Superadmin only** (403
 ```json
 { "refund_amount": 100.00, "refund_method": "cash", "reason": "string" }
 ```
+`refund_method: cash` with no open shift → 409 `SHIFT_REQUIRED` (Phase 46).
 
 ---
 
@@ -1330,6 +1382,9 @@ Header `Idempotency-Key` required (38b).
 ### GET `/returns/`  `?page=&per_page=`
 ### GET `/returns/{return_id}`
 ### PUT `/returns/{return_id}/process`
+A cash refund (`refund_method: cash`, or `original` on a cash sale) with no
+open shift → **409 `SHIFT_REQUIRED`**; the return stays `pending`, nothing is
+restocked (Phase 46).
 
 ---
 
@@ -1525,6 +1580,10 @@ must belong to `branch_id`; the list holds only the caller's organization.
 ```
 
 An unpaid order of the shift → 409 `SHIFT_HAS_PENDING_ORDERS` with `"orders": [...]` (38b).
+The answer is the shift plus `warnings` (Phase 46): `[]`, or
+`[{"code": "UNPAID_ORDERS_WITHOUT_SHIFT", "count": N, "detail": "..."}]` when the
+branch has unpaid POS orders of no shift (`GET /orders/?shift_id=none&status=pending`);
+they do not block the close.
 
 ### POST `/shifts/{shift_id}/cash-movements`
 ```json

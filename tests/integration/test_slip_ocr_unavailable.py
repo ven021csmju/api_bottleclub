@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.domains.slip_verify import service as slip_svc
 from app.services.ocr_service import OCRResult
-from tests.integration.money_fixtures import new_order, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import new_order, online, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -51,7 +51,7 @@ def _upload(client, headers, order_id, seed, route="upload"):
 def test_received_and_waiting_for_staff(client: TestClient, session: Session, world, shop, as_, ocr):
     from app.db.models import Order, PaymentVerification
 
-    order = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)], order_source="ecommerce")
+    order = online(session, new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)]))
     resp = _upload(client, as_("pos_a", "A"), order["id"], 1)
     assert resp.status_code == 200, resp.text
     body = _body(resp)
@@ -72,16 +72,17 @@ def test_received_and_waiting_for_staff(client: TestClient, session: Session, wo
     assert session.get(Order, order["id"]).status == "paid"
 
 
-def test_an_ocr_5xx_is_unavailable_too_and_checkslip_says_the_same(client: TestClient, world, shop, as_, ocr):
+def test_an_ocr_5xx_is_unavailable_too_and_checkslip_says_the_same(client: TestClient, session: Session, world, shop,
+                                                                    as_, ocr):
     ocr["result"] = OCRResult(success=False, error="OCR service error (HTTP 503)", http_status=503, unavailable=True)
-    order = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)], order_source="ecommerce")
+    order = online(session, new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)]))
     resp = _upload(client, as_("pos_a", "A"), order["id"], 2, route="checkslip")
     assert (resp.status_code, _body(resp)["data"]["pending_reason"]) == (200, "ocr_unavailable")
 
 
-def test_a_slip_read_and_found_empty_keeps_the_old_answer(client: TestClient, world, shop, as_, ocr):
+def test_a_slip_read_and_found_empty_keeps_the_old_answer(client: TestClient, session: Session, world, shop, as_, ocr):
     ocr["result"] = OCRResult(success=False, error="No text detected in image", http_status=200)
-    order = new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)], order_source="ecommerce")
+    order = online(session, new_order(client, as_("pos_a", "A"), world.A, [(shop.wine, 1)]))
     resp = _upload(client, as_("pos_a", "A"), order["id"], 3)
     assert resp.status_code == 422
     assert (_body(resp)["status"], _body(resp)["message"]) == ("ocr_failed", "ไม่สามารถอ่านข้อความจากสลิปได้")
