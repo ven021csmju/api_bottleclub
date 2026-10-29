@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # start. Empty (default): no origin may use the cookie.
     AUTH_COOKIE_ORIGINS: str = ""
 
+    # Peers whose CF-Connecting-IP / X-Forwarded-For / X-Forwarded-Proto are
+    # believed (Phase 48-0): cloudflared on this host. Comma-separated IPs.
+    TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
+
     # POST /auth/register. Unset: open outside production/staging, closed in
     # production/staging (403 REGISTRATION_DISABLED).
     REGISTRATION_ENABLED: bool | None = None
@@ -183,6 +187,10 @@ class Settings(BaseSettings):
     @property
     def auth_cookie_origins(self) -> list[str]:
         return parse_cors_origins(self.AUTH_COOKIE_ORIGINS, self.ENVIRONMENT, "AUTH_COOKIE_ORIGINS", required=False)
+
+    @property
+    def trusted_proxy_ips(self) -> set[str]:
+        return {ip.strip() for ip in self.TRUSTED_PROXY_IPS.split(",") if ip.strip()}
 
     @property
     def registration_enabled(self) -> bool:

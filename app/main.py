@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config.settings import settings
 from app.db.mongodb import close_connection, get_mongodb_health
 from app.middleware.auth import NOT_AUTHENTICATED, requires_login, sent_no_token
+from app.middleware.client_ip import ClientIPMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.envelope import ResponseEnvelopeMiddleware
 from app.middleware.rate_limit import limiter
@@ -91,6 +92,8 @@ def create_app() -> FastAPI:
         app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(CorrelationMiddleware)
+    # Outermost: every middleware and route sees the client's IP (Phase 48-0).
+    app.add_middleware(ClientIPMiddleware)
 
     # --- Exception handlers (single source of truth for the error contract) ---
     @app.exception_handler(AppException)
