@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -7,8 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.mongodb import sync_log_user_activity
-from app.db.models import User
+from app.db.models import RefreshToken, User
 from app.db.repositories.auth import AuthRepository
+from app.db.repositories.auth.auth_repository import new_family_id
 from app.services import user_events
 from app.shared.exceptions import (
     BadRequestException,
@@ -27,6 +29,8 @@ from app.shared.security import (
     verify_password,
     hash_password,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 30
@@ -196,10 +200,12 @@ class AuthService:
         token_hash = hash_token(raw_refresh_token)
         now = datetime.now(timezone.utc)
 
-        record = AuthRepository.find_refresh_token(db, token_hash)
+        record = AuthRepository.find_refresh_token(db, token_hash, lock=True)
 
-        if record is None or record.is_revoked:
+        if record is None:
             raise UnauthorizedException(detail="Refresh token not found or revoked")
+        if record.is_revoked:
+            AuthService._refuse_a_reused_token(db, record)
 
         if record.expires_at < now:
             raise UnauthorizedException(detail="Refresh token has expired")
@@ -221,8 +227,11 @@ class AuthService:
                 code="PASSWORD_CHANGE_REQUIRED",
             )
 
+        # Revoked and replaced in one transaction, under the row lock: a
+        # concurrent use of the same token waits, then finds it revoked.
         record.is_revoked = True
-        db.commit()
+        if record.family_id is None:  # stored before migration 021
+            record.family_id = new_family_id()
 
         permissions = AuthService._load_user_permissions(db, user)
         branches = AuthService._load_user_branches(db, user)
@@ -247,6 +256,7 @@ class AuthService:
             device_info=record.device_info,
             ip_address=ip_address,
             expires_at=refresh_expires,
+            family_id=record.family_id,
         )
         db.commit()
 
@@ -255,6 +265,17 @@ class AuthService:
             refresh_token=refresh_raw,
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
+
+    @staticmethod
+    def _refuse_a_reused_token(db: Session, record: RefreshToken) -> None:
+        """A revoked token came back: it was rotated (or logged out) and someone
+        still holds it, the owner or a thief. Its family (that login and what
+        its refreshes rotated it into) is revoked, so whoever holds the newer
+        token logs in again (Phase 45). The user's other logins stay."""
+        revoked = AuthRepository.revoke_family(db, record.family_id) if record.family_id else 0
+        db.commit()
+        logger.warning("REFRESH TOKEN REUSED user_id=%s live_tokens_revoked=%s", record.user_id, revoked)
+        raise UnauthorizedException(detail="Refresh token not found or revoked", code="REFRESH_TOKEN_REUSED")
 
     @classmethod
     def login_with_google(

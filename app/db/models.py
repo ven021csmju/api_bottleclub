@@ -1508,6 +1508,10 @@ class RefreshToken(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # One login and the tokens its refreshes rotated it into (migration 021,
+    # Phase 45): a rotated token used again revokes its family. NULL: stored
+    # before 021, linked at its first refresh.
+    family_id: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         Index(
@@ -1516,6 +1520,7 @@ class RefreshToken(Base):
             "expires_at",
             postgresql_where="is_revoked = false",
         ),
+        Index("ix_refresh_tokens_family", "family_id", postgresql_where="is_revoked = false"),
     )
 
 

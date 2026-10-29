@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 
 from sqlalchemy import exists, func, select, update
@@ -12,6 +13,10 @@ from app.db.models import (
     User,
     UserRole,
 )
+
+
+def new_family_id() -> str:
+    return secrets.token_urlsafe(16)
 
 
 class AuthRepository:
@@ -130,7 +135,9 @@ class AuthRepository:
         device_info: str,
         ip_address: str,
         expires_at: datetime,
+        family_id: str | None = None,
     ) -> None:
+        """``family_id``: the family of the token it was rotated from; None: a new one (a login)."""
         db.add(
             RefreshToken(
                 user_id=user_id,
@@ -139,16 +146,17 @@ class AuthRepository:
                 ip_address=ip_address,
                 is_revoked=False,
                 expires_at=expires_at,
+                family_id=family_id or new_family_id(),
             )
         )
 
     @staticmethod
-    def find_refresh_token(db: Session, token_hash: str) -> RefreshToken | None:
-        return db.execute(
-            select(RefreshToken).where(
-                RefreshToken.token_hash == token_hash,
-            )
-        ).scalar_one_or_none()
+    def find_refresh_token(db: Session, token_hash: str, lock: bool = False) -> RefreshToken | None:
+        """``lock``: row lock until commit, so two refreshes of one token run one after the other."""
+        query = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        if lock:
+            query = query.with_for_update()
+        return db.execute(query).scalar_one_or_none()
 
     @staticmethod
     def find_active_refresh_token(
@@ -161,6 +169,16 @@ class AuthRepository:
                 RefreshToken.is_revoked == False,  # noqa: E712
             )
         ).scalar_one_or_none()
+
+    @staticmethod
+    def revoke_family(db: Session, family_id: str) -> int:
+        """Revoke every live refresh token of the family; returns how many."""
+        result = db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == family_id, RefreshToken.is_revoked == False)  # noqa: E712
+            .values(is_revoked=True)
+        )
+        return result.rowcount
 
     @staticmethod
     def revoke_refresh_tokens(db: Session, user_id: int) -> int:
