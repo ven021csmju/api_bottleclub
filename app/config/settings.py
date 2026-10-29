@@ -18,29 +18,30 @@ _UNSAFE_JWT_DEFAULTS = {
 }
 
 
-def parse_cors_origins(raw: str, environment: str) -> list[str]:
+def parse_cors_origins(raw: str, environment: str, name: str = "CORS_ORIGINS", required: bool = True) -> list[str]:
     """The browser origins CORS_ORIGINS allows: comma-separated or a JSON list.
 
     The API answers with credentials (cookies/Authorization), so each origin
     must be exact: scheme://host[:port], lower case, no path or trailing ``/``,
     no ``*`` anywhere. Production needs at least one, all https; there is no
-    default (Phase 44).
+    default (Phase 44). ``name``: the setting named in errors; ``required``:
+    production needs at least one (AUTH_COOKIE_ORIGINS may be empty).
     """
     raw = raw.strip()
     if raw.startswith("["):
         try:
             values = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"CORS_ORIGINS is not a JSON list: {exc.msg}") from exc
+            raise ValueError(f"{name} is not a JSON list: {exc.msg}") from exc
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
-            raise ValueError("CORS_ORIGINS must be a JSON list of strings")
+            raise ValueError(f"{name} must be a JSON list of strings")
     else:
         values = raw.split(",")
     origins = [v.strip() for v in values if v.strip()]
     production = environment.strip().lower() == "production"
     for origin in origins:
         if "*" in origin:
-            raise ValueError(f"CORS_ORIGINS: no wildcard with credentials: {origin!r}")
+            raise ValueError(f"{name}: no wildcard with credentials: {origin!r}")
         parts = urlsplit(origin)
         if (
             parts.scheme not in {"http", "https"}
@@ -55,12 +56,12 @@ def parse_cors_origins(raw: str, environment: str) -> list[str]:
             or any(c.isspace() for c in origin)
         ):
             raise ValueError(
-                f"CORS_ORIGINS: not an origin (scheme://host[:port], lower case, no path or trailing /): {origin!r}"
+                f"{name}: not an origin (scheme://host[:port], lower case, no path or trailing /): {origin!r}"
             )
         if production and parts.scheme != "https":
-            raise ValueError(f"CORS_ORIGINS: production allows https origins only: {origin!r}")
-    if production and not origins:
-        raise ValueError("CORS_ORIGINS must be set in production (no default)")
+            raise ValueError(f"{name}: production allows https origins only: {origin!r}")
+    if production and required and not origins:
+        raise ValueError(f"{name} must be set in production (no default)")
     return list(dict.fromkeys(origins))
 
 
@@ -98,6 +99,12 @@ class Settings(BaseSettings):
     # "https://pos.example.com,https://admin.example.com". Empty (default): no
     # origin. Production refuses to start without it (parse_cors_origins).
     CORS_ORIGINS: str = ""
+    # Browser origins that may use the refresh-token cookie (X-Auth-Mode:
+    # cookie, Phase 45): POST /auth/refresh and /auth/logout read the cookie
+    # only for a request whose Origin is one of them. Same form as
+    # CORS_ORIGINS, and each must be in CORS_ORIGINS too or the app does not
+    # start. Empty (default): no origin may use the cookie.
+    AUTH_COOKIE_ORIGINS: str = ""
 
     # POST /auth/register. Unset: open outside production/staging, closed in
     # production/staging (403 REGISTRATION_DISABLED).
@@ -174,6 +181,10 @@ class Settings(BaseSettings):
         return parse_cors_origins(self.CORS_ORIGINS, self.ENVIRONMENT)
 
     @property
+    def auth_cookie_origins(self) -> list[str]:
+        return parse_cors_origins(self.AUTH_COOKIE_ORIGINS, self.ENVIRONMENT, "AUTH_COOKIE_ORIGINS", required=False)
+
+    @property
     def registration_enabled(self) -> bool:
         if self.REGISTRATION_ENABLED is not None:
             return self.REGISTRATION_ENABLED
@@ -198,6 +209,21 @@ class Settings(BaseSettings):
         # Here and not in the model validator: an error shows only this value.
         parse_cors_origins(value, info.data.get("ENVIRONMENT", ""))
         return value
+
+    @field_validator("AUTH_COOKIE_ORIGINS")
+    @classmethod
+    def validate_auth_cookie_origins(cls, value: str, info: ValidationInfo) -> str:
+        parse_cors_origins(value, info.data.get("ENVIRONMENT", ""), "AUTH_COOKIE_ORIGINS", required=False)
+        return value
+
+    @model_validator(mode="after")
+    def validate_auth_cookie_origins_in_cors(self) -> "Settings":
+        # A cookie origin the browser may not call with credentials is a
+        # mistake in the environment: refuse to start.
+        outside = [o for o in self.auth_cookie_origins if o not in self.cors_origins]
+        if outside:
+            raise ValueError(f"AUTH_COOKIE_ORIGINS must be in CORS_ORIGINS too: {', '.join(outside)}")
+        return self
 
     @field_validator("STORE_DAY_START_HOUR")
     @classmethod
