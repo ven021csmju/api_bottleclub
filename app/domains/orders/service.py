@@ -12,6 +12,7 @@ from app.db.models import (
     Order,
     OrderItem,
     Payment,
+    Shift,
     StockMovement,
 )
 from app.db.repositories.coupons import CouponRepository
@@ -165,16 +166,20 @@ class OrderService:
         OrderService._check_discounts(data, products_map, can_discount)
 
         # A POS sale belongs to the drawer it is rung up at: the cashier's open
-        # shift at the branch (or the register's), unless the client names one.
+        # shift at the branch (or the register's), unless the client names one
+        # (the router has checked it is open, of the branch and the caller's).
         # Its unpaid orders keep that shift from closing (38b).
         shift_id = data.get("shift_id")
         register_id = data.get("register_id")
-        if shift_id is None and order_source == "pos":
+        shift = None
+        if shift_id is not None:
+            shift = db.get(Shift, shift_id)
+        elif order_source == "pos":
             shift = current_shift(db, branch_id, user_id, register_id)
-            if shift is not None:
-                shift_id = shift.id
-                # ... and to that shift's register (Phase 46).
-                register_id = register_id if register_id is not None else shift.register_id
+        if shift is not None:
+            shift_id = shift.id
+            # ... and to that shift's register when it names none (Phase 46).
+            register_id = register_id if register_id is not None else shift.register_id
 
         order_number = generate_order_number(db, branch.code)
 
