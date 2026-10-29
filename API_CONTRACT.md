@@ -500,7 +500,10 @@ no `Authorization: Bearer <access token>` or a bad one, before any other check
 }
 ```
 - Wrong username or password, or a username used in two organizations → 401
-  `Invalid username or password`; 5 wrong passwords lock the account 30 minutes.
+  `Invalid username or password`. Wrong passwords lock a **(username, IP)**, never
+  the account (Phase 48-0): 5 from one IP within 15 minutes → that IP gets the
+  same 401 for that username for 15 minutes, every other IP still logs in; see
+  "Failed logins and the client's IP (Phase 48-0)".
 - `status` not `active` → 401 `ACCOUNT_INACTIVE` (only after a correct password).
 - `password_change_required: true`: the password is temporary. Every route but
   `POST /auth/change-password` and `POST /auth/logout` answers 403
@@ -560,8 +563,8 @@ Allowed while `password_change_required` (that is what it is for).
   (any case) → 422 `WEAK_PASSWORD`; equal to the current password → 422
   `PASSWORD_REUSED`.
 - Wrong `current_password` → 400 `INVALID_CURRENT_PASSWORD`; it counts as a
-  failed login: after 5 the account is locked 30 minutes → 400 `ACCOUNT_LOCKED`
-  (login is locked too).
+  failed login of this (username, IP): after 5 from that IP → 400
+  `ACCOUNT_LOCKED` from that IP for 15 minutes (its login is locked too).
 - Account without a password (signs in with a social account) → 400 `NO_PASSWORD`.
 - Temporary password past its expiry → 401 `TEMPORARY_PASSWORD_EXPIRED`.
 - On success every refresh token of the user is revoked and every access token
@@ -662,6 +665,17 @@ answered only here (`Cache-Control: no-store`); hand it to the user, who must
 change it at the first login. It expires after `TEMP_PASSWORD_EXPIRE_HOURS`
 (default 72).
 
+### POST `/users/{user_id}/unlock-login` (Phase 48-0)
+Same permission and target rule as `reset-password` below (the Branch Admin of
+the user's branch, or the Superadmin; 404 if not visible, 403
+`PERMISSION_ESCALATION`, 403 `SELF_CHANGE` for one's own).
+```json
+// Response 200
+{ "user_id": 5, "unlocked_at": "2026-10-30T10:15:00+07:00" }
+```
+Every lock of the user's logins (from any IP) and the slow-down end at once;
+audited `USER.LOGIN_UNLOCK`. The password does not change.
+
 ### POST `/users/{user_id}/reset-password`
 Permission `users.update` at a branch where the user has a role (else 404), and
 the same target rule as `PUT` (403 `PERMISSION_ESCALATION`); one's own account
@@ -670,6 +684,7 @@ the same target rule as `PUT` (403 `PERMISSION_ESCALATION`); one's own account
 // Response 200 (Cache-Control: no-store)
 { "user_id": 5, "temporary_password": "string", "temp_password_expires_at": "..." }
 ```
+Also ends every lock of the user's logins (Phase 48-0; audit `USER.PASSWORD_RESET`).
 The old password stops working; every session of the user ends (refresh tokens
 revoked, access tokens 401 `TOKEN_REVOKED`); failed attempts and the lock are
 cleared. The user must change the temporary password at the next login. Also
@@ -1101,6 +1116,36 @@ never names the cookie.
 Migration 021 adds `refresh_tokens.family_id` (NULL for tokens stored before:
 linked at their first refresh). The code before 45 works on 021. Rollback:
 the code first, then `021_refresh_token_family.rollback.sql`.
+
+### Failed logins and the client's IP (Phase 48-0)
+
+**Deploy: code only, no migration.** Then, for the Cloudflare header to be
+used, change the API's `ExecStart` from `--proxy-headers --forwarded-allow-ips
+127.0.0.1` to **`--no-proxy-headers`** and restart (until then the client's IP
+is what uvicorn takes from `X-Forwarded-For`, as before — nothing breaks).
+
+**The client's IP.** The API listens on 127.0.0.1 behind Cloudflare Tunnel.
+From a peer in `TRUSTED_PROXY_IPS` (default `127.0.0.1,::1`: cloudflared) the
+client is `CF-Connecting-IP` when it is a well-formed IP, else the right-most
+`X-Forwarded-For` entry that is not a proxy; `X-Forwarded-Proto` gives the
+scheme. Any other peer is its own IP whatever it sends. The rate limits,
+`login_attempts` and the audit log all use it.
+
+| | Before 48-0 (v0.1.21) | 48-0 |
+|---|---|---|
+| 5 wrong passwords | the **account** locked 30 minutes, from every IP: anyone who knew a username kept that cashier out | that **(username, IP)** locked 15 minutes (after the last failure); every other IP logs in. An attempt while locked is not checked and counts too |
+| A login that succeeds | — | starts that (username, IP) count again |
+| > 20 wrong in an hour from many IPs | each IP's 5 locked the account | every login of the username **waits** 0.5 s per failure beyond 20, at most **5 s**; never a lock |
+| Answer while locked | 401 `Account is locked. Please try again later.` (an unknown username: `Invalid username or password`, so the answer told which usernames exist) | the same **401 `UNAUTHORIZED` `Invalid username or password`** as an unknown username and a wrong password, after the same bcrypt check |
+| Unlock | `POST /users/{id}/reset-password` (new password) | **`POST /users/{id}/unlock-login`** (no new password), or a reset; audited |
+| `change-password` with a wrong current password | counted toward the account lock | counted toward the (username, IP) lock → 400 `ACCOUNT_LOCKED` from that IP |
+
+Counted by the username as typed, whether an account has it or not. A
+cashier who sees 401 with the right password: wait 15 minutes, use another
+device, or ask the Branch Admin to unlock. `users.failed_login_attempts` /
+`locked_until` are no longer set. All the tills of a shop behind one public IP
+share that IP: 5 wrong passwords **for one username** on any till lock that
+username on every till there (other usernames are not affected).
 
 
 ---
