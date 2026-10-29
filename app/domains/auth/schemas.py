@@ -46,7 +46,8 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
-    refresh_token: str
+    #: Left out in cookie mode (X-Auth-Mode: cookie): it is in the cookie.
+    refresh_token: str | None = None
     #: True: every route but POST /auth/change-password (and logout) answers
     #: 403 PASSWORD_CHANGE_REQUIRED until the password is changed.
     password_change_required: bool = False
@@ -58,11 +59,13 @@ class ChangePasswordRequest(BaseModel):
 
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+    #: Left out: the one of the cookie (X-Auth-Mode: cookie, Phase 45).
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
-    #: The refresh token to revoke. Left out: every refresh token of the user.
+    #: The refresh token to revoke. Left out: the cookie's with X-Auth-Mode:
+    #: cookie (Phase 45), else (or with no cookie) every refresh token of the user.
     refresh_token: str | None = None
 
 

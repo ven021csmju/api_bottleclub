@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Auth cookie test page</title>
+</head>
+<body>
+<p>The web's side of the refresh cookie (Phase 45): what FRONTEND_GUIDE asks a frontend to do.</p>
+<script>
+// The API: ?api=http://localhost:8200. The access token lives in memory only;
+// the refresh token never reaches this script (HttpOnly cookie).
+const API = new URLSearchParams(location.search).get("api") + "/api/v1";
+let access = null;
+
+async function call(path, init = {}) {
+  const resp = await fetch(API + path, {
+    method: "POST",
+    credentials: "include",
+    ...init,
+    headers: {"X-Auth-Mode": "cookie", ...(init.headers || {})},
+  });
+  const text = await resp.text();
+  return {status: resp.status, body: text ? JSON.parse(text) : null};
+}
+
+window.bc = {
+  hasAccess: () => access !== null,
+  async login(username, password) {
+    const r = await call("/auth/login", {
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({username, password}),
+    });
+    if (r.status === 200) access = r.body.data.access_token;
+    return r;
+  },
+  async refresh() {
+    const r = await call("/auth/refresh");
+    access = r.status === 200 ? r.body.data.access_token : null;
+    return r;
+  },
+  async me() {
+    return call("/auth/me", {method: "GET", headers: {Authorization: "Bearer " + access}});
+  },
+  async logout() {
+    const r = await call("/auth/logout", {headers: {Authorization: "Bearer " + access}});
+    access = null;
+    return r;
+  },
+};
+</script>
+</body>
+</html>
