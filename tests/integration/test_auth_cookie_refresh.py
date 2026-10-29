@@ -22,7 +22,7 @@ pytestmark = pytest.mark.integration
 @pytest.fixture()
 def logged_in(https: TestClient, seed_user) -> str:
     """Logged in in cookie mode: the client's jar has the cookie; its token."""
-    resp = login(https, seed_user, COOKIE)
+    resp = login(https, seed_user, BROWSER)
     assert resp.status_code == 200, resp.text
     return refresh_cookie(resp)["value"]
 
@@ -51,7 +51,7 @@ def test_the_cookie_is_rotated(https: TestClient, session, logged_in, body):
     {"Origin": ORIGIN},                                     # no X-Auth-Mode
     {"X-Auth-Mode": "body", "Origin": ORIGIN},
     COOKIE,                                                 # no Origin
-    {**COOKIE, "Origin": "https://admin.wayneven.uk"},      # in CORS_ORIGINS, not AUTH_COOKIE_ORIGINS
+    {**COOKIE, "Origin": "https://shop.wayneven.uk"},       # in CORS_ORIGINS, not AUTH_COOKIE_ORIGINS
     {**COOKIE, "Origin": "https://evil.wayneven.uk"},       # same site, another origin
     {**COOKIE, "Origin": "https://pos.wayneven.uk.evil.com"},
     {**COOKIE, "Origin": "http://pos.wayneven.uk"},

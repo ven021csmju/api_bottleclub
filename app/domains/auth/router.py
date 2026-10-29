@@ -130,6 +130,8 @@ def login(
     body: LoginRequest,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
+    if cookie_mode(request):
+        ensure_cookie_request(request)  # before the login: the origin names the cookie
     ip_address = request.client.host if request.client else ""
     user_agent = request.headers.get("User-Agent", "")
     return answer(request, response, AuthService.login(
@@ -152,6 +154,8 @@ def refresh(
 ) -> TokenResponse:
     ip_address = request.client.host if request.client else ""
     raw = body.refresh_token if body else None
+    if cookie_mode(request):
+        ensure_cookie_request(request)
     return answer(request, response, AuthService.refresh_token(
         db=db,
         raw_refresh_token=raw or refresh_token_from_cookie(request),
@@ -168,6 +172,8 @@ def change_password(
     user: User = Depends(get_authenticated_user),
     db: Session = Depends(get_db),
 ) -> TokenResponse:
+    if cookie_mode(request):
+        ensure_cookie_request(request)
     return answer(request, response, AuthService.change_password(
         db=db,
         user=user,
@@ -186,10 +192,11 @@ def logout(
     db: Session = Depends(get_db),
 ) -> Response:
     raw = body.refresh_token if body else None
-    if not raw and cookie_mode(request):
-        # The cookie's token; no cookie: every token, as with no body.
+    if cookie_mode(request):
         ensure_cookie_request(request)
-        raw = request.cookies.get(cookie_name(request))
+        if not raw:
+            # The origin's cookie; no cookie: every token, as with no body.
+            raw = request.cookies.get(cookie_name(request, request.headers["Origin"]))
     AuthService.logout(
         db=db,
         user_id=user.id,
@@ -197,7 +204,7 @@ def logout(
         request_id=getattr(request.state, "request_id", ""),
     )
     response = Response(status_code=204)
-    clear(request, response)  # in either mode: a browser that had the cookie drops it
+    clear(request, response)  # in either mode: the origin's cookie, if it may have one
     return response
 
 

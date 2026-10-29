@@ -6,6 +6,7 @@ AUTH_COOKIE_ORIGINS (and CORS_ORIGINS) allows in these tests.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Generator
 
 import pytest
@@ -16,20 +17,30 @@ from sqlalchemy.orm import Session
 from app.shared.security import hash_token
 
 API = "/api/v1"
-#: Written out, not imported: the name is the contract (and v0.1.19 has no such module).
-REFRESH_COOKIE = "__Host-bc_refresh"
 ORIGIN = "https://pos.wayneven.uk"
+#: A second web that may use the cookie, and one that is in CORS_ORIGINS only.
+ADMIN = "https://admin.wayneven.uk"
+CORS_ONLY = "https://shop.wayneven.uk"
 COOKIE = {"X-Auth-Mode": "cookie"}
-#: What the web sends for a request that reads the cookie.
+#: What the web sends in cookie mode.
 BROWSER = {**COOKIE, "Origin": ORIGIN}
+
+
+def cookie_of(origin: str, prefix: str = "__Host-bc_refresh") -> str:
+    """The cookie of a web, written out (not imported: the name is the contract):
+    prefix + "_" + the first 8 hex of sha256(origin)."""
+    return f"{prefix}_{hashlib.sha256(origin.encode()).hexdigest()[:8]}"
+
+
+REFRESH_COOKIE = cookie_of(ORIGIN)
 
 
 @pytest.fixture()
 def cookie_origin(monkeypatch) -> str:
     from app.config.settings import settings
 
-    monkeypatch.setattr(settings, "CORS_ORIGINS", f"{ORIGIN},https://admin.wayneven.uk")
-    monkeypatch.setattr(settings, "AUTH_COOKIE_ORIGINS", ORIGIN)
+    monkeypatch.setattr(settings, "CORS_ORIGINS", f"{ORIGIN},{ADMIN},{CORS_ONLY}")
+    monkeypatch.setattr(settings, "AUTH_COOKIE_ORIGINS", f"{ORIGIN},{ADMIN}")
     return ORIGIN
 
 
@@ -42,11 +53,11 @@ def set_cookies(resp) -> list[str]:
     return [v for k, v in resp.headers.multi_items() if k.lower() == "set-cookie"]
 
 
-def refresh_cookie(resp) -> dict[str, str] | None:
-    """The refresh cookie the answer sets: its value and attributes (lower-case names)."""
+def refresh_cookie(resp, origin: str = ORIGIN) -> dict[str, str] | None:
+    """The refresh cookie of ``origin`` the answer sets: its value and attributes (lower-case names)."""
     for header in set_cookies(resp):
         name, _, rest = header.partition("=")
-        if name == REFRESH_COOKIE:
+        if name == cookie_of(origin):
             value, *attrs = [part.strip() for part in rest.split(";")]
             parsed = {"value": value.strip('"')}
             for attr in attrs:

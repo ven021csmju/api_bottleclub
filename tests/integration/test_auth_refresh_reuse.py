@@ -41,7 +41,7 @@ def test_a_reused_body_token_revokes_its_family_only(client: TestClient, session
 
 
 def test_a_reused_cookie_does_the_same(https: TestClient, session, seed_user):
-    old = refresh_cookie(login(https, seed_user, COOKIE))["value"]
+    old = refresh_cookie(login(https, seed_user, BROWSER))["value"]
     resp = https.post(f"{API}/auth/refresh", headers=BROWSER)
     assert resp.status_code == 200, resp.text
     new = refresh_cookie(resp)["value"]

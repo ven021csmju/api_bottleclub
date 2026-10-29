@@ -1,7 +1,8 @@
 """Cookie mode at login, refresh and change-password (Phase 45, item 1).
 
-``X-Auth-Mode: cookie`` sets ``__Host-bc_refresh`` (HttpOnly; Secure;
-SameSite=Strict; Path=/; no Domain) and leaves refresh_token out of the body;
+``X-Auth-Mode: cookie`` from an origin of AUTH_COOKIE_ORIGINS sets that
+origin's ``__Host-bc_refresh_<id>`` (HttpOnly; Secure; SameSite=Strict;
+Path=/; no Domain) and leaves refresh_token out of the body;
 without the header the body carries it as before (vercel.app, tests,
 scripts). v0.1.19 had only the body.
 """
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.config.settings import settings
 from tests.integration.cookie_fixtures import (  # noqa: F401  (fixtures)
-    API, COOKIE, cookie_origin, https, is_live, login, refresh_cookie, set_cookies,
+    API, BROWSER, COOKIE, ORIGIN, cookie_of, cookie_origin, https, is_live, login, refresh_cookie, set_cookies,
 )
 
 pytestmark = pytest.mark.integration
@@ -30,7 +31,7 @@ def _the_cookie(resp) -> str:
 
 @pytest.mark.parametrize("mode", ["cookie", "Cookie", " COOKIE "])
 def test_login_in_cookie_mode(https: TestClient, session, seed_user, mode):
-    resp = login(https, seed_user, {"X-Auth-Mode": mode})
+    resp = login(https, seed_user, {"X-Auth-Mode": mode, "Origin": ORIGIN})
     assert resp.status_code == 200, resp.text
     body = resp.json()["data"]
     assert "refresh_token" not in body
@@ -47,7 +48,7 @@ def test_login_without_the_header_is_as_before(https: TestClient, session, seed_
 
 def test_refresh_with_the_token_in_the_body_answers_in_the_cookie(https: TestClient, session, seed_user):
     old = login(https, seed_user).json()["data"]["refresh_token"]
-    resp = https.post(f"{API}/auth/refresh", headers=COOKIE, json={"refresh_token": old})
+    resp = https.post(f"{API}/auth/refresh", headers=BROWSER, json={"refresh_token": old})
     assert resp.status_code == 200, resp.text
     assert "refresh_token" not in resp.json()["data"]
     new = _the_cookie(resp)
@@ -56,7 +57,7 @@ def test_refresh_with_the_token_in_the_body_answers_in_the_cookie(https: TestCli
 
 def test_change_password_in_cookie_mode(https: TestClient, session, seed_user):
     access = login(https, seed_user).json()["data"]["access_token"]
-    resp = https.post(f"{API}/auth/change-password", headers={**COOKIE, "Authorization": f"Bearer {access}"},
+    resp = https.post(f"{API}/auth/change-password", headers={**BROWSER, "Authorization": f"Bearer {access}"},
                       json={"current_password": seed_user["password"], "new_password": "A-New-Pass-4567"})
     assert resp.status_code == 200, resp.text
     assert "refresh_token" not in resp.json()["data"]
@@ -66,21 +67,21 @@ def test_change_password_in_cookie_mode(https: TestClient, session, seed_user):
 def test_over_plain_http_outside_production_it_is_bc_refresh(client: TestClient, session, seed_user, cookie_origin):
     """A browser refuses a __Host- cookie from http://localhost (Chromium: InvalidPrefix)
     but keeps a Secure one: a web on localhost against a staging API over http."""
-    resp = login(client, seed_user, COOKIE)
+    resp = login(client, seed_user, BROWSER)
     assert resp.status_code == 200, resp.text
     assert refresh_cookie(resp) is None
     (header,) = set_cookies(resp)
     name, _, rest = header.partition("=")
-    assert name == "bc_refresh"
+    assert name == cookie_of(ORIGIN, "bc_refresh")
     assert {"httponly", "secure", "samesite=strict", "path=/"} <= {a.strip().lower() for a in rest.split(";")[1:]}
     old = rest.split(";")[0].strip('"')
-    resp = client.post(f"{API}/auth/refresh", headers={**COOKIE, "Origin": cookie_origin, "Cookie": f"bc_refresh={old}"})
+    resp = client.post(f"{API}/auth/refresh", headers={**BROWSER, "Cookie": f"{name}={old}"})
     assert resp.status_code == 200, resp.text
     assert is_live(session, old) is False
 
 
-def test_production_is_always_host_prefixed(client: TestClient, seed_user, monkeypatch):
+def test_production_is_always_host_prefixed(client: TestClient, seed_user, cookie_origin, monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
-    resp = login(client, seed_user, COOKIE)  # http as uvicorn sees it behind a proxy that does not say https
+    resp = login(client, seed_user, BROWSER)  # http as uvicorn sees it behind a proxy that does not say https
     assert resp.status_code == 200, resp.text
     assert refresh_cookie(resp) is not None
