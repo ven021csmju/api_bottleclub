@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -153,15 +153,19 @@ def list_orders(
     ),
     customer_id: Optional[int] = None,
     user_filter: Optional[int] = Query(None, alias="user_id"),
-    shift_id: Optional[int] = Query(
-        None, description="Only the orders of this shift (of the X-Branch-Id branch; another's needs orders.read_branch)"
+    shift_id: Optional[Union[int, Literal["none"]]] = Query(
+        None,
+        description=(
+            "Only the orders of this shift (of the X-Branch-Id branch; another's needs orders.read_branch), "
+            "or `none`: the orders with no shift (e.g. with status=pending, the bills rung up before a shift opened)"
+        ),
     ),
 ) -> OrderListResponse:
     if not access.can(READ_BRANCH, branch_id):
         if user_filter is not None and user_filter != user.id:
             raise ForbiddenException(detail=f"Missing required permission: {READ_BRANCH}")
         user_filter = user.id
-    if shift_id is not None:
+    if shift_id is not None and shift_id != "none":
         _ensure_shift_of_branch(db, access, shift_id, branch_id)
     result = OrderService.list_orders(
         db=db,

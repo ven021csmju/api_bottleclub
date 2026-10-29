@@ -55,6 +55,16 @@ def order_drawer(db: Session, order, user_id: int, methods, branch_id: int | Non
     return shift
 
 
+def attach_to_shift(order, shift: Shift | None) -> None:
+    """A POS order rung up with no shift belongs to the shift that takes its
+    money (Phase 46), and to that shift's register when it names none."""
+    if shift is None or order.shift_id is not None or order.order_source != "pos":
+        return
+    order.shift_id = shift.id
+    if order.register_id is None:
+        order.register_id = shift.register_id
+
+
 CARD = ("credit_card", "debit_card")
 
 

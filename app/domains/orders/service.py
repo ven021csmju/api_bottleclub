@@ -31,7 +31,9 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 from app.domains.coupons.service import CouponService
-from app.domains.shifts.drawer import CASH, amount_due, current_shift, is_fully_paid, order_drawer, paid_net
+from app.domains.shifts.drawer import (
+    CASH, amount_due, attach_to_shift, current_shift, is_fully_paid, order_drawer, paid_net,
+)
 from app.shared.ordering import generate_order_number
 
 
@@ -166,9 +168,13 @@ class OrderService:
         # shift at the branch (or the register's), unless the client names one.
         # Its unpaid orders keep that shift from closing (38b).
         shift_id = data.get("shift_id")
+        register_id = data.get("register_id")
         if shift_id is None and order_source == "pos":
-            shift = current_shift(db, branch_id, user_id, data.get("register_id"))
-            shift_id = shift.id if shift else None
+            shift = current_shift(db, branch_id, user_id, register_id)
+            if shift is not None:
+                shift_id = shift.id
+                # ... and to that shift's register (Phase 46).
+                register_id = register_id if register_id is not None else shift.register_id
 
         order_number = generate_order_number(db, branch.code)
 
@@ -180,7 +186,7 @@ class OrderService:
             customer_id=data.get("customer_id"),
             user_id=user_id,
             shift_id=shift_id,
-            register_id=data.get("register_id"),
+            register_id=register_id,
             discount_amount=Decimal(str(data.get("discount_amount", 0))),
             notes=data.get("notes"),
             order_source=order_source,
@@ -333,7 +339,7 @@ class OrderService:
         customer_id: int | None = None,
         user_id: int | None = None,
         date_field: str = "created_at",
-        shift_id: int | None = None,
+        shift_id: int | str | None = None,
     ) -> dict:
         items, total = OrderRepository.list_orders(
             db, org_id, branch_id, page, per_page, status,
@@ -761,6 +767,7 @@ class OrderService:
                 detail="A payment would settle nothing: send only what is needed", code="OVERPAYMENT",
             )
 
+        attach_to_shift(order, shift)
         recorded: list[Payment] = []
         for (pay, amount), net in zip(handed, nets):
             payment = Payment(

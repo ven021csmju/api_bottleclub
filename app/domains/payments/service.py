@@ -8,7 +8,7 @@ from app.db.repositories.payments import PaymentRepository
 from app.domains.orders.service import OrderService
 from app.db.repositories.returns import ReturnRepository
 from app.domains.returns.service import PAID_STATUSES
-from app.domains.shifts.drawer import CASH, amount_due, order_drawer, paid_net, refunded
+from app.domains.shifts.drawer import CASH, amount_due, attach_to_shift, order_drawer, paid_net, refunded
 from app.services import user_events
 from app.shared.audit import AuditContext, log_audit
 from app.shared.exceptions import (
@@ -66,6 +66,7 @@ class PaymentService:
             received_by=user_id,
         )
         PaymentRepository.add_payment(db, payment)
+        attach_to_shift(order, shift)
 
         order.amount_paid = Decimal(str(order.amount_paid)) + amount
         order.change_amount = Decimal(str(order.change_amount)) + (amount - net)
