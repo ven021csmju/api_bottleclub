@@ -12,10 +12,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, new_order, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, new_order, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
-pytestmark = pytest.mark.integration
+# Phase 46: cash is taken only in an open shift (409 SHIFT_REQUIRED).
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("drawers")]
 
 
 def _listed(client: TestClient, as_, **params) -> set[int]:

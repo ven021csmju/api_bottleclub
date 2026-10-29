@@ -13,6 +13,7 @@ import pytest
 from app.db.models import Order, PaymentVerification
 from app.domains.slip_verify import service as slip_svc
 from tests.integration.conftest import idem
+from tests.integration.money_fixtures import seed_drawer  # noqa: F401  (fixtures)
 from tests.integration.test_slip_verify_flow import (  # noqa: F401  (fixtures)
     APPROVE_BODY,
     _image,
@@ -27,7 +28,8 @@ from tests.integration.test_slip_verify_flow import (  # noqa: F401  (fixtures)
     slip,
 )
 
-pytestmark = pytest.mark.integration
+# Phase 46: cash is taken only in an open shift (409 SHIFT_REQUIRED).
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("seed_drawer")]
 
 
 def _part(client, headers, order_id: int, amount: str) -> None:

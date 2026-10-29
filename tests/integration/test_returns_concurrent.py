@@ -31,7 +31,8 @@ pytestmark = pytest.mark.integration
 def committed(db_engine: Engine):
     """An order of 2 bottles at 350, paid 700 cash; two pending returns of both bottles."""
     from app.db.models import (
-        Branch, Inventory, Order, OrderItem, Organization, Payment, Product, Return, ReturnItem, User,
+        Branch, Inventory, Order, OrderItem, Organization, Payment, Product, Register, Return, ReturnItem, Shift,
+        User,
     )
 
     tag = uuid.uuid4().hex[:8]
@@ -44,6 +45,14 @@ def committed(db_engine: Engine):
         user = User(organization_id=org.id, username=f"race_{tag}", email=f"race_{tag}@example.com",
                     password_hash="x", display_name="race", status="active")
         s.add_all([branch, user])
+        s.flush()
+        # The cash refunds come out of the user's open shift (Phase 46: SHIFT_REQUIRED otherwise).
+        register = Register(branch_id=branch.id, name="Race R1")
+        s.add(register)
+        s.flush()
+        shift = Shift(branch_id=branch.id, register_id=register.id, user_id=user.id, status="open",
+                      opening_cash=Decimal("0"))
+        s.add(shift)
         s.flush()
         product = Product(organization_id=org.id, name="Race wine", sku=f"RW-{tag}", selling_price=Decimal("350"))
         s.add(product)
@@ -69,7 +78,8 @@ def committed(db_engine: Engine):
                              restock=True, unit_price=Decimal("350")))
             returns.append(ret.id)
         s.commit()
-        ids.update(org=org.id, branch=branch.id, user=user.id, product=product.id, order=order.id, returns=returns)
+        ids.update(org=org.id, branch=branch.id, user=user.id, product=product.id, order=order.id, returns=returns,
+                   shift=shift.id, register=register.id)
     try:
         yield ids
     finally:
@@ -78,8 +88,8 @@ def committed(db_engine: Engine):
 
 def _cleanup(engine: Engine, ids: dict) -> None:
     from app.db.models import (
-        AuditLog, Branch, Inventory, Order, OrderItem, Organization, Payment, Product, Refund, Return, ReturnItem,
-        StockMovement, User,
+        AuditLog, Branch, Inventory, Order, OrderItem, Organization, Payment, Product, Refund, Register, Return,
+        ReturnItem, Shift, StockMovement, User,
     )
 
     with Session(engine) as s:
@@ -94,6 +104,8 @@ def _cleanup(engine: Engine, ids: dict) -> None:
         s.execute(delete(Inventory).where(Inventory.branch_id == ids["branch"]))
         s.execute(delete(Product).where(Product.id == ids["product"]))
         s.execute(delete(AuditLog).where(AuditLog.organization_id == ids["org"]))
+        s.execute(delete(Shift).where(Shift.id == ids["shift"]))
+        s.execute(delete(Register).where(Register.id == ids["register"]))
         s.execute(delete(User).where(User.id == ids["user"]))
         s.execute(delete(Branch).where(Branch.id == ids["branch"]))
         s.execute(delete(Organization).where(Organization.id == ids["org"]))

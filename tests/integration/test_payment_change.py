@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.integration.conftest import idem
-from tests.integration.money_fixtures import checkout, new_order, open_shift, shop  # noqa: F401  (fixtures)
+from tests.integration.money_fixtures import checkout, drawers, new_order, open_shift, shop  # noqa: F401  (fixtures)
 from tests.integration.scope_fixtures import API, as_, world  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -46,18 +46,20 @@ def test_cash_with_change_records_880_tendered_1000_in_the_open_shift(client: Te
         (Decimal("880.00"), Decimal("1000.00"))]
 
 
-def test_change_comes_out_of_the_cash_part(client: TestClient, session, world, shop, as_):
+def test_change_comes_out_of_the_cash_part(client: TestClient, session, world, shop, as_, drawers):
     order = _order(client, as_, world, shop)
     resp = checkout(client, as_("pos_a", "A"), order["id"], ("credit_card", "400.00"), ("cash", "500.00"))
     assert resp.status_code == 200, resp.text
     assert _payments(session, order["id"]) == [
-        ("credit_card", Decimal("400.00"), None, None), ("cash", Decimal("480.00"), Decimal("500.00"), None)]
+        ("credit_card", Decimal("400.00"), None, drawers["pos_a"]),
+        ("cash", Decimal("480.00"), Decimal("500.00"), drawers["pos_a"])]  # Phase 46: in the cashier's shift
 
 
 @pytest.mark.parametrize("payments", [
     [("credit_card", "1000.00")],                    # a card cannot give change
     [("cash", "100.00"), ("credit_card", "880.00")],  # the cash would settle nothing
 ])
+@pytest.mark.usefixtures("drawers")  # Phase 46: cash needs an open shift
 def test_overpaying_without_cash_change_is_400_and_records_nothing(client: TestClient, session, world, shop, as_, payments):
     order = _order(client, as_, world, shop)
     resp = checkout(client, as_("pos_a", "A"), order["id"], *payments)
@@ -65,7 +67,8 @@ def test_overpaying_without_cash_change_is_400_and_records_nothing(client: TestC
     assert _payments(session, order["id"]) == []
 
 
-def test_post_payments_settles_only_the_rest_and_marks_the_order_paid(client: TestClient, session, world, shop, as_):
+def test_post_payments_settles_only_the_rest_and_marks_the_order_paid(client: TestClient, session, world, shop, as_,
+                                                                      drawers):
     order = _order(client, as_, world, shop)
     headers = as_("pos_a", "A")
     first = client.post(f"{API}/payments/", headers=idem(headers),
@@ -78,7 +81,8 @@ def test_post_payments_settles_only_the_rest_and_marks_the_order_paid(client: Te
                          json={"order_id": order["id"], "payment_method": "cash", "amount": "500.00"})
     assert second.status_code in (200, 201), second.text
     assert _payments(session, order["id"]) == [
-        ("cash", Decimal("500.00"), Decimal("500.00"), None), ("cash", Decimal("380.00"), Decimal("500.00"), None)]
+        ("cash", Decimal("500.00"), Decimal("500.00"), drawers["pos_a"]),
+        ("cash", Decimal("380.00"), Decimal("500.00"), drawers["pos_a"])]  # Phase 46: in the cashier's shift
 
     from app.db.models import Order
     o = session.get(Order, order["id"])
