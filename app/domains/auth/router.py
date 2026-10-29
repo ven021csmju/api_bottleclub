@@ -1,9 +1,12 @@
+import asyncio
 import logging
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.config.settings import settings
 from app.db.session import get_db
@@ -22,12 +25,15 @@ from .schemas import (
     TokenResponse,
     UserProfileResponse,
 )
+from . import login_guard
 from .cookie import answer, clear, cookie_mode, cookie_name, ensure_cookie_request, refresh_token_from_cookie
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+#: How a slowed login waits (replaced in tests).
+_wait = asyncio.sleep
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
@@ -124,7 +130,7 @@ def google_callback(
 
 @router.post("/login", response_model=TokenResponse, response_model_exclude_none=True)
 @limiter.limit(settings.RATE_LIMIT_LOGIN)
-def login(
+async def login(
     request: Request,
     response: Response,
     body: LoginRequest,
@@ -134,14 +140,21 @@ def login(
         ensure_cookie_request(request)  # before the login: the origin names the cookie
     ip_address = request.client.host if request.client else ""
     user_agent = request.headers.get("User-Agent", "")
-    return answer(request, response, AuthService.login(
+    # Many wrong passwords for this username from anywhere: a slower answer,
+    # never a lock (login_guard). Awaited, so a waiting login holds no thread.
+    delay = await run_in_threadpool(login_guard.login_delay, db, body.username, datetime.now(timezone.utc))
+    if delay:
+        await _wait(delay)
+    tokens = await run_in_threadpool(
+        AuthService.login,
         db=db,
         username=body.username,
         password=body.password,
         ip_address=ip_address,
         user_agent=user_agent,
         request_id=getattr(request.state, "request_id", ""),
-    ))
+    )
+    return answer(request, response, tokens)
 
 
 @router.post("/refresh", response_model=TokenResponse, response_model_exclude_none=True)

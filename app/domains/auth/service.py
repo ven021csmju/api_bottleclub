@@ -1,5 +1,6 @@
 import logging
 import secrets
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -19,6 +20,7 @@ from app.shared.exceptions import (
     UnprocessableException,
 )
 
+from . import login_guard
 from .schemas import RegisterRequest, RegisterResponse, TokenResponse, UserProfileResponse
 from app.shared.security import (
     create_access_token,
@@ -31,9 +33,6 @@ from app.shared.security import (
 )
 
 logger = logging.getLogger(__name__)
-
-MAX_FAILED_ATTEMPTS = 5
-LOCKOUT_MINUTES = 30
 
 
 class AuthService:
@@ -95,23 +94,20 @@ class AuthService:
         # Login has no organization field: a username used in two
         # organizations cannot tell which account is meant, so it is refused
         # like an unknown one (same message; the accounts are not revealed).
-        if len(matches) != 1:
-            _record_attempt(db, username, ip_address, success=False, user_id=None)
-            raise UnauthorizedException(detail="Invalid username or password")
-        user = matches[0]
+        user = matches[0] if len(matches) == 1 else None
 
-        if user.locked_until and user.locked_until > now:
-            _record_attempt(db, username, ip_address, success=False, user_id=user.id)
-            raise UnauthorizedException(
-                detail="Account is locked. Please try again later."
-            )
+        # An unknown username, a (username, IP) locked by its failures
+        # (login_guard) and a wrong password get the same answer, after the
+        # same bcrypt work: none says whether the account exists (Phase 48-0).
+        # A locked attempt is not checked, so it cannot test a guess.
+        if user is None or login_guard.pair_locked(db, username, ip_address, now):
+            _burn_password_check(password)
+            _record_attempt(db, username, ip_address, success=False, user_id=user.id if user else None)
+            raise _invalid_login()
 
         if not verify_password(password, user.password_hash):
-            _count_failed_password(user, now)
-            db.commit()
-
             _record_attempt(db, username, ip_address, success=False, user_id=user.id)
-            raise UnauthorizedException(detail="Invalid username or password")
+            raise _invalid_login()
 
         # Checked after the password, so a guess never learns the status.
         if user.status != "active":
@@ -412,14 +408,13 @@ class AuthService:
                 detail="This account has no password: it signs in with a social account",
                 code="NO_PASSWORD",
             )
-        if user.locked_until and user.locked_until > now:
+        # A wrong current password counts as a failed login of this
+        # (username, IP), with the same lock (login_guard).
+        if login_guard.pair_locked(db, user.username, ip_address, now):
             raise BadRequestException(
-                detail="Account is locked. Please try again later.", code="ACCOUNT_LOCKED"
+                detail="Too many wrong passwords from here: try again later", code="ACCOUNT_LOCKED"
             )
-        # A wrong current password counts as a failed login (same lockout).
         if not verify_password(current_password, user.password_hash):
-            _count_failed_password(user, now)
-            db.commit()
             _record_attempt(db, user.username, ip_address, success=False, user_id=user.id)
             raise BadRequestException(
                 detail="Current password is incorrect", code="INVALID_CURRENT_PASSWORD"
@@ -513,11 +508,19 @@ class AuthService:
         )
 
 
-def _count_failed_password(user: User, now: datetime) -> None:
-    user.failed_login_attempts += 1
-    if user.failed_login_attempts >= MAX_FAILED_ATTEMPTS:
-        user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
-        user.failed_login_attempts = 0
+def _invalid_login() -> UnauthorizedException:
+    return UnauthorizedException(detail="Invalid username or password")
+
+
+@lru_cache(maxsize=1)
+def _dummy_hash() -> str:
+    return hash_password(secrets.token_urlsafe(32))
+
+
+def _burn_password_check(password: str) -> None:
+    """The bcrypt work of a real check, against nothing: the answer takes as
+    long as for an existing account."""
+    verify_password(password, _dummy_hash())
 
 
 def _temporary_password_expired(user: User, now: datetime) -> bool:
