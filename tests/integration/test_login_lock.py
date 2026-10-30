@@ -115,6 +115,8 @@ def test_the_branch_admin_unlocks_and_it_is_audited(client: TestClient, tunnel, 
     resp = client.post(f"{API}/users/{tunnel.users['pos_a']}/unlock-login", headers=as_("ba_a", "A"))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["user_id"] == tunnel.users["pos_a"]
+    # In store time like every other time of the API (v0.1.22 answered UTC, "...Z").
+    assert resp.json()["data"]["unlocked_at"].endswith("+07:00")
     assert _login(client, TILL).status_code == 200
     session.expire_all()
     audit = session.scalars(select(AuditLog).where(AuditLog.action == "USER.LOGIN_UNLOCK")).one()

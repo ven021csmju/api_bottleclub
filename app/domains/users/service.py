@@ -17,6 +17,7 @@ from app.domains.roles.access import (
 )
 from app.middleware.access import ALL_BRANCHES, Access
 from app.shared.audit import AuditContext, log_audit
+from app.shared.clock import store_now
 from app.shared.exceptions import BadRequestException, ConflictException, ForbiddenException, NotFoundException
 from app.shared.pagination import paginate
 from app.shared.security import generate_temporary_password, hash_password
@@ -154,7 +155,7 @@ class UserService:
         log_audit(db=db, ctx=audit, action="USER.LOGIN_UNLOCK", entity_type="user", entity_id=user.id,
                   at=func.clock_timestamp())
         db.commit()
-        return datetime.now(timezone.utc)
+        return store_now()  # in store time, as every other time the API answers
 
     @staticmethod
     def update_user(db: Session, access: Access, user_id: int, data: UserUpdate) -> User:
