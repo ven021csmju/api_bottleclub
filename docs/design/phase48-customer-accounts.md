@@ -10,7 +10,8 @@
 | D2 | **ลบบัญชี → แต้มเป็น 0** โดยแสดงยอดแต้มที่จะหายและให้ลูกค้ายืนยันก่อน | ledger: `loyalty_transactions` แถว `transaction_type = 'adjustment'`, `points = -<คงเหลือ>`, `reference_type = 'account_deleted'`, `reference_id = customer_account_id`; `POST /customer/me/delete` ต้องส่ง `confirm_points_forfeit: <จำนวนแต้มที่เห็น>` ตรงกับยอดปัจจุบัน ไม่งั้น 409 `POINTS_CHANGED` |
 | D3 | **ช่วงผ่อนผัน refresh ซ้อนอยู่ใน 48a** | ข้อ 4 + 6 |
 | D4 | **SES เป็นหลัก, Resend สำรอง** — เปลี่ยน provider ได้ผ่าน outbox (`EMAIL_PROVIDER`) | ข้อ 3 |
-| D5 | ก่อน 48a มี **Phase 48-0** ตรวจ/แก้ IP ที่ rate limit ใช้หลัง cloudflared | ข้อ 5.6, 6 |
+| D5 | ก่อน 48a มี **Phase 48-0** ตรวจ/แก้ IP ที่ rate limit ใช้หลัง cloudflared | ข้อ 5.6, 6 — **ทำแล้ว: v0.1.22** (`c14327fe8a8b`) |
+| F1 | ผล `scripts/prod_checks/google_staff_accounts.sql` บน prod (เจ้าของรัน 2026-10-30): superadmin 1, staff ที่มี role 0, **บัญชีไม่มี role 0** | ไม่มีบัญชีลักษณะลูกค้าในตาราง `users` → **48c ไม่ต้องย้ายบัญชี** (ข้อ 5.9, 6) |
 
 > ⚠️ **อ่านข้อ 5.1 ก่อน**: ประกาศสำนักนายกรัฐมนตรี พ.ศ. 2563 **ห้ามขายเครื่องดื่มแอลกอฮอล์ทางอิเล็กทรอนิกส์**
 > (มีผล 7 ธ.ค. 2563, ยกเว้นการซื้อขาย**และชำระเงินที่ร้าน**) — ไม่พบข่าวว่ายกเลิก. บัญชีลูกค้าทำได้
@@ -24,7 +25,7 @@
 | `customers` มี unique index `(organization_id, phone)` | `models.py:760` | สมัครด้วยเบอร์ที่ลูกค้าหน้าร้านใช้อยู่ = ชน index — **และ** ถ้าผูกอัตโนมัติด้วยเบอร์ = คนอื่นอ้างแต้มของเขาได้ → ข้อ 1.3 |
 | token พนักงาน: ไม่มี `aud`, `type: "access"`, `sub` = `users.id` | `app/shared/security.py:37`, `app/middleware/auth.py:28` | ถ้าใช้ key เดียวกัน `sub` ของลูกค้าจะไปตรงกับ `users.id` ของพนักงาน |
 | python-jose: `decode` **ไม่ส่ง** `audience` แล้ว token มี `aud` → ปฏิเสธ (`Invalid audience`) — แต่ **ส่ง** `audience=` แล้ว token **ไม่มี** `aud` → **ผ่าน** | ทดลองกับ python-jose 3.3.0 ใน venv ของ repo | ฝั่งลูกค้าต้องใช้ key แยก **และ** `options={"require_aud": True}` (ข้อ 2.1) |
-| `GET /auth/google/callback` สร้างบัญชี **ในตาราง `users` ของพนักงาน** (ไม่มี role) | `app/domains/auth/service.py:355` | บัญชีลักษณะลูกค้าอยู่ปนกับพนักงานแล้ว → ย้าย/ปิดใน 48c |
+| `GET /auth/google/callback` สร้างบัญชี **ในตาราง `users` ของพนักงาน** (ไม่มี role) | `app/domains/auth/service.py:355` | โค้ดสร้างได้ แต่ prod **ยังไม่มีสักบัญชี** (F1) → 48c แค่ปิด path นี้ ไม่ต้องย้ายข้อมูล |
 | `POST /auth/register` สร้าง `users` ไม่มี role; ปิดใน prod (`REGISTRATION_ENABLED` unset → false) | `app/domains/auth/router.py` | ต้องปิดต่อไป (มี test อยู่แล้ว) — ลบ route ใน 48c |
 | `orders.user_id` NOT NULL (พนักงานที่เปิดบิล) | `models.py:839` | ออร์เดอร์ที่ลูกค้าสร้างเองต้องแก้ (นอก Phase 48 — ข้อ 5) |
 | rate limit: slowapi key = `request.client.host`, เก็บใน memory, uvicorn `--workers 1` | `app/middleware/rate_limit.py`, `fastapi.service` | ต่อ IP ใช้ได้ (แต่รีเซ็ตเมื่อ restart); **ต่อบัญชี** ต้องเก็บใน DB |
@@ -315,7 +316,7 @@ DNS ที่ต้องเพิ่มเพราะ wayneven.uk ยังไ
 | 5.6 | IP จริงหลัง Cloudflare Tunnel. **ตรวจแล้ว 2026-10-30** (โค้ด + journal 14 วัน): uvicorn 0.30.6 `--proxy-headers --forwarded-allow-ips 127.0.0.1` แทน IP ด้วย X-Forwarded-For ตัวขวาสุดที่ไม่ใช่ 127.0.0.1; request ผ่าน tunnel ทั้ง 228 มี XFF (port `:0`) เป็น IP สาธารณะจริง, ไม่มี `127.0.0.1:0` เลย → **ปัจจุบันไม่ได้นับเป็น IP เดียว**. ที่เหลือ: พึ่งรูปแบบ XFF ของ Cloudflare, process ใดก็ได้บนเครื่องปลอม XFF ได้, ไม่มี test ล็อกพฤติกรรม | กลาง | **Phase 48-0** (ข้อ 6) |
 | 5.7 | อีเมลเข้า spam (โดเมนยังไม่มี SPF/DMARC) | กลาง | ข้อ 3: DKIM+SPF+DMARC ก่อนเปิด, เริ่ม `p=none` |
 | 5.8 | วันเกิดที่กรอกเป็นแค่คำแถลง | กลาง | ตัวควบคุมจริง = ตรวจบัตรตอนรับของ; route ส่งมอบตอบ 409 `AGE_VERIFICATION_REQUIRED` ถ้ายังไม่ตรวจ (พนักงานข้ามไม่ได้) |
-| 5.9 | บัญชีลักษณะลูกค้าในตาราง `users` ของพนักงานจาก Google login เดิม | กลาง | ตรวจจำนวนใน prod (SQL ข้างล่าง); 48c ย้ายไป `customer_identities` แล้วปิด path เดิม |
+| 5.9 | บัญชีลักษณะลูกค้าในตาราง `users` ของพนักงานจาก Google login เดิม | ~~กลาง~~ **ต่ำ** | ตรวจแล้ว (F1): prod มี 0 บัญชี — ไม่มีข้อมูลต้องย้าย. ที่เหลือคือปิด path เดิมใน 48c ก่อนมีใครใช้ (ถ้า `GOOGLE_*` ถูกตั้งใน prod ก่อน 48c บัญชีแบบนี้จะเริ่มเกิด — อย่าตั้งจนกว่าจะถึง 48c) |
 | 5.10 | Turnstile ล่ม → สมัคร/login ไม่ได้ (fail closed) | ต่ำ | ข้อความชัดเจน; ทางเลือก: login ยอม fail-open เฉพาะเมื่อไม่มี failed login ล่าสุดของอีเมลนั้น (ตัดสินใจภายหลัง) |
 | 5.11 | ลบบัญชี vs หนี้แต้ม/หลักฐานบัญชี | ต่ำ | **ตัดสินแล้ว (D2)**: คงออร์เดอร์, แต้มเป็น 0 หลังลูกค้าเห็นยอดและยืนยัน, ledger `account_deleted` |
 | 5.12 | worker อีเมลอีกตัวบน laptop prod | ต่ำ | systemd service แยก, Restart=on-failure, ดู `email_outbox.status = failed` ใน check ประจำวัน |
@@ -331,7 +332,7 @@ SQL ตรวจ prod: **`scripts/prod_checks/google_staff_accounts.sql`** (อ�
 | **48-0 — IP จริงสำหรับ rate limit (ก่อน 48a, D5)** | key ของ limiter (และ `login_attempts.ip_address`) = `CF-Connecting-IP` **เฉพาะเมื่อ peer = 127.0.0.1** (cloudflared) และค่าเป็น IP ที่ถูกรูปแบบ; ไม่งั้น `request.client.host` (ผลของ uvicorn เดิม). test: peer ภายนอกส่ง `CF-Connecting-IP` ปลอม → ไม่เชื่อ; 2 IP ผ่าน tunnel → bucket แยก; ไม่มี header → พฤติกรรมเดิม | เล็ก ไม่มี migration; ฐานเดียวกับที่ลูกค้า (48a) จะใช้ |
 | **48a — บัญชีและการเข้าสู่ระบบ** | migration 022 (ทุกตารางข้อ 1.2), key/claim แยก + test สองทิศ, register / verify-email / resend / login / refresh / logout / forgot / reset, consent (terms+privacy; ไม่มี marketing: D1), Turnstile, rate limit ต่อ IP (IP จริงหลัง tunnel) + ต่ออีเมล, `email_outbox` + worker + SES (สำรอง Resend; staging: console sender), cookie โหมดลูกค้า + **ช่วงผ่อนผัน refresh ซ้อน (D3, ทั้งลูกค้าและพนักงาน)** | เริ่มได้เมื่อ: เจ้าของสมัคร AWS SES + DNS (ข้อ 3), ได้ Turnstile site/secret key, ร่าง terms/privacy เวอร์ชันแรก. env ใหม่: `CUSTOMER_JWT_SECRET_KEY`, `CUSTOMER_AUTH_COOKIE_ORIGINS`, `CUSTOMER_TURNSTILE_SECRET_KEY`, `CUSTOMER_TURNSTILE_HOSTNAMES`, `EMAIL_PROVIDER`, `AWS_SES_*`, `CUSTOMER_EMAIL_PEPPER` |
 | **48b — โปรไฟล์, PDPA, ฝั่งเคาน์เตอร์** | `/customer/me*` (แก้ไข, เปลี่ยนรหัส/อีเมล, consent, export, **ลบ/anonymize**), ฝั่งพนักงาน: ค้นบัญชี, **ยืนยันอายุ** (`customers.verify_age`), **ผูกกับลูกค้าหน้าร้าน**; FRONTEND_GUIDE สำหรับ shop + POS | หลัง 48a |
-| **48c — Google / LINE** | `customer_identities` ใช้จริง: login/ผูก Google และ LINE เข้าบัญชีเดิม (ผูกเฉพาะตอน login อยู่), ย้ายบัญชี role-less เดิมออกจาก `users`, ปิด `GET /auth/google*` ฝั่งพนักงาน + ลบ `POST /auth/register` | หลัง 48b; ผล SQL ข้อ 5.9 |
+| **48c — Google / LINE** | `customer_identities` ใช้จริง: login/ผูก Google และ LINE เข้าบัญชีเดิม (ผูกเฉพาะตอน login อยู่), ปิด `GET /auth/google*` ฝั่งพนักงาน + ลบ `POST /auth/register` (**ไม่ต้องย้ายบัญชี**: prod มีบัญชีไม่มี role 0, F1) | หลัง 48b; ก่อนปิดให้รัน `google_staff_accounts.sql` อีกครั้ง — ยังต้องเป็น 0 |
 
 **นอก Phase 48** (phase สั่งซื้อ หลังกฎหมายยืนยันข้อ 5.1): route สร้างออร์เดอร์ของลูกค้า (`orders.user_id` NULL ได้เมื่อ
 `order_source <> 'pos'` + CHECK), ตรวจ `EMAIL_NOT_VERIFIED` / `CONSENT_VERSION_OUTDATED`, ส่งมอบที่ร้านพร้อม `AGE_VERIFICATION_REQUIRED`.
