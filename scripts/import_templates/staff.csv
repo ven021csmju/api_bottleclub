@@ -1,0 +1,4 @@
+﻿username,display_name,email,role,branch,phone
+manager_mnb,ผู้จัดการ ตัวอย่าง,manager.mnb@example.com,Manager,MNB,081-000-0001
+cashier_mnb1,แคชเชียร์ ตัวอย่าง,cashier.mnb1@example.com,Cashier,MNB,
+cashier_mnb1,แคชเชียร์ ตัวอย่าง,cashier.mnb1@example.com,Cashier,SKV,
