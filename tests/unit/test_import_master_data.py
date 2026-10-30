@@ -42,10 +42,11 @@ def test_the_templates_are_clean_and_plan_everything(tmp_path):
     for path in (ROOT / "scripts" / "import_templates").glob("*.csv"):
         if path.name in imd.COLUMNS:
             (tmp_path / path.name).write_bytes(path.read_bytes())
-    plan, problems = _plan(tmp_path)
+    plan, problems = _plan(tmp_path, _empty_world(roles={"Manager": 2, "Cashier": 3, "Kitchen": 4, "Bar": 5}))
     assert not problems, problems.report()
     assert {c.action for c in plan} == {"create"}
     assert sum(c.file == "products.csv" for c in plan) == 3
+    assert sum(c.file == "staff.csv" for c in plan) == 2  # cashier_mnb1 has two rows: one account
     for path in (ROOT / "scripts" / "import_templates").glob("*.csv"):
         assert path.read_bytes().startswith(b"\xef\xbb\xbf"), path.name  # Excel opens it as UTF-8
 
@@ -187,3 +188,98 @@ def test_not_utf8_is_one_clear_problem(tmp_path):
 def test_only_https_or_local(tmp_path):
     with pytest.raises(SystemExit):
         imd.main(["--api", "http://api.wayneven.uk", "--dir", str(tmp_path), "--username", "sa"])
+
+
+# --------------------------------------------------------------------------- staff (item 3)
+
+ROLES = {"Superadmin": 1, "Manager": 2, "Cashier": 3, "Kitchen": 4, "Bar": 5}
+
+
+def _staff_world(**users) -> "imd.World":
+    world = _existing_world()
+    world.roles = dict(ROLES)
+    world.users = users
+    return world
+
+
+STAFF_HEADER = "username,display_name,email,role,branch,phone\n"
+
+
+def test_one_person_many_rows_is_one_account_with_its_roles(tmp_path):
+    _write(tmp_path, "staff.csv", STAFF_HEADER + "cash1,แคชเชียร์,c1@example.com,Cashier,MNB,\n"
+                                                  "cash1,แคชเชียร์,c1@example.com,Bar,,\n")
+    (change,), problems = _plan(tmp_path, _staff_world())
+    assert not problems, problems.report()
+    assert change.action == "create"
+    assert change.payload == {"username": "cash1", "display_name": "แคชเชียร์", "email": "c1@example.com"}
+    assert change.extra["roles"] == [("Cashier", "MNB"), ("Bar", None)]
+    assert "password" not in str(change.payload)
+
+
+def test_staff_problems_each_with_its_row(tmp_path):
+    _write(tmp_path, "staff.csv", STAFF_HEADER
+           + "boss,Boss,boss@example.com,Superadmin,,\n"       # 2: not importable
+           + "a.b,A,a@example.com,Cashier,NOPE,\n"             # 3: no branch
+           + "a.b,A other,a@example.com,Cashier,MNB,\n"        # 4: another name for a.b
+           + "a.b,A,a@example.com,Cashier,NOPE,\n"             # 5: same role/branch again (and no branch)
+           + "c d,C,not-an-email,Waiter,,\n"                   # 6: username, email, role
+           + "e,E,a@example.com,Kitchen,,\n"                   # 7: a.b's email
+           + "f,F,owner@example.com,Bar,,\n")                  # 8: another account's email in the system
+    world = _staff_world(owner={"id": 50, "username": "owner", "email": "Owner@Example.com", "roles": []})
+    _, problems = _plan(tmp_path, world)
+    assert {line for _, line, _ in problems.items} == {2, 3, 4, 5, 6, 7, 8}, problems.report()
+
+
+def test_an_existing_superadmin_is_not_touched(tmp_path):
+    _write(tmp_path, "staff.csv", STAFF_HEADER + "root,Root,root@example.com,Manager,,\n")
+    world = _staff_world(root={"id": 1, "username": "root", "email": "root@example.com", "display_name": "Root",
+                               "is_superadmin": True, "roles": [{"role_id": 1, "branch_id": None}]})
+    _, problems = _plan(tmp_path, world)
+    assert [m for _, _, m in problems.items] == ["root เป็น Superadmin ในระบบ: ไฟล์นี้ไม่แก้บัญชี Superadmin"]
+
+
+def test_an_existing_account_gets_what_changed_and_its_missing_roles_none_removed(tmp_path):
+    _write(tmp_path, "staff.csv", STAFF_HEADER + "cash1,ชื่อใหม่,c1@example.com,Cashier,MNB,\n"
+                                                  "cash1,ชื่อใหม่,c1@example.com,Bar,MNB,\n")
+    world = _staff_world(cash1={"id": 7, "username": "cash1", "email": "c1@example.com", "display_name": "ชื่อเดิม",
+                                "phone": "081", "is_superadmin": False,
+                                "roles": [{"role_id": 3, "branch_id": 1}, {"role_id": 4, "branch_id": None}]})
+    (change,), problems = _plan(tmp_path, world)
+    assert not problems, problems.report()
+    assert (change.action, change.target_id, change.payload) == ("update", 7, {"display_name": "ชื่อใหม่"})
+    assert change.extra["roles"] == [("Bar", "MNB")]          # added
+    assert any("Kitchen@ทุกสาขา" in s and "ไม่ถอด" in s for s in change.shown)  # reported, kept
+
+
+def test_the_same_staff_file_again_changes_nothing(tmp_path):
+    _write(tmp_path, "staff.csv", STAFF_HEADER + "cash1,แคชเชียร์,c1@example.com,Cashier,MNB,081\n")
+    world = _staff_world(cash1={"id": 7, "username": "cash1", "email": "c1@example.com", "display_name": "แคชเชียร์",
+                                "phone": "081", "is_superadmin": False, "roles": [{"role_id": 3, "branch_id": 1}]})
+    (change,), problems = _plan(tmp_path, world)
+    assert (change.action, problems.items) == ("same", [])
+
+
+def test_the_password_file_is_new_600_under_home_and_outside_git(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "repo" / ".git").mkdir(parents=True)
+    monkeypatch.setattr(imd.Path, "home", classmethod(lambda cls: home))
+    assert imd.check_password_path(home / "p.tsv") is None
+    assert "ใต้" in imd.check_password_path(tmp_path / "elsewhere.tsv")
+    assert "git" in imd.check_password_path(home / "repo" / "p.tsv")
+    (home / "old.tsv").write_text("x")
+    assert "อยู่แล้ว" in imd.check_password_path(home / "old.tsv")
+
+    file = imd.PasswordFile(home / "p.tsv")
+    file.add("cash1", "Secret-Temp-1", "2026-11-02T10:00:00+07:00")
+    file.close()
+    assert oct((home / "p.tsv").stat().st_mode & 0o777) == "0o600"
+    assert (home / "p.tsv").read_text().splitlines()[1].split("\t")[:2] == ["cash1", "Secret-Temp-1"]
+    with pytest.raises(FileExistsError):  # never over an existing file
+        again = imd.PasswordFile(home / "p.tsv")
+        again.add("x", "y", "")
+
+
+def test_no_staff_file_no_password_file(tmp_path):
+    file = imd.PasswordFile(tmp_path / "never.tsv")
+    file.close()
+    assert not (tmp_path / "never.tsv").exists()

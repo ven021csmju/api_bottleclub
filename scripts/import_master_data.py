@@ -7,6 +7,11 @@
 Files (all optional; templates and their Thai README in scripts/import_templates/):
 branches.csv, categories.csv, products.csv, registers.csv, staff.csv.
 
+Staff get the temporary password the API makes (to be changed at the first
+login, valid 72 hours). With --apply the passwords of the accounts made are
+written to a new file (mode 600) under the home directory, never shown;
+--passwords-out names it. An existing account keeps its password.
+
 - Reads every file and checks every row first (and the rows against what the
   API already has); one wrong row and nothing is written: each problem is
   listed with its file and row number (the header is row 1, as in Excel).
@@ -29,12 +34,14 @@ import argparse
 import csv
 import getpass
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -46,7 +53,10 @@ COLUMNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "categories.csv": (("name",), ("station", "sort_order", "description")),
     "products.csv": (("sku", "name", "selling_price"), ("category", "cost_price", "unit", "station", "barcode")),
     "registers.csv": (("branch", "name"), ()),
+    "staff.csv": (("username", "display_name", "email", "role"), ("branch", "phone")),
 }
+#: the roles staff.csv may give (never Superadmin)
+STAFF_ROLES = ("Manager", "Cashier", "Kitchen", "Bar")
 #: the order the files are read and written in (later files refer to earlier ones)
 ORDER = tuple(COLUMNS)
 
@@ -56,8 +66,12 @@ MAX_LENGTH = {
     ("products.csv", "sku"): 100, ("products.csv", "name"): 255, ("products.csv", "unit"): 20,
     ("products.csv", "barcode"): 255, ("products.csv", "category"): 255,
     ("registers.csv", "name"): 100, ("registers.csv", "branch"): 50,
+    ("staff.csv", "username"): 100, ("staff.csv", "display_name"): 255, ("staff.csv", "email"): 255,
+    ("staff.csv", "phone"): 50, ("staff.csv", "branch"): 50,
 }
 CODE = re.compile(r"[A-Za-z0-9_-]+")
+USERNAME = re.compile(r"[A-Za-z0-9._-]+")
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PLAIN_NUMBER = re.compile(r"\d+(\.\d+)?")
 GROUPED_NUMBER = re.compile(r"\d{1,3}(,\d{3})+(\.\d+)?")
 
@@ -296,6 +310,8 @@ class World:
     costs: dict[str, Decimal]
     registers: set[tuple[str, str]]
     inactive_registers: set[tuple[str, str]]
+    roles: dict[str, int] = field(default_factory=dict)
+    users: dict[str, dict] = field(default_factory=dict)
 
 
 def load_world(api: Api) -> World:
@@ -307,8 +323,10 @@ def load_world(api: Api) -> World:
     for code, branch in branches.items():
         for r in api.items("/registers/", "registers", {"branch_id": branch["id"], "include_inactive": "true"}):
             (registers if r["is_active"] else inactive).add((code, r["name"]))
+    roles = {r["name"]: r["id"] for r in api.pages("/roles/", "roles")}
+    users = {u["username"]: u for u in api.pages("/users/", "users")}
     return World(branches, categories, products, {p["barcode"]: p for p in products.values() if p.get("barcode")},
-                 costs, registers, inactive)
+                 costs, registers, inactive, roles, users)
 
 
 def plan_branches(rows: list[Row], world: World, problems: Problems) -> list[Change]:
@@ -420,6 +438,75 @@ def plan_registers(rows: list[Row], world: World, branches_in_file: set[str], pr
     return changes
 
 
+def plan_staff(rows: list[Row], world: World, branches_in_file: set[str], problems: Problems) -> list[Change]:
+    """One change per username; each row of it is one role (at a branch, or everywhere)."""
+    people: dict[str, list[Row]] = {}
+    for row in rows:
+        if not check_required(row, problems):
+            continue
+        check_lengths(row, problems)
+        if not USERNAME.fullmatch(row["username"]):
+            problems.add(row.file, row.line, f"username '{row['username']}' ใช้ได้แค่ตัวอักษรอังกฤษ ตัวเลข . _ -")
+        if not EMAIL.fullmatch(row["email"]):
+            problems.add(row.file, row.line, f"email '{row['email']}' ไม่ใช่อีเมล")
+        if row["role"] not in STAFF_ROLES:
+            problems.add(row.file, row.line, f"role '{row['role']}' ต้องเป็น {' / '.join(STAFF_ROLES)}")
+        elif row["role"] not in world.roles:
+            problems.add(row.file, row.line, f"ไม่มีบทบาท '{row['role']}' ในระบบ")
+        if row["branch"] and row["branch"] not in branches_in_file and row["branch"] not in world.branches:
+            problems.add(row.file, row.line, f"ไม่มีสาขา '{row['branch']}' (ใน branches.csv หรือในระบบ)")
+        people.setdefault(row["username"], []).append(row)
+
+    code_of = {b["id"]: code for code, b in world.branches.items()}
+    role_of = {i: name for name, i in world.roles.items()}
+    owner_of_email = {u["email"].lower(): name for name, u in world.users.items() if u.get("email")}
+    email_in_file: dict[str, tuple[str, int]] = {}
+    changes = []
+    for username, mine in people.items():
+        first = mine[0]
+        for row in mine[1:]:
+            for column in ("display_name", "email", "phone"):
+                if row[column] != first[column]:
+                    problems.add(row.file, row.line, f"{column} ต่างจากแถว {first.line} ของ {username}")
+        email = first["email"].lower()
+        if email in email_in_file and email_in_file[email][0] != username:
+            problems.add(first.file, first.line, f"email '{first['email']}' ซ้ำกับ {email_in_file[email][0]} แถว {email_in_file[email][1]}")
+        email_in_file.setdefault(email, (username, first.line))
+        if owner_of_email.get(email, username) != username:
+            problems.add(first.file, first.line, f"email '{first['email']}' เป็นของ {owner_of_email[email]} ในระบบแล้ว")
+        wanted, seen = [], {}
+        for row in mine:
+            key = (row["role"], row["branch"] or None)
+            if key in seen:
+                problems.add(row.file, row.line, f"บทบาท {row['role']} {row['branch'] or '(ทุกสาขา)'} ซ้ำกับแถว {seen[key]}")
+            else:
+                seen[key] = row.line
+                wanted.append(key)
+        label = f"พนักงาน {username}"
+        roles_shown = ", ".join(f"{r}@{b or 'ทุกสาขา'}" for r, b in wanted)
+        existing = world.users.get(username)
+        fields = {"display_name": first["display_name"], "email": first["email"]}
+        if first["phone"]:
+            fields["phone"] = first["phone"]
+        if existing is None:
+            changes.append(Change(first.file, first.line, "create", label, {"username": username, **fields},
+                                  shown=[roles_shown], extra={"roles": wanted}))
+            continue
+        if existing.get("is_superadmin"):
+            problems.add(first.file, first.line, f"{username} เป็น Superadmin ในระบบ: ไฟล์นี้ไม่แก้บัญชี Superadmin")
+            continue
+        has = {(role_of.get(a["role_id"], f"role {a['role_id']}"), code_of.get(a["branch_id"]) if a["branch_id"] else None)
+               for a in existing.get("roles", [])}
+        payload, shown = _diff(existing, fields)
+        missing = [k for k in wanted if k not in has]
+        extra_roles = sorted(has - set(wanted), key=str)
+        shown += [f"+ บทบาท {r}@{b or 'ทุกสาขา'}" for r, b in missing]
+        shown += [f"มีบทบาท {r}@{b or 'ทุกสาขา'} ในระบบแต่ไม่มีในไฟล์ (ไม่ถอด — ถอดในหน้า Admin)" for r, b in extra_roles]
+        changes.append(Change(first.file, first.line, "update" if payload or missing else "same", label, payload,
+                              existing["id"], shown, {"roles": missing}))
+    return changes
+
+
 def build_plan(files: dict[str, list[Row]], world: World, problems: Problems) -> list[Change]:
     plan = plan_branches(files.get("branches.csv", []), world, problems)
     plan += plan_categories(files.get("categories.csv", []), world, problems)
@@ -427,13 +514,50 @@ def build_plan(files: dict[str, list[Row]], world: World, problems: Problems) ->
     plan += plan_products(files.get("products.csv", []), world, categories_in_file, problems)
     branches_in_file = {r["code"] for r in files.get("branches.csv", []) if r["code"]}
     plan += plan_registers(files.get("registers.csv", []), world, branches_in_file, problems)
+    plan += plan_staff(files.get("staff.csv", []), world, branches_in_file, problems)
     return plan
 
 
 # --------------------------------------------------------------------------- writing
 
 
-def apply_plan(api: Api, plan: list[Change], world: World, out=print) -> None:
+class PasswordFile:
+    """The temporary passwords of the accounts made: a new file, mode 600,
+    opened at the first one (no account made, no file). Never printed."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.count = 0
+        self._fd: int | None = None
+
+    def add(self, username: str, password: str, expires_at: str) -> None:
+        if self._fd is None:
+            self._fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(self._fd, "username\ttemporary_password\texpires_at\n".encode())
+        os.write(self._fd, f"{username}\t{password}\t{expires_at}\n".encode())
+        self.count += 1
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+
+
+def check_password_path(path: Path) -> str | None:
+    """Why the passwords may not go to ``path`` (None: they may)."""
+    home = Path.home().resolve()
+    resolved = path.expanduser().resolve()
+    if home not in resolved.parents:
+        return f"ไฟล์รหัสผ่านต้องอยู่ใต้ {home}"
+    if resolved.exists():
+        return f"มีไฟล์ {resolved} อยู่แล้ว (ไม่เขียนทับ)"
+    if not resolved.parent.is_dir():
+        return f"ไม่มีโฟลเดอร์ {resolved.parent}"
+    if any((p / ".git").exists() for p in [resolved.parent, *resolved.parent.parents]):
+        return f"{resolved.parent} อยู่ใน git repository: ไฟล์รหัสผ่านห้ามอยู่ใน repo"
+    return None
+
+
+def apply_plan(api: Api, plan: list[Change], world: World, out=print, passwords: PasswordFile | None = None) -> None:
     branch_id = {code: b["id"] for code, b in world.branches.items()}
     category_id = {name: c["id"] for name, c in world.categories.items()}
     for change in plan:
@@ -460,6 +584,16 @@ def apply_plan(api: Api, plan: list[Change], world: World, out=print) -> None:
                 api.call("PUT", f"/catalog/products/{change.target_id}", payload)
         elif kind == "registers.csv":
             api.call("POST", "/registers/", {"branch_id": branch_id[change.extra["branch"]], **payload})
+        elif kind == "staff.csv":
+            roles = [{"role_id": world.roles[r], "branch_id": branch_id[b] if b else None} for r, b in change.extra["roles"]]
+            if change.action == "create":
+                made = api.call("POST", "/users/", {**payload, "roles": roles})
+                passwords.add(made["username"], made["temporary_password"], made.get("temp_password_expires_at") or "")
+            else:
+                if payload:
+                    api.call("PUT", f"/users/{change.target_id}", payload)
+                for role in roles:
+                    api.call("POST", f"/users/{change.target_id}/roles", role)
         out(f"  ✓ {'สร้าง' if change.action == 'create' else 'แก้'} {change.label}")
 
 
@@ -475,7 +609,7 @@ def show_plan(plan: list[Change], out=print) -> None:
         out(f"{file}: สร้าง {counts['create']}, แก้ {counts['update']}, เหมือนเดิม {counts['same']}")
         for change in mine:
             if change.action == "create":
-                out(f"  + {change.label} (แถว {change.line})")
+                out(f"  + {change.label} (แถว {change.line})" + (f": {'; '.join(change.shown)}" if change.shown else ""))
             elif change.action == "update" or change.shown:
                 out(f"  ~ {change.label} (แถว {change.line}): {'; '.join(change.shown)}")
 
@@ -495,6 +629,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dir", required=True, type=Path, help="the folder of the CSV files")
     parser.add_argument("--username", required=True, help="a Superadmin")
     parser.add_argument("--apply", action="store_true", help="write (without it: check and show only)")
+    parser.add_argument("--passwords-out", type=Path,
+                        default=Path.home() / f"bottleclub-staff-passwords-{datetime.now():%Y%m%d-%H%M%S}.tsv",
+                        help="where the temporary passwords of new staff go (a new file under ~, mode 600)")
     args = parser.parse_args(argv)
 
     parts = urllib.parse.urlsplit(args.api)
@@ -526,15 +663,27 @@ def main(argv: list[str] | None = None) -> int:
     if not any(c.action != "same" for c in plan):
         print("ไม่มีอะไรต้องเปลี่ยน")
         return 0
+    new_staff = sum(c.file == "staff.csv" and c.action == "create" for c in plan)
+    if new_staff:
+        why = check_password_path(args.passwords_out)
+        if why:
+            print(f"ไม่ได้นำเข้าอะไรเลย: {why} (--passwords-out)")
+            return 1
     if not args.apply:
         print("ยังไม่ได้เขียนอะไร (ตรวจอย่างเดียว) — ใส่ --apply เพื่อนำเข้า")
         return 0
     print("กำลังนำเข้า…")
+    passwords = PasswordFile(args.passwords_out.expanduser().resolve())
     try:
-        apply_plan(api, plan, world)
+        apply_plan(api, plan, world, passwords=passwords)
     except ApiError as exc:
         print(f"หยุด: API ปฏิเสธ — {exc}\nแถวก่อนหน้านี้นำเข้าแล้ว; แก้แล้วรันใหม่ได้ (รันซ้ำไม่สร้างซ้ำ)")
         return 2
+    finally:
+        passwords.close()
+        if passwords.count:
+            print(f"รหัสผ่านชั่วคราวของพนักงานใหม่ {passwords.count} คน อยู่ในไฟล์ {passwords.path} (สิทธิ์ 600; ไม่แสดงบนจอ)\n"
+                  "ต้องเปลี่ยนตอน login ครั้งแรก, หมดอายุใน 72 ชั่วโมง — แจกแล้วลบไฟล์ทิ้ง")
     print("นำเข้าเสร็จ")
     return 0
 
