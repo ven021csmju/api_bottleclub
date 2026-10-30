@@ -6,6 +6,7 @@ from app.domains.catalog.schemas import (
     CategoryCreate,
     CategoryResponse,
     CategoryUpdate,
+    ProductCost,
     ProductCreate,
     ProductResponse,
     ProductUpdate,
@@ -100,6 +101,16 @@ def list_products(
             {"page": page, "per_page": per_page, "result_count": result.total},
         )
     return result.products
+
+
+@router.get("/products/costs", response_model=list[ProductCost])
+def list_product_costs(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("catalog.create", scope="org")),
+):
+    """Each live product's cost: catalog editors only (cashiers read the
+    catalog, not the margin). Declared before /products/{product_id}."""
+    return CatalogService.list_product_costs(db, user.organization_id)
 
 
 @router.get("/products/{product_id}", response_model=ProductResponse)
