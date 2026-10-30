@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -118,6 +120,14 @@ class CatalogRepository:
         stmt = stmt.order_by(Product.name).offset((page - 1) * per_page).limit(per_page)
         products = list(db.scalars(stmt).all())
         return products, total
+
+    @staticmethod
+    def list_product_costs(db: Session, org_id: int) -> list[tuple[int, str, Decimal]]:
+        return list(db.execute(
+            select(Product.id, Product.sku, Product.cost_price)
+            .where(Product.organization_id == org_id, Product.deleted_at.is_(None))
+            .order_by(Product.sku)
+        ).all())
 
     @staticmethod
     def get_product(db: Session, product_id: int) -> Product | None:

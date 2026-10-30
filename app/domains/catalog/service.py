@@ -210,11 +210,19 @@ class CatalogService:
             has_expiry=data.has_expiry,
             image_url=data.image_url,
             station=data.station,
+            cost_price=data.cost_price,
         )
         CatalogRepository.add_product(db, product)
         db.commit()
         db.refresh(product)
         return product
+
+    @staticmethod
+    def list_product_costs(db: Session, org_id: int) -> list[dict]:
+        return [
+            {"product_id": pid, "sku": sku, "cost_price": cost}
+            for pid, sku, cost in CatalogRepository.list_product_costs(db, org_id)
+        ]
 
     @staticmethod
     def update_product(
