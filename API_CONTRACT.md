@@ -674,7 +674,8 @@ the user's branch, or the Superadmin; 404 if not visible, 403
 { "user_id": 5, "unlocked_at": "2026-10-30T10:15:00+07:00" }
 ```
 Every lock of the user's logins (from any IP) and the slow-down end at once;
-audited `USER.LOGIN_UNLOCK`. The password does not change.
+audited `USER.LOGIN_UNLOCK`. The password does not change. `unlocked_at` is
+in store time (`+07:00`) since v0.1.23 (v0.1.22 answered UTC, `...Z`).
 
 ### POST `/users/{user_id}/reset-password`
 Permission `users.update` at a branch where the user has a role (else 404), and
@@ -1166,6 +1167,7 @@ DELETE /catalog/categories/{id}    → 204
 ```
 GET    /catalog/products           ?page=&per_page=&search=&category_id=&is_active=&station=none|kitchen|bar
 GET    /catalog/products/{id}
+GET    /catalog/products/costs     (Phase 47) catalog editors only
 POST   /catalog/products
 PUT    /catalog/products/{id}
 DELETE /catalog/products/{id}      → 204
@@ -1180,6 +1182,7 @@ DELETE /catalog/products/{id}      → 204
   "sku": "string",
   "barcode": "string" | null,
   "selling_price": 250.00,
+  "cost_price": 120.00,
   "unit": "each",
   "track_inventory": true,
   "has_expiry": false,
@@ -1187,6 +1190,19 @@ DELETE /catalog/products/{id}      → 204
 }
 ```
 `station` (38c): the screen the product's items go to; null = the category's.
+
+`cost_price` (Phase 47): the shop's cost of one unit, >= 0 with at most 2
+decimal places (else 422); left out on create = 0, on update = unchanged;
+`null` → 422. The inventory report values stock with it (up to v0.1.22 no
+route set it: every product cost 0). It is **not** in ProductResponse (every
+cashier reads the catalog); catalog editors read it with:
+
+`GET /catalog/products/costs` — `catalog.create` at organization level (the
+Superadmin, a Manager of every branch; a Branch Admin or a cashier → 403):
+```json
+[{ "product_id": 12, "sku": "WR-0001", "cost_price": "820.00" }]
+```
+every live (not deleted) product, active or not, by `sku`.
 
 **ProductResponse** has both (Phase 42):
 - `station`: the product's own value (`null` = it follows its category), what
