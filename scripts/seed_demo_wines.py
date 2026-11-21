@@ -5,6 +5,7 @@ DATABASE_URL (the API's environment), through the ORM.
     python -m scripts.seed_demo_wines                  # dry run: what would change
     python -m scripts.seed_demo_wines --apply          # create / bring back in line
     python -m scripts.seed_demo_wines --delete --apply # remove the demo data
+    python -m scripts.seed_demo_wines --wine-only --apply  # wine_products rows only (production)
 
 Every demo row is marked: products.sku and wine_products.code start with
 DEMO-, and the products are in the category DEMO_CATEGORY. 17 rows: the
@@ -13,6 +14,13 @@ creates nothing twice (looked up by sku / code) and puts changed demo rows
 back to the values below. --delete touches DEMO- rows only; a demo product
 already used by an order or a stock movement cannot be deleted (RESTRICT),
 so it is deactivated and soft-deleted instead.
+
+--wine-only (production, before the shop opens online): the 8 wine_products
+rows only, no category and no products. wine_products is read only by the
+public GET /wine-products/; the POS catalog, orders, stock and every report
+read products, so demo wines never reach a cashier or a sales figure. The
+storefront tells them apart by `code` starting with DEMO- (the name starts
+with "DEMO " too). --delete removes them as above.
 """
 from __future__ import annotations
 
@@ -124,10 +132,16 @@ def _sync(row, values: dict) -> bool:
     return changed
 
 
-def seed(db: Session, org_id: int | None = None) -> dict[str, list[str]]:
-    """Create the demo rows or put them back in line; nothing twice."""
-    org = _organization(db, org_id)
+def seed(db: Session, org_id: int | None = None, *, wine_only: bool = False) -> dict[str, list[str]]:
+    """Create the demo rows or put them back in line; nothing twice.
+    ``wine_only``: the wine_products rows only (nothing the POS or a report reads)."""
     out: dict[str, list[str]] = {"created": [], "updated": [], "unchanged": []}
+    if wine_only:
+        for wine in WINES:
+            _seed_wine_row(db, wine, out)
+        db.flush()
+        return out
+    org = _organization(db, org_id)
 
     category = db.scalar(select(Category).where(Category.organization_id == org.id, Category.name == DEMO_CATEGORY))
     if category is None:
@@ -147,14 +161,18 @@ def seed(db: Session, org_id: int | None = None) -> dict[str, list[str]]:
             out["updated" if _sync(product, _product_values(wine, category.id)) else "unchanged"].append(
                 f"product {wine.sku}")
 
-        row = db.scalar(select(WineProduct).where(WineProduct.code == wine.sku))
-        if row is None:
-            db.add(WineProduct(code=wine.sku, **_wine_values(wine)))
-            out["created"].append(f"wine_product {wine.sku}")
-        else:
-            out["updated" if _sync(row, _wine_values(wine)) else "unchanged"].append(f"wine_product {wine.sku}")
+        _seed_wine_row(db, wine, out)
     db.flush()
     return out
+
+
+def _seed_wine_row(db: Session, wine: DemoWine, out: dict[str, list[str]]) -> None:
+    row = db.scalar(select(WineProduct).where(WineProduct.code == wine.sku))
+    if row is None:
+        db.add(WineProduct(code=wine.sku, **_wine_values(wine)))
+        out["created"].append(f"wine_product {wine.sku}")
+    else:
+        out["updated" if _sync(row, _wine_values(wine)) else "unchanged"].append(f"wine_product {wine.sku}")
 
 
 def delete_demo(db: Session) -> dict[str, list[str]]:
@@ -193,12 +211,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="commit (default: dry run, rolled back)")
     parser.add_argument("--delete", action="store_true", help="remove the DEMO- data instead of seeding it")
     parser.add_argument("--org-id", type=int, help="organization of the products (default: the sole active one)")
+    parser.add_argument("--wine-only", action="store_true",
+                        help="wine_products rows only: no category/products, so nothing in the POS or reports")
     args = parser.parse_args(argv)
+    if args.delete and args.wine_only:
+        parser.error("--delete removes every DEMO- row; --wine-only is for seeding")
 
     from app.db.session import SessionLocal
 
     with SessionLocal() as db:
-        result = delete_demo(db) if args.delete else seed(db, args.org_id)
+        result = delete_demo(db) if args.delete else seed(db, args.org_id, wine_only=args.wine_only)
         for kind, rows in result.items():
             print(f"{kind}: {len(rows)}")
             for row in rows:

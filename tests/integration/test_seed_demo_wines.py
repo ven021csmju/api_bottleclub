@@ -70,3 +70,31 @@ def test_the_wines_are_served_by_wine_products(client, session, seed_org):
     resp = client.get("/api/v1/wine-products/", params={"per_page": 50})
     assert resp.status_code == 200, resp.text
     assert "DEMO-ROS-001" in resp.text
+
+
+def test_wine_only_seeds_nothing_the_pos_reads(client, session, seed_org):
+    result = demo.seed(session, seed_org, wine_only=True)
+
+    assert len(result["created"]) == 8 and all(r.startswith("wine_product DEMO-") for r in result["created"])
+    assert _count(session, Product) == 0 and _count(session, Category) == 0
+    assert _count(session, WineProduct, WineProduct.code.startswith("DEMO-")) == 8
+    assert demo.seed(session, seed_org, wine_only=True)["created"] == []  # again: nothing twice
+    resp = client.get("/api/v1/wine-products/", params={"per_page": 50})
+    assert resp.status_code == 200 and resp.text.count('"code":"DEMO-') == 8
+
+
+def test_delete_after_wine_only(session, seed_org):
+    session.add(WineProduct(code="3000000000001", product_name="Real wine"))
+    demo.seed(session, seed_org, wine_only=True)
+
+    result = demo.delete_demo(session)
+
+    assert len(result["deleted"]) == 8 and result["soft_deleted"] == []
+    assert session.scalars(select(WineProduct.code)).all() == ["3000000000001"]
+
+
+def test_cli_refuses_delete_with_wine_only():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        demo.main(["--delete", "--wine-only"])
