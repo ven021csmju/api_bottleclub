@@ -220,7 +220,21 @@ def seed(db: Session, org_id: int | None = None) -> dict[str, list[str]]:
         else:
             out["updated" if _sync(row, _wine_values(wine)) else "unchanged"].append(f"wine_product {wine.sku}")
     db.flush()
+    # v0.1.24 put its 8 demo wines in a category the POS lists: gone once empty.
+    out.setdefault("deleted", []).extend(_drop_legacy_categories(db))
+    if not out["deleted"]:
+        del out["deleted"]
     return out
+
+
+def _drop_legacy_categories(db: Session) -> list[str]:
+    gone = []
+    for category in db.scalars(select(Category).where(Category.name == LEGACY_DEMO_CATEGORY)).all():
+        if db.scalar(select(Product.id).where(Product.category_id == category.id).limit(1)) is None:
+            db.delete(category)
+            gone.append(f"category {LEGACY_DEMO_CATEGORY} (org {category.organization_id})")
+    db.flush()
+    return gone
 
 
 def delete_demo(db: Session) -> dict[str, list[str]]:
@@ -245,12 +259,7 @@ def delete_demo(db: Session) -> dict[str, list[str]]:
             db.flush()
             out["soft_deleted"].append(f"product {product.sku}")
 
-    for category in db.scalars(select(Category).where(Category.name == LEGACY_DEMO_CATEGORY)).all():
-        in_use = db.scalar(select(Product.id).where(Product.category_id == category.id).limit(1))
-        if in_use is None:
-            db.delete(category)
-            out["deleted"].append(f"category {LEGACY_DEMO_CATEGORY} (org {category.organization_id})")
-    db.flush()
+    out["deleted"].extend(_drop_legacy_categories(db))
     return out
 
 

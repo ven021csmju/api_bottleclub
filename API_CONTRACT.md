@@ -1237,6 +1237,53 @@ www.cloudflare.com/ips) `CF-Connecting-IP` only; any other peer is itself (its
 headers are not believed). Every rate limit is per this IP, except
 `/customers/lookup` (per key).
 
+### Storefront catalog and demo products (Phase 50)
+
+**Deploy: backup, migration 026, then the code** (docs/runbooks/phase50-deploy.md).
+026 adds `products.is_demo` and `products.is_online` (both `boolean NOT NULL
+DEFAULT false`), CHECK `ck_products_demo_sku`: `is_demo = (sku LIKE 'DEMO-%')`
+(existing `DEMO-` rows are marked), and a partial index for the storefront.
+
+**Demo products** (`is_demo`, sku `DEMO-…`) are made by
+`scripts/seed_demo_wines.py` only (24 invented wines, no stock, no category,
+`image_url` `/demo-wines/<file>.jpg`, served by the storefront's own
+`/public`). They are for the storefront: **no staff route sees or uses them.**
+- `GET /catalog/products` (also with `search`), `/catalog/products/costs`, the
+  supplier product list, inventory lists, reviews and every report leave them
+  out.
+- `GET/PUT/DELETE /catalog/products/{id}`, a supplier link, inventory of one
+  product and a new review: 404.
+- `POST /orders/`, `POST /purchases` / `PUT /purchases/{id}`, `POST /transfers/`
+  with a demo product: **422 `DEMO_PRODUCT_NOT_FOR_SALE`**, the whole request,
+  nothing written.
+- `POST/PUT /catalog/products` with a sku starting `DEMO-`: **422 `DEMO_SKU_RESERVED`**.
+
+**`is_online`** (Product create/update/response, catalog editors): a real
+product the shop shows on the storefront. `null` → 422.
+
+**`GET /storefront/products`** and **`GET /storefront/products/{id}`** (no
+login; 120/minute per IP, `RATE_LIMIT_STOREFRONT_CATALOG`; `Cache-Control:
+public, max-age=60`). Behind **`STOREFRONT_CATALOG_ENABLED`** (unset: off in
+production, on elsewhere): off, both answer **404** `Not Found`.
+
+```
+GET /storefront/products  ?page=1&per_page=20(≤50)&type=red|white|sparkling|rose|dessert&country=&search=&sort=name|price|-price
+→ 200 { "items": [StorefrontProduct], "total", "page", "per_page", "pages" }
+GET /storefront/products/{id}  → 200 StorefrontProduct | 404 "Product not found"
+
+StorefrontProduct = { "id", "sku", "name", "description", "price": "1590.00", "unit": "bottle",
+  "image_url": "/demo-wines/red.jpg" | null, "is_demo": true,
+  "wine": { "type": "red"|"white"|"sparkling"|"rose"|"dessert"|null, "country", "region", "alcohol", "volume" } | null }
+```
+
+Lists `is_demo OR is_online` products that are active, not deleted and
+priced > 0, of the sole active organization (or `STOREFRONT_ORGANIZATION_ID`;
+several and unset: an empty list). `wine` comes from `wine_products` whose
+`code` is the sku (null: none). `type`/`country` filter on it (country without
+case), `search` on the name and the description (no wildcard; not logged).
+Never a cost, stock, barcode, station or organization. A demo product cannot be
+bought: show it with a "สินค้าตัวอย่าง" badge and no buy button.
+
 
 ---
 
@@ -1275,9 +1322,13 @@ DELETE /catalog/products/{id}      → 204
   "unit": "each",
   "track_inventory": true,
   "has_expiry": false,
-  "station": null | "none" | "kitchen" | "bar"
+  "station": null | "none" | "kitchen" | "bar",
+  "is_online": false
 }
 ```
+`is_online` (Phase 50): shown on the public storefront catalog. Demo products
+(`DEMO-` skus) are never made, read or changed here (see "Storefront catalog
+and demo products (Phase 50)").
 `station` (38c): the screen the product's items go to; null = the category's.
 
 `cost_price` (Phase 47): the shop's cost of one unit, >= 0 with at most 2

@@ -42,8 +42,8 @@ def test_running_again_creates_nothing(session, seed_org):
 def test_delete_removes_demo_rows_only(session, seed_org):
     session.add(Product(organization_id=seed_org, sku="REAL-1", name="Real", selling_price=Decimal("100")))
     session.add(WineProduct(code="3000000000001", product_name="Real wine"))
-    session.add(Category(organization_id=seed_org, name=demo.LEGACY_DEMO_CATEGORY))  # left by v0.1.24
     demo.seed(session, seed_org)
+    session.add(Category(organization_id=seed_org, name=demo.LEGACY_DEMO_CATEGORY))  # left by v0.1.24
 
     result = demo.delete_demo(session)
 
@@ -75,3 +75,19 @@ def test_the_wines_are_served_by_wine_products(client, session, seed_org):
     resp = client.get("/api/v1/wine-products/", params={"per_page": 50})
     assert resp.status_code == 200, resp.text
     assert "DEMO-DSS-002" in resp.text
+
+
+def test_upgrade_from_the_v0124_seed(session, seed_org):
+    """v0.1.24's seed: 8 DEMO- products in a demo category (026 marked them is_demo)."""
+    legacy = Category(organization_id=seed_org, name=demo.LEGACY_DEMO_CATEGORY)
+    session.add(legacy)
+    session.flush()
+    session.add(Product(organization_id=seed_org, sku="DEMO-RED-001", name="old", selling_price=Decimal("1"),
+                        is_demo=True, category_id=legacy.id, track_inventory=True))
+    session.flush()
+
+    result = demo.seed(session, seed_org)
+
+    assert result["updated"] == ["product DEMO-RED-001"] and len(result["created"]) == 47
+    assert result["deleted"] == [f"category {demo.LEGACY_DEMO_CATEGORY} (org {seed_org})"]
+    assert _count(session, Category) == 0 and _count(session, Product, Product.category_id.isnot(None)) == 0
