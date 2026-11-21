@@ -871,6 +871,34 @@ class AuthExchangeCode(Base):
     __table_args__ = (Index("ix_auth_exchange_codes_expires", "expires_at"),)
 
 
+class ServiceKey(Base):
+    """An API key of a server (e.g. the storefront's Next.js backend), sent as
+    ``X-Service-Key``: only the routes of its ``scopes``, in its organization
+    (024). Only the sha256 of the key is stored; scripts/service_keys.py
+    shows the key once."""
+
+    __tablename__ = "service_keys"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # The first characters of the key, to tell keys apart in a listing.
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    scopes: Mapped[list] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("jsonb_typeof(scopes) = 'array'", name="ck_service_key_scopes_array"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # 22. LoyaltyTransaction
 # ---------------------------------------------------------------------------

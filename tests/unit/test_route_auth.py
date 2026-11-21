@@ -66,6 +66,14 @@ CUSTOMER = {
     ("GET", "/customer/me"),
 }
 
+#: Staff with the permission, or X-Service-Key with the same scope (024).
+SERVICE_KEY = {
+    ("GET", "/customers/"): "customers.read",
+    ("POST", "/customers/"): "customers.create",
+    ("GET", "/loyalty/balance/{customer_id}"): "loyalty.read",
+}
+
+
 def _calls(dependant):
     for dep in dependant.dependencies:
         yield dep.call
@@ -115,6 +123,17 @@ def test_public_routes_are_the_reviewed_ones():
 def test_customer_routes_are_the_reviewed_ones():
     routes = _routes()
     assert {key for key, kind in routes.items() if kind == "customer"} == CUSTOMER
+
+
+def test_service_key_routes_are_the_reviewed_ones():
+    found = {}
+    for route in create_app().routes:
+        if isinstance(route, APIRoute):
+            for call in _calls(route.dependant):
+                if getattr(call, "__qualname__", "").startswith("require_permission_or_service_key."):
+                    for method in route.methods:
+                        found[(method, route.path.removeprefix(PREFIX))] = call.permission_code
+    assert found == SERVICE_KEY
 
 
 def test_slip_reads_need_slip_verification_read():

@@ -13,6 +13,7 @@ from app.domains.loyalty.schemas import (
 )
 from app.domains.loyalty.service import LoyaltyService
 from app.middleware.auth import require_permission
+from app.middleware.service_key import require_permission_or_service_key
 from app.db.models import User
 from app.shared.clock import StoreDateTime
 from app.shared.pagination import PaginationParams
@@ -64,7 +65,8 @@ def redeem_points(
 def get_balance(
     customer_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("loyalty.read")),
+    # Staff, or the storefront's server (X-Service-Key, scope loyalty.read).
+    user: User = Depends(require_permission_or_service_key("loyalty.read")),
 ) -> LoyaltyBalanceResponse:
     return LoyaltyService.get_balance(db, user.organization_id, customer_id)
 

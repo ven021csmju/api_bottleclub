@@ -10,6 +10,7 @@ from app.domains.customers.schemas import (
 )
 from app.domains.customers.service import CustomerService
 from app.middleware.auth import get_current_user, require_permission
+from app.middleware.service_key import require_permission_or_service_key
 from app.db.models import User
 from app.shared.pagination import PaginationParams
 
@@ -20,7 +21,8 @@ router = APIRouter()
 def list_customers(
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("customers.read")),
+    # Staff, or the storefront's server (X-Service-Key, scope customers.read).
+    user: User = Depends(require_permission_or_service_key("customers.read")),
 ) -> CustomerListResponse:
     customers, total = CustomerService.list(
         db, user.organization_id, pagination.page, pagination.per_page
@@ -46,7 +48,7 @@ def get_customer(
 def create_customer(
     data: CustomerCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("customers.create")),
+    user: User = Depends(require_permission_or_service_key("customers.create")),
 ) -> CustomerResponse:
     return CustomerService.create(
         db, user.organization_id, **data.model_dump()
