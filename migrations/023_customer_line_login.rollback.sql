@@ -12,9 +12,11 @@ SET LOCAL lock_timeout = '5s';
 
 DO $$
 BEGIN
-    IF to_regclass('public.customer_accounts') IS NOT NULL
-       AND EXISTS (SELECT 1 FROM customer_accounts) THEN
-        RAISE EXCEPTION '023 rollback refused: customer_accounts has rows';
+    -- Nested: an AND would still plan the SELECT once the table is gone.
+    IF to_regclass('public.customer_accounts') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM customer_accounts) THEN
+            RAISE EXCEPTION '023 rollback refused: customer_accounts has rows';
+        END IF;
     END IF;
     DROP TABLE IF EXISTS auth_exchange_codes;
     DROP TABLE IF EXISTS customer_identities;
