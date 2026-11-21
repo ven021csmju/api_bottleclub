@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.repositories.slip_verify.slip_verify_repository import SlipVerifyRepository
+from app.middleware.client_ip import client_ip
 from app.middleware.access import Access
 from app.middleware.auth import get_access, get_audit_context, get_current_user
 from app.db.models import User
@@ -98,7 +99,7 @@ def _process_slip(
         user=user,
         order_id=order_id,
         file_bytes=file_bytes,
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip(request),
         user_agent=request.headers.get("User-Agent", ""),
     )
 

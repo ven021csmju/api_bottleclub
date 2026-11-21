@@ -67,6 +67,7 @@ class OrderResponse(BaseModel):
     shipping_fee: Decimal = Decimal("0")
     fulfillment_status: str = "unfulfilled"
     tracking_number: Optional[str] = None
+    shipping_carrier: Optional[str] = None
     amount_paid: Decimal
     change_amount: Decimal
     loyalty_points_earned: int
@@ -114,6 +115,28 @@ class OrderCancel(BaseModel):
 class OrderTrackingUpdate(BaseModel):
     tracking_number: str = Field(..., min_length=1, max_length=100)
     fulfillment_status: str = Field("shipped", max_length=30)
+    #: Left out or null: unchanged; "" clears it.
+    shipping_carrier: Optional[str] = Field(None, max_length=50)
+
+
+class PublicTrackRequest(BaseModel):
+    """A customer's lookup: the order (order or tracking number) and the phone
+    or email of the order's customer; both must match."""
+
+    ref: str = Field(..., min_length=1, max_length=100)
+    contact: str = Field(..., min_length=3, max_length=255)
+
+
+class PublicTrackResponse(BaseModel):
+    """Only these: no name, address or amount."""
+
+    order_number: str
+    tracking_number: Optional[str] = None
+    status: str
+    shipping_carrier: Optional[str] = None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class CheckoutPayment(BaseModel):

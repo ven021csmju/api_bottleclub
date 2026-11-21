@@ -1148,6 +1148,95 @@ device, or ask the Branch Admin to unlock. `users.failed_login_attempts` /
 share that IP: 5 wrong passwords **for one username** on any till lock that
 username on every till there (other usernames are not affected).
 
+### Storefront: order tracking, LINE Login, service keys (Phase 49)
+
+**Deploy: backup, migrations 022 → 023 → 024 → 025, grants, then the code**
+(step by step: `docs/runbooks/phase49-deploy.md`). Each migration only adds (a
+column, new tables) or revokes keys; the code before 49 does not read them.
+`scripts/ops/phase49_grants.sql` grants and checks the API role's DML on
+`customer_accounts`, `customer_identities`, `auth_exchange_codes`,
+`service_keys` and their sequences. Rollbacks: code first; 025 never un-revokes
+a key; 023 refuses once a customer account exists, after which only the
+pre-migration backup restores the old schema.
+
+**Public order tracking — `POST /orders/track`** (no login; 20/minute per IP).
+Body `{"ref": "<order_number or tracking_number>", "contact": "<phone or email
+of the order's customer>"}` — in the body, so the phone stays out of URLs and
+logs. A phone matches with or without spaces/dashes and as `+66…`; an email
+in any case. 200: only `order_number`, `tracking_number`, `status`,
+`shipping_carrier`, `updated_at`. An unknown order, a wrong contact, an order
+without a customer: always **404 `NOT_FOUND` `Order not found`**. The staff
+`GET /orders/track/{ref}` (login) and `GET /orders/track/public/{token}` are
+unchanged. `PUT /orders/{id}/tracking` takes `shipping_carrier` (left out:
+unchanged, `""`: cleared); `OrderResponse` has `shipping_carrier`.
+
+**LINE Login (customers).** A customer account (`customer_accounts`, design
+docs/design/phase48-customer-accounts.md), never a staff `users` row:
+
+1. The browser opens `GET /auth/line?return_to=<one of FRONTEND_URLS>` (default:
+   the first) → 302 to LINE (`scope=profile openid email`, random `state` and
+   `nonce` in HttpOnly cookies on `/api/v1/auth/line`, 10 minutes). 400
+   `LINE Login is not configured` / `RETURN_TO_NOT_ALLOWED`.
+2. LINE → `GET /auth/line/callback` → the API checks `state`, exchanges the
+   code, verifies the ID token at LINE (status, `iss`, `aud`, `nonce`, `sub`)
+   and finds the customer by LINE's `sub` (a first sign-in creates the
+   customer; LINE's email, if any, goes on the profile only — never a link to
+   another account; none: null). → 302 to `return_to?code=<one-time code>`, or
+   `return_to?error=line_login_cancelled|line_state_invalid|line_login_failed`.
+3. The frontend sends **`POST /auth/exchange {"code": "..."}`** within 60 s
+   (once) → `{"access_token", "token_type": "bearer", "expires_in": 3600,
+   "audience": "customer"}`; a used/expired/unknown code: 401
+   `INVALID_EXCHANGE_CODE`.
+4. `GET /customer/me` with `Authorization: Bearer <customer token>` → the
+   customer's name, email, points, providers.
+
+A customer token is refused by every staff route (another key, `aud`) and a
+staff token by `/customer/*`. No refresh token yet (48a): sign in again after
+`expires_in`. The staff Google login is unchanged (its token was never in a URL).
+
+**Service keys (server to server).** `X-Service-Key: bcsk_…` instead of a
+login, on exactly: `POST /customers/lookup` (scope `customers.lookup`, keys
+only), `POST /customers/` (`customers.create`), `GET
+/loyalty/balance/{customer_id}` (`loyalty.read`), in the key's organization.
+`GET /customers/` (the list) is staff only: a valid key gets 403
+`SERVICE_KEY_SCOPE`. Any other route: 401 as with no login; a missing scope:
+403 `SERVICE_KEY_SCOPE`; unknown/revoked: 401 `INVALID_SERVICE_KEY`; a key
+still holding the retired `customers.read` (025 revokes them): 401
+`SERVICE_KEY_RETIRED`. Staff logins on these routes are unchanged. Keys are
+made and revoked with `python -m scripts.service_keys` (the key is shown once;
+only its sha256 is stored). Stock is not deducted by a key (online sale of
+alcohol: docs/design/phase48-customer-accounts.md 5.1).
+
+```
+POST /customers/lookup   X-Service-Key   { "line_sub"?, "email"?, "phone"? }   (at least one)
+  → 200 { "id", "display_name", "loyalty_points_balance" }
+  404 NOT_FOUND "Customer not found"   409 CUSTOMER_AMBIGUOUS (never a list)
+  422 none given, or not a whole identifier (a wildcard, part of a number)
+  429 over RATE_LIMIT_CUSTOMER_LOOKUP (60/minute) per key
+```
+
+Every identifier given must name the same active customer: `line_sub` its
+LINE identity (`U` + 32 hex), `email` exact without case, `phone` compared as
+`POST /orders/track` does (digits, +66 as 0). Each lookup is logged with the
+key id, the identifiers' names and found/not_found/ambiguous, never their
+values. `POST /customers/` with a key answers the same three fields (staff:
+the customer record as before), and never makes a second customer: an
+active one of the organization with the same email (case aside) or phone
+(compared as above) is answered 409 `CUSTOMER_EXISTS` with
+`"customer": {"id", "display_name", "loyalty_points_balance"}` (use it as
+the lookup's answer). Two requests at once make one customer; a key must send
+a whole phone (422 otherwise). LINE customers are made by LINE Login only
+(customer_identities is unique per LINE sub).
+
+**Client IP (rate limits, login_attempts, audit log).** One function,
+`app/middleware/client_ip.py` `resolve_client_ip`: from cloudflared
+(`TRUSTED_PROXY_IPS`) `CF-Connecting-IP`, else the right-most
+`X-Forwarded-For` that is not a proxy; from a peer in Cloudflare's ranges
+(`CLOUDFLARE_IP_RANGES` / `CLOUDFLARE_IP_RANGES_FILE`, default
+www.cloudflare.com/ips) `CF-Connecting-IP` only; any other peer is itself (its
+headers are not believed). Every rate limit is per this IP, except
+`/customers/lookup` (per key).
+
 
 ---
 

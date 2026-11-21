@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.session import get_db
+from app.middleware.client_ip import client_ip
 from app.middleware.access import Access, load_access
 from app.db.models import Order, OrderItem, User
 from app.db.repositories.users import UserRepository
@@ -73,7 +74,12 @@ def requires_login(route) -> bool:
         return cached
 
     def walk(dependant) -> bool:
-        return any(d.call is get_authenticated_user or walk(d) for d in dependant.dependencies)
+        # requires_login: a check that calls get_authenticated_user itself
+        # (app/middleware/service_key.py).
+        return any(
+            d.call is get_authenticated_user or getattr(d.call, "requires_login", False) or walk(d)
+            for d in dependant.dependencies
+        )
 
     found = walk(route.dependant) if getattr(route, "dependant", None) is not None else False
     route._requires_login = found
@@ -81,7 +87,11 @@ def requires_login(route) -> bool:
 
 
 def sent_no_token(request: Request) -> bool:
-    return not request.headers.get("Authorization", "").startswith("Bearer ")
+    """Neither a bearer token nor a service key (X-Service-Key)."""
+    return (
+        not request.headers.get("Authorization", "").startswith("Bearer ")
+        and "X-Service-Key" not in request.headers
+    )
 
 
 async def get_current_user(user: User = Depends(get_authenticated_user)) -> User:
@@ -199,7 +209,7 @@ def get_audit_context(
     return AuditContext(
         user_id=user.id,
         organization_id=getattr(user, "organization_id", 0),
-        ip_address=request.client.host if request.client else "",
+        ip_address=client_ip(request) or "",
         user_agent=request.headers.get("User-Agent", ""),
         request_id=getattr(request.state, "request_id", ""),
     )

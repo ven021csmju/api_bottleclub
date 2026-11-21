@@ -14,6 +14,7 @@ from app.middleware.auth import (
     get_current_user,
     require_station_item_permission,
 )
+from app.middleware.customer_auth import get_customer_account
 
 PREFIX = "/api/v1"
 
@@ -46,12 +47,36 @@ PUBLIC = {
     ("POST", "/auth/login"),
     ("POST", "/auth/refresh"),
     ("POST", "/auth/register"),
+    # Customer LINE Login: the callback hands a one-time code, exchanged for a customer token.
+    ("GET", "/auth/line"),
+    ("GET", "/auth/line/callback"),
+    ("POST", "/auth/exchange"),
     ("GET", "/orders/track/public/{token}"),
+    ("POST", "/orders/track"),
     ("GET", "/wine-products/"),
     ("GET", "/wine-products/{wine_product_id}"),
     ("GET", "/api/promotions"),
     ("GET", "/health"),
     ("GET", "/health/mongodb"),
+}
+
+
+#: A customer token only (app/middleware/customer_auth.py); a staff token is refused.
+CUSTOMER = {
+    ("GET", "/customer/me"),
+}
+
+#: Staff with the permission, or X-Service-Key with the scope (024); None:
+#: staff only, a valid key gets 403 (the list: a key finds one customer).
+SERVICE_KEY = {
+    ("GET", "/customers/"): ("customers.read", None),
+    ("POST", "/customers/"): ("customers.create", "customers.create"),
+    ("GET", "/loyalty/balance/{customer_id}"): ("loyalty.read", "loyalty.read"),
+}
+
+#: X-Service-Key only (a staff token is refused).
+SERVICE_KEY_ONLY = {
+    ("POST", "/customers/lookup"): "customers.lookup",
 }
 
 
@@ -69,6 +94,10 @@ def _classify(route: APIRoute) -> str:
         return "login"
     if get_authenticated_user in calls:
         return "login, before password change"
+    if get_customer_account in calls:
+        return "customer"
+    if any(getattr(c, "__qualname__", "").startswith("require_service_key.") for c in calls):
+        return "service key"
     return "public"
 
 
@@ -97,6 +126,36 @@ def test_routes_open_before_the_password_change_are_the_reviewed_ones():
 def test_public_routes_are_the_reviewed_ones():
     routes = _routes()
     assert {key for key, kind in routes.items() if kind == "public"} == PUBLIC
+
+
+def test_customer_routes_are_the_reviewed_ones():
+    routes = _routes()
+    assert {key for key, kind in routes.items() if kind == "customer"} == CUSTOMER
+
+
+def test_service_key_routes_are_the_reviewed_ones():
+    found = {}
+    for route in create_app().routes:
+        if isinstance(route, APIRoute):
+            for call in _calls(route.dependant):
+                if getattr(call, "__qualname__", "").startswith("require_permission_or_service_key."):
+                    for method in route.methods:
+                        found[(method, route.path.removeprefix(PREFIX))] = (call.permission_code,
+                                                                            call.key_scope)
+    assert found == SERVICE_KEY
+
+
+def test_service_key_only_routes_are_the_reviewed_ones():
+    found = {}
+    for route in create_app().routes:
+        if isinstance(route, APIRoute):
+            for call in _calls(route.dependant):
+                if getattr(call, "__qualname__", "").startswith("require_service_key."):
+                    for method in route.methods:
+                        found[(method, route.path.removeprefix(PREFIX))] = call.scope
+    assert found == SERVICE_KEY_ONLY
+    routes = _routes()
+    assert {key for key, kind in routes.items() if kind == "service key"} == set(SERVICE_KEY_ONLY)
 
 
 def test_slip_reads_need_slip_verification_read():

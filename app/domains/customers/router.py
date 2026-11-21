@@ -1,15 +1,26 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
+
+from app.config.settings import settings
 
 from app.db.session import get_db
 from app.domains.customers.schemas import (
     CustomerCreate,
     CustomerListResponse,
+    CustomerLookupRequest,
+    CustomerLookupResponse,
     CustomerResponse,
     CustomerUpdate,
 )
 from app.domains.customers.service import CustomerService
 from app.middleware.auth import get_current_user, require_permission
+from app.middleware.rate_limit import limiter
+from app.middleware.service_key import (
+    ServicePrincipal,
+    require_permission_or_service_key,
+    require_service_key,
+    service_key_rate_key,
+)
 from app.db.models import User
 from app.shared.pagination import PaginationParams
 
@@ -20,7 +31,9 @@ router = APIRouter()
 def list_customers(
     pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("customers.read")),
+    # Staff only: a service key gets 403 SERVICE_KEY_SCOPE (it finds one
+    # customer with POST /lookup, never the whole list).
+    user: User = Depends(require_permission_or_service_key("customers.read", key_scope=None)),
 ) -> CustomerListResponse:
     customers, total = CustomerService.list(
         db, user.organization_id, pagination.page, pagination.per_page
@@ -42,15 +55,43 @@ def get_customer(
     return CustomerService.get(db, user.organization_id, customer_id)
 
 
-@router.post("/", response_model=CustomerResponse, status_code=201)
+@router.post("/lookup", response_model=CustomerLookupResponse,
+             responses={404: {"description": "No customer"}, 409: {"description": "More than one"}})
+@limiter.limit(settings.RATE_LIMIT_CUSTOMER_LOOKUP, key_func=service_key_rate_key)
+def lookup_customer(
+    request: Request,
+    data: CustomerLookupRequest,
+    db: Session = Depends(get_db),
+    key: ServicePrincipal = Depends(require_service_key("customers.lookup")),
+) -> CustomerLookupResponse:
+    """The storefront's server (X-Service-Key, scope customers.lookup) finds
+    one customer of its organization by LINE sub, email or phone (each given
+    must match). In the body, so a phone or email stays out of URLs and logs."""
+    customer = CustomerService.lookup(
+        db, key.organization_id, line_sub=data.line_sub, email=data.email,
+        phone=data.phone, service_key_id=key.service_key_id,
+    )
+    return CustomerLookupResponse.of(customer)
+
+
+@router.post("/", response_model=CustomerResponse | CustomerLookupResponse, status_code=201,
+             responses={409: {"description": "A key: CUSTOMER_EXISTS, with the existing customer's lookup fields"}})
 def create_customer(
     data: CustomerCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("customers.create")),
-) -> CustomerResponse:
-    return CustomerService.create(
+    user: User = Depends(require_permission_or_service_key("customers.create")),
+) -> CustomerResponse | CustomerLookupResponse:
+    if isinstance(user, ServicePrincipal):
+        # A key: never a duplicate (409 CUSTOMER_EXISTS with the existing one),
+        # and what lookup gives, not the phone, email or birth date.
+        customer = CustomerService.create_for_service_key(
+            db, user.organization_id, user.service_key_id, **data.model_dump()
+        )
+        return CustomerLookupResponse.of(customer)
+    customer = CustomerService.create(
         db, user.organization_id, **data.model_dump()
     )
+    return CustomerResponse.model_validate(customer)
 
 
 @router.put("/{customer_id}", response_model=CustomerResponse)
