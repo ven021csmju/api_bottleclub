@@ -1148,6 +1148,60 @@ device, or ask the Branch Admin to unlock. `users.failed_login_attempts` /
 share that IP: 5 wrong passwords **for one username** on any till lock that
 username on every till there (other usernames are not affected).
 
+### Storefront: order tracking, LINE Login, service keys (Phase 49)
+
+**Deploy: migrations 022 → 023 → 024, then the code.** Each only adds (a
+column, new tables); the code before 49 keeps working on them. Check that the
+API's role can use the new tables (`customer_accounts`, `customer_identities`,
+`auth_exchange_codes`, `service_keys` and their sequences: the default
+privileges of the owner normally cover it). Rollbacks: code first, then
+024 → 023 → 022 (`023` refuses while a customer account exists).
+
+**Public order tracking — `POST /orders/track`** (no login; 20/minute per IP).
+Body `{"ref": "<order_number or tracking_number>", "contact": "<phone or email
+of the order's customer>"}` — in the body, so the phone stays out of URLs and
+logs. A phone matches with or without spaces/dashes and as `+66…`; an email
+in any case. 200: only `order_number`, `tracking_number`, `status`,
+`shipping_carrier`, `updated_at`. An unknown order, a wrong contact, an order
+without a customer: always **404 `NOT_FOUND` `Order not found`**. The staff
+`GET /orders/track/{ref}` (login) and `GET /orders/track/public/{token}` are
+unchanged. `PUT /orders/{id}/tracking` takes `shipping_carrier` (left out:
+unchanged, `""`: cleared); `OrderResponse` has `shipping_carrier`.
+
+**LINE Login (customers).** A customer account (`customer_accounts`, design
+docs/design/phase48-customer-accounts.md), never a staff `users` row:
+
+1. The browser opens `GET /auth/line?return_to=<one of FRONTEND_URLS>` (default:
+   the first) → 302 to LINE (`scope=profile openid email`, random `state` and
+   `nonce` in HttpOnly cookies on `/api/v1/auth/line`, 10 minutes). 400
+   `LINE Login is not configured` / `RETURN_TO_NOT_ALLOWED`.
+2. LINE → `GET /auth/line/callback` → the API checks `state`, exchanges the
+   code, verifies the ID token at LINE (status, `iss`, `aud`, `nonce`, `sub`)
+   and finds the customer by LINE's `sub` (a first sign-in creates the
+   customer; LINE's email, if any, goes on the profile only — never a link to
+   another account; none: null). → 302 to `return_to?code=<one-time code>`, or
+   `return_to?error=line_login_cancelled|line_state_invalid|line_login_failed`.
+3. The frontend sends **`POST /auth/exchange {"code": "..."}`** within 60 s
+   (once) → `{"access_token", "token_type": "bearer", "expires_in": 3600,
+   "audience": "customer"}`; a used/expired/unknown code: 401
+   `INVALID_EXCHANGE_CODE`.
+4. `GET /customer/me` with `Authorization: Bearer <customer token>` → the
+   customer's name, email, points, providers.
+
+A customer token is refused by every staff route (another key, `aud`) and a
+staff token by `/customer/*`. No refresh token yet (48a): sign in again after
+`expires_in`. The staff Google login is unchanged (its token was never in a URL).
+
+**Service keys (server to server).** `X-Service-Key: bcsk_…` instead of a
+login, on exactly: `GET /customers/` (scope `customers.read`), `POST
+/customers/` (`customers.create`), `GET /loyalty/balance/{customer_id}`
+(`loyalty.read`), in the key's organization. Any other route: 401 as with no
+login; a missing scope: 403 `SERVICE_KEY_SCOPE`; unknown/revoked: 401
+`INVALID_SERVICE_KEY`. Staff logins on these routes are unchanged. Keys are
+made and revoked with `python -m scripts.service_keys` (the key is shown once;
+only its sha256 is stored). Stock is not deducted by a key (online sale of
+alcohol: docs/design/phase48-customer-accounts.md 5.1).
+
 
 ---
 
