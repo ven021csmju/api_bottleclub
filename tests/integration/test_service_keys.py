@@ -7,7 +7,7 @@ from app.db.models import Customer, Organization, ServiceKey
 from app.shared.security import create_access_token
 from scripts import service_keys as cli
 
-ALL = ["customers.read", "customers.create", "loyalty.read"]
+ALL = ["customers.lookup", "customers.create", "loyalty.read"]
 
 
 @pytest.fixture()
@@ -33,23 +33,25 @@ def test_list_create_and_balance_with_the_key(client, session, key, seed_org):
     customer_id = created.json()["data"]["id"]
     assert session.get(Customer, customer_id).organization_id == seed_org
 
-    listed = client.get("/api/v1/customers/", headers=_h(key))
-    assert listed.status_code == 200 and [c["id"] for c in listed.json()["data"]["customers"]] == [customer_id]
+    found = client.post("/api/v1/customers/lookup", json={"phone": "0811111111"}, headers=_h(key))
+    assert found.status_code == 200 and found.json()["data"]["id"] == customer_id
+    # Never the list (Phase 49 item 1).
+    assert client.get("/api/v1/customers/", headers=_h(key)).status_code == 403
 
     balance = client.get(f"/api/v1/loyalty/balance/{customer_id}", headers=_h(key))
     assert balance.status_code == 200, balance.text
 
 
 def test_a_scope_is_needed_per_route(client, session, seed_org):
-    _, raw = cli.create(session, "read-only", seed_org, ["customers.read"])
-    assert client.get("/api/v1/customers/", headers=_h(raw)).status_code == 200
+    _, raw = cli.create(session, "lookup-only", seed_org, ["customers.lookup"])
+    assert client.post("/api/v1/customers/lookup", json={"phone": "0800000000"}, headers=_h(raw)).status_code == 404
     resp = client.post("/api/v1/customers/", json={"first_name": "X"}, headers=_h(raw))
     assert resp.status_code == 403 and resp.json()["code"] == "SERVICE_KEY_SCOPE"
     assert client.get("/api/v1/loyalty/balance/1", headers=_h(raw)).status_code == 403
 
 
 @pytest.mark.parametrize("path", [
-    "/api/v1/customers/1",                 # not one of its routes, even with customers.read
+    "/api/v1/customers/1",                 # not one of its routes, even with customers.lookup
     "/api/v1/loyalty/transactions/1",
     "/api/v1/orders/",
     "/api/v1/users/",
@@ -60,9 +62,9 @@ def test_no_other_route_takes_a_key(client, key, path):
 
 
 def test_a_revoked_or_wrong_key_is_401(client, session, key):
-    assert client.get("/api/v1/customers/", headers=_h(key + "x")).status_code == 401
+    assert client.get("/api/v1/loyalty/balance/1", headers=_h(key + "x")).status_code == 401
     cli.revoke(session, session.scalar(select(ServiceKey.id)))
-    resp = client.get("/api/v1/customers/", headers=_h(key))
+    resp = client.get("/api/v1/loyalty/balance/1", headers=_h(key))
     assert resp.status_code == 401 and resp.json()["code"] == "INVALID_SERVICE_KEY"
 
 
@@ -70,11 +72,12 @@ def test_another_organizations_customers_are_not_seen(client, session, key):
     other = Organization(name="Other", slug="other-org")
     session.add(other)
     session.flush()
-    session.add(Customer(organization_id=other.id, first_name="Theirs"))
+    session.add(Customer(organization_id=other.id, first_name="Theirs", phone="0877777777"))
     session.flush()
     theirs = session.scalar(select(Customer.id).where(Customer.organization_id == other.id))
 
-    assert client.get("/api/v1/customers/", headers=_h(key)).json()["data"]["customers"] == []
+    resp = client.post("/api/v1/customers/lookup", json={"phone": "0877777777"}, headers=_h(key))
+    assert resp.status_code == 404
     assert client.get(f"/api/v1/loyalty/balance/{theirs}", headers=_h(key)).status_code == 404
 
 
@@ -95,7 +98,7 @@ def test_staff_still_use_these_routes(client, session, seed_user, key):
 
 
 def test_last_used_is_recorded(client, session, key):
-    client.get("/api/v1/customers/", headers=_h(key))
+    client.get("/api/v1/loyalty/balance/1", headers=_h(key))
     assert session.scalar(select(ServiceKey.last_used_at)) is not None
 
 
@@ -104,6 +107,8 @@ def test_cli_refuses_unknown_scopes(session, seed_org):
         cli.create(session, "x", seed_org, ["users.read"])
     with pytest.raises(SystemExit):
         cli.create(session, "x", seed_org, [])
+    with pytest.raises(SystemExit):  # retired by Phase 49 (the whole list)
+        cli.create(session, "x", seed_org, ["customers.read"])
 
 
 def test_cli_listing_never_shows_the_key(session, key):

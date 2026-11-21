@@ -1193,14 +1193,41 @@ staff token by `/customer/*`. No refresh token yet (48a): sign in again after
 `expires_in`. The staff Google login is unchanged (its token was never in a URL).
 
 **Service keys (server to server).** `X-Service-Key: bcsk_…` instead of a
-login, on exactly: `GET /customers/` (scope `customers.read`), `POST
-/customers/` (`customers.create`), `GET /loyalty/balance/{customer_id}`
-(`loyalty.read`), in the key's organization. Any other route: 401 as with no
-login; a missing scope: 403 `SERVICE_KEY_SCOPE`; unknown/revoked: 401
-`INVALID_SERVICE_KEY`. Staff logins on these routes are unchanged. Keys are
+login, on exactly: `POST /customers/lookup` (scope `customers.lookup`, keys
+only), `POST /customers/` (`customers.create`), `GET
+/loyalty/balance/{customer_id}` (`loyalty.read`), in the key's organization.
+`GET /customers/` (the list) is staff only: a valid key gets 403
+`SERVICE_KEY_SCOPE`. Any other route: 401 as with no login; a missing scope:
+403 `SERVICE_KEY_SCOPE`; unknown/revoked: 401 `INVALID_SERVICE_KEY`; a key
+still holding the retired `customers.read` (025 revokes them): 401
+`SERVICE_KEY_RETIRED`. Staff logins on these routes are unchanged. Keys are
 made and revoked with `python -m scripts.service_keys` (the key is shown once;
 only its sha256 is stored). Stock is not deducted by a key (online sale of
 alcohol: docs/design/phase48-customer-accounts.md 5.1).
+
+```
+POST /customers/lookup   X-Service-Key   { "line_sub"?, "email"?, "phone"? }   (at least one)
+  → 200 { "id", "display_name", "loyalty_points_balance" }
+  404 NOT_FOUND "Customer not found"   409 CUSTOMER_AMBIGUOUS (never a list)
+  422 none given, or not a whole identifier (a wildcard, part of a number)
+  429 over RATE_LIMIT_CUSTOMER_LOOKUP (60/minute) per key
+```
+
+Every identifier given must name the same active customer: `line_sub` its
+LINE identity (`U` + 32 hex), `email` exact without case, `phone` compared as
+`POST /orders/track` does (digits, +66 as 0). Each lookup is logged with the
+key id, the identifiers' names and found/not_found/ambiguous, never their
+values. `POST /customers/` with a key answers the same three fields (staff:
+the customer record as before).
+
+**Client IP (rate limits, login_attempts, audit log).** One function,
+`app/middleware/client_ip.py` `resolve_client_ip`: from cloudflared
+(`TRUSTED_PROXY_IPS`) `CF-Connecting-IP`, else the right-most
+`X-Forwarded-For` that is not a proxy; from a peer in Cloudflare's ranges
+(`CLOUDFLARE_IP_RANGES` / `CLOUDFLARE_IP_RANGES_FILE`, default
+www.cloudflare.com/ips) `CF-Connecting-IP` only; any other peer is itself (its
+headers are not believed). Every rate limit is per this IP, except
+`/customers/lookup` (per key).
 
 
 ---

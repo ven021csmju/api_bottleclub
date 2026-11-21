@@ -2,7 +2,7 @@
 of DATABASE_URL (the API's environment).
 
     python -m scripts.service_keys create --name storefront --org-id 1 \
-        --scope customers.read --scope customers.create --scope loyalty.read \
+        --scope customers.lookup --scope customers.create --scope loyalty.read \
         --out ~/storefront-service-key.txt
     python -m scripts.service_keys list
     python -m scripts.service_keys revoke --id 3
@@ -10,6 +10,9 @@ of DATABASE_URL (the API's environment).
 create shows the key once: written to --out (a new file, mode 600), or
 printed when --out is not given. Only its sha256 is stored, so a lost key
 cannot be shown again: revoke it and create another. Nothing here logs a key.
+
+customers.read (the whole list) is retired (Phase 49): a key still holding it
+is refused (401 SERVICE_KEY_RETIRED) and 025 revokes it; create a new one.
 """
 from __future__ import annotations
 

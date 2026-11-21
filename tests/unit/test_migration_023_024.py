@@ -40,3 +40,20 @@ def test_tables_columns_and_names(version, name, models):
 
 def test_023_rollback_refuses_to_drop_accounts():
     assert "023 rollback refused: customer_accounts has rows" in _read("023_customer_line_login.rollback.sql")
+
+
+def test_025_revokes_the_retired_scope_once():
+    sql = _read("025_service_key_scope_lookup.sql")
+    rollback = _read("025_service_key_scope_lookup.rollback.sql")
+    assert "IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = '025')" in sql
+    assert "WHERE version = '024'" in sql  # needs the table
+    assert "SET revoked_at = now()" in sql and "WHERE revoked_at IS NULL AND scopes ? 'customers.read'" in sql
+    assert sql.count("VALUES ('025'") == 1
+    assert "DELETE FROM schema_migrations WHERE version = '025'" in rollback
+    assert "revoked_at" not in rollback.split("BEGIN;", 1)[1]  # never un-revokes
+
+
+def test_the_retired_scope_is_not_given():
+    from app.middleware.service_key import RETIRED_SCOPES, SCOPES
+
+    assert "customers.read" in RETIRED_SCOPES and not set(RETIRED_SCOPES) & set(SCOPES)

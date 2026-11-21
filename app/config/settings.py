@@ -197,6 +197,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_TRACK_PUBLIC: str = "20/minute"
     RATE_LIMIT_SOCIAL_LOGIN: str = "30/minute"
     RATE_LIMIT_AUTH_EXCHANGE: str = "30/minute"
+    # POST /customers/lookup, per service key (Phase 49).
+    RATE_LIMIT_CUSTOMER_LOOKUP: str = "60/minute"
 
     # MongoDB (log service on the Ubuntu server, reached via SSH tunnel)
     # MONGODB_URI defaults to localhost because the SSH tunnel maps the
