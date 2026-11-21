@@ -144,6 +144,7 @@ def test_the_list_refuses_every_key(client, session, seed_org, key, somchai, sta
 
     resp = client.get("/api/v1/customers/", headers=_h(key))
     assert resp.status_code == 403 and resp.json()["code"] == "SERVICE_KEY_SCOPE"
+    assert resp.json()["detail"] == "Service keys may not use this route"
     grant(session, seed_user["user_id"], seed_user["org_id"], ["customers.read"], seed_user["branch_id"])
     token = create_access_token(seed_user["user_id"], seed_user["org_id"], [], [seed_user["branch_id"]])
     staff = {"Authorization": f"Bearer {token}", "X-Branch-Id": str(seed_user["branch_id"])}

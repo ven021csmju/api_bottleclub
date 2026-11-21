@@ -54,7 +54,9 @@ def authenticate(db: Session, raw: str, scope: str | None) -> ServicePrincipal:
     if set(RETIRED_SCOPES) & set(key.scopes):
         raise UnauthorizedException(detail="Service key has a retired scope: create a new one",
                                     code="SERVICE_KEY_RETIRED")
-    if scope is None or scope not in key.scopes:
+    if scope is None:
+        raise ForbiddenException(detail="Service keys may not use this route", code="SERVICE_KEY_SCOPE")
+    if scope not in key.scopes:
         raise ForbiddenException(detail=f"Service key lacks scope: {scope}", code="SERVICE_KEY_SCOPE")
     now = datetime.now(timezone.utc)
     if key.last_used_at is None or now - key.last_used_at > LAST_USED_EVERY:
