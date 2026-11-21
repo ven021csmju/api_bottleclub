@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, Product, Supplier, SupplierProduct
+from app.db.product_scope import STAFF, staff_only
 
 
 class CatalogRepository:
@@ -92,6 +93,7 @@ class CatalogRepository:
         stmt = select(Product).where(
             Product.organization_id == org_id,
             Product.deleted_at.is_(None),
+            STAFF,
         )
 
         if search:
@@ -125,16 +127,19 @@ class CatalogRepository:
     def list_product_costs(db: Session, org_id: int) -> list[tuple[int, str, Decimal]]:
         return list(db.execute(
             select(Product.id, Product.sku, Product.cost_price)
-            .where(Product.organization_id == org_id, Product.deleted_at.is_(None))
+            .where(Product.organization_id == org_id, Product.deleted_at.is_(None), STAFF)
             .order_by(Product.sku)
         ).all())
 
     @staticmethod
     def get_product(db: Session, product_id: int) -> Product | None:
-        return db.get(Product, product_id)
+        """Staff routes only: a demo product is not found (Phase 50)."""
+        return staff_only(db.get(Product, product_id))
 
     @staticmethod
     def find_by_sku(db: Session, org_id: int, sku: str) -> Product | None:
+        # Conflict checks (this and the three below) see demo products too: a staff
+        # product may not take a demo product's barcode (the unique index would 500).
         return db.scalar(
             select(Product).where(
                 Product.organization_id == org_id,
@@ -258,7 +263,7 @@ class CatalogRepository:
                 Product.sku.label("product_sku"),
             )
             .join(Product, SupplierProduct.product_id == Product.id)
-            .where(SupplierProduct.supplier_id == supplier_id)
+            .where(SupplierProduct.supplier_id == supplier_id, STAFF)
             .order_by(Product.name)
         )
         return db.execute(stmt).all()

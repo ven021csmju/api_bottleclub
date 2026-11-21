@@ -247,6 +247,7 @@ def create_app() -> FastAPI:
     from app.domains.customer_addresses.router import router as customer_addresses_router
     from app.domains.reviews.router import router as reviews_router
     from app.domains.customer_account.router import router as customer_account_router
+    from app.domains.storefront.router import router as storefront_router
 
     app.include_router(
         auth_router,
@@ -408,6 +409,12 @@ def create_app() -> FastAPI:
         customer_account_router,
         prefix="/api/v1/customer",
         tags=["Customer Account"],
+    )
+
+    app.include_router(
+        storefront_router,
+        prefix="/api/v1/storefront",
+        tags=["Storefront"],
     )
 
     return app

@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -14,6 +14,7 @@ from app.db.models import (
     Product,
     Refund,
 )
+from app.db.product_scope import STAFF
 from app.shared.clock import in_store_days, store_hour, store_sales_day
 
 #: A sale counts once it is paid, on the day it was paid (orders.paid_at).
@@ -128,7 +129,8 @@ class ReportRepository:
                 .join(Order, Order.id == OrderItem.order_id)
                 .outerjoin(Product, Product.id == OrderItem.product_id)
                 .outerjoin(Category, Category.id == Product.category_id)
-                .where(*order_filter)
+                # Phase 50: never a demo product (orders refuse them; a second guard).
+                .where(*order_filter, or_(Product.id.is_(None), STAFF))
                 .order_by(OrderItem.order_id, OrderItem.id)
             ).all()
         )
@@ -211,6 +213,7 @@ class ReportRepository:
             .where(
                 Product.organization_id == organization_id,
                 Product.deleted_at.is_(None),
+                STAFF,
             )
         )
         if branch_id:

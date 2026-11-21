@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Product, Review
+from app.db.product_scope import STAFF, staff_only
 
 
 class ReviewRepository:
@@ -17,7 +18,7 @@ class ReviewRepository:
         stmt = (
             select(Review)
             .join(Product, Product.id == Review.product_id)
-            .where(Product.organization_id == organization_id)
+            .where(Product.organization_id == organization_id, STAFF)
         )
 
         if product_id is not None:
@@ -45,12 +46,13 @@ class ReviewRepository:
             .where(
                 Product.organization_id == organization_id,
                 Review.id == review_id,
+                STAFF,
             )
         )
 
     @staticmethod
     def get_product(db: Session, product_id: int) -> Product | None:
-        return db.get(Product, product_id)
+        return staff_only(db.get(Product, product_id))
 
     @staticmethod
     def add(db: Session, review: Review) -> None:

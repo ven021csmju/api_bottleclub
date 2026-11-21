@@ -66,6 +66,8 @@ class ProductCreate(BaseModel):
     image_url: Optional[str] = None
     # None: the category's station.
     station: Optional[Station] = None
+    # Shown on the public storefront (Phase 50; demo products are seeded, never made here).
+    is_online: bool = False
 
 
 class ProductUpdate(BaseModel):
@@ -83,11 +85,14 @@ class ProductUpdate(BaseModel):
     image_url: Optional[str] = None
     # null: back to the category's station.
     station: Optional[Station] = None
+    is_online: Optional[bool] = None
 
     @model_validator(mode="after")
     def cost_is_a_number(self) -> "ProductUpdate":
         if "cost_price" in self.model_fields_set and self.cost_price is None:
             raise ValueError("cost_price cannot be null (0 for no cost)")
+        if "is_online" in self.model_fields_set and self.is_online is None:
+            raise ValueError("is_online cannot be null")
         return self
 
 
@@ -108,6 +113,8 @@ class ProductResponse(BaseModel):
     station: Optional[str] = None
     # The screen its order lines go to: station, else the category's, else "none" (Phase 42).
     effective_station: Station
+    # On the public storefront (Phase 50).
+    is_online: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

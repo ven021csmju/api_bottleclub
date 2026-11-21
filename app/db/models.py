@@ -303,6 +303,12 @@ class Product(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     # NULL: the category's station; otherwise it overrides it (016).
     station: Mapped[str | None] = mapped_column(String(20))
+    # Phase 50 (026). A demo product (sku DEMO-, scripts/seed_demo_wines.py only):
+    # shown by the storefront catalog, never by a staff route, an order, stock or
+    # a report (app/db/product_scope.py). is_online: a real product the shop puts
+    # on the storefront (a catalog editor sets it).
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_online: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -325,6 +331,12 @@ class Product(Base):
         CheckConstraint(
             "station IS NULL OR station IN ('none', 'kitchen', 'bar')",
             name="ck_product_station",
+        ),
+        CheckConstraint("is_demo = (sku LIKE 'DEMO-%')", name="ck_products_demo_sku"),
+        Index(
+            "ix_products_storefront",
+            "organization_id",
+            postgresql_where="(is_demo OR is_online) AND is_active AND deleted_at IS NULL",
         ),
         Index(
             "uq_product_org_barcode",

@@ -195,6 +195,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
     # POST /orders/track (public, ref + contact), per client IP.
     RATE_LIMIT_ORDER_TRACK_PUBLIC: str = "20/minute"
+    # Public storefront catalog (Phase 50): GET /storefront/products. None: off in
+    # production (legal review first, owner Q7), on everywhere else. Off: 404.
+    STOREFRONT_CATALOG_ENABLED: bool | None = None
+    # Organization the storefront shows; None: the sole active organization.
+    STOREFRONT_ORGANIZATION_ID: int | None = None
+    RATE_LIMIT_STOREFRONT_CATALOG: str = "120/minute"
     RATE_LIMIT_SOCIAL_LOGIN: str = "30/minute"
     RATE_LIMIT_AUTH_EXCHANGE: str = "30/minute"
     # POST /customers/lookup, per service key (Phase 49).
@@ -269,6 +275,12 @@ class Settings(BaseSettings):
         if self.REGISTRATION_ENABLED is not None:
             return self.REGISTRATION_ENABLED
         return self.ENVIRONMENT.lower() not in {"production", "staging"}
+
+    @property
+    def storefront_catalog_enabled(self) -> bool:
+        if self.STOREFRONT_CATALOG_ENABLED is not None:
+            return self.STOREFRONT_CATALOG_ENABLED
+        return self.ENVIRONMENT.lower() != "production"
 
     @field_validator("STORE_TIMEZONE")
     @classmethod
