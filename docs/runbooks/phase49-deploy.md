@@ -1,6 +1,6 @@
 # Phase 49: runbook สำหรับ deploy (storefront: track, LINE Login, service keys)
 
-สถานะ: ร่างสำหรับรอบอนุมัติ merge (2026-11-21) ยังไม่ได้ทำขั้นใดเลย
+สถานะ: ร่างสำหรับรอบอนุมัติ merge (2026-11-21) ยังไม่ได้ทำขั้นใดบน production ซ้อมการย้อน code แล้ว (ข้อ 4.8)
 - ฐาน: `main` = v0.1.23 (`4f5f96271a4d`) ซึ่ง production ใช้อยู่
 - branch: `feature/storefront-integration`
 - tag ที่เสนอ: **v0.1.24**
@@ -19,7 +19,7 @@
 | Migration | `022` orders.shipping_carrier → `023` customer_accounts / customer_identities / auth_exchange_codes → `024` service_keys → `025` revoke key ที่มี `customers.read` · apply ก่อน code ทุกครั้ง |
 | **025 ย้อนไม่ได้** | key ที่ถูก revoke (`revoked_at`) จะไม่กลับมาใช้ได้ rollback ของ 025 ลบแค่แถว `schema_migrations` ต้องสร้าง key ใหม่เท่านั้น |
 | **023 ย้อนไม่ได้เมื่อมีบัญชีลูกค้า** | rollback ของ 023 ปฏิเสธเองทันทีที่ `customer_accounts` มีแถวแรก (ลูกค้า LINE คนแรก) หลังจากนั้นถ้าจะย้อน schema **ต้อง restore จาก backup (ข้อ 4.1) เท่านั้น** ซึ่งจะเสียทุกอย่างที่เขียนหลัง backup (ออเดอร์ การชำระเงิน แต้ม) ทางที่ควรใช้คือย้อนเฉพาะ code (ข้อ 4.8) แล้วเก็บ schema ไว้ |
-| code เก่ากับ schema ใหม่ | v0.1.23 ไม่อ่านตารางใหม่ ส่วน `orders.shipping_carrier` เป็นคอลัมน์ nullable ไม่มี default ทำให้ INSERT ของ v0.1.23 ยังทำงาน **ข้อนี้มาจากการอ่านโค้ด ยังไม่ได้รันจริง** |
+| code เก่ากับ schema ใหม่ | **ซ้อมจริงแล้ว 2026-11-21** v0.1.23 ทำงานบน schema 022–025 ได้ (ผลอยู่ในข้อ 4.8) |
 | Firewall | ufw default deny ขาเข้า เปิด 22/tcp, OpenSSH, 51820/udp API ฟังที่ 127.0.0.1:8000 และเข้ามาได้ทาง cloudflared เท่านั้น |
 | test ของรอบนี้ | ทำแล้วบน `14/phase22test`: unit 582 (main 538), integration 971 (main 849) migration และขั้น DB ของ runbook นี้ซ้อมด้วย `scripts/ops/prod_db.sh` แล้ว ผลอยู่ที่ `~/p49-staging/rehearse_prod_db.log` |
 
@@ -114,7 +114,8 @@ env -i PATH=/usr/bin:/bin ENVIRONMENT=development DATABASE_URL="$STAGING_DATABAS
 (`ENVIRONMENT=development` เพราะ CLI แค่เขียนแถว ส่วน `staging` ต้องมี JWT_SECRET_KEY) ส่งให้ทีมทางช่องทางที่ปลอดภัย ให้ทีมเก็บไว้ใน env ฝั่ง server ของ Next.js เท่านั้น (ไม่ใช่ `NEXT_PUBLIC_*`) และห้ามใส่ใน `~/frontend-handoff`
 
 **ทดสอบ LINE ด้วย channel จริง:**
-1. ใน LINE Developers Console ให้ใส่ Callback URL = `LINE_REDIRECT_URI` ข้างบน **ถ้า Console ไม่รับ `http://localhost`** (เอกสาร LINE บอกแค่ว่าแนะนำ HTTPS ไม่ได้บอกชัดว่า localhost ใช้ได้หรือไม่) ให้หยุด ตัวเลือกที่เหลือคือ hostname https สำหรับ staging ผ่าน cloudflared แต่จะทำให้ staging ออกสู่สาธารณะ เจ้าของต้องตัดสินใจก่อน
+1. ใน LINE Developers Console ให้ใส่ Callback URL = `LINE_REDIRECT_URI` ข้างบน (`http://localhost:8100/...`) **ถ้า Console ไม่รับ** (เอกสาร LINE บอกแค่ว่าแนะนำ HTTPS) ให้ใช้ "ทางเลือก https" ด้านล่าง ซึ่งเจ้าของเลือกไว้แล้ว 2026-11-21
+   ถ้า Console รับ ให้ข้ามหัวข้อ "ทางเลือก https" ด้านล่างไปเลย
 2. ใช้ browser บนเครื่องนี้ หรือผ่าน SSH tunnel ให้ `localhost:8100` และหน้าเว็บ storefront ชี้มาที่เครื่องนี้ แล้วกดปุ่ม LINE ต้องเห็นตามลำดับ:
    - LINE แสดงหน้าขอสิทธิ์ (profile, openid, email)
    - browser กลับมาที่ `FRONTEND_URLS?code=…`
@@ -123,6 +124,49 @@ env -i PATH=/usr/bin:/bin ENVIRONMENT=development DATABASE_URL="$STAGING_DATABAS
 3. ตรวจอีเมล: ถ้ายังไม่ได้รับอนุมัติสิทธิ์ Email, `email` ต้องเป็น `null` (ไม่ใช่อีเมลปลอม)
 4. กดซ้ำด้วยบัญชี LINE เดิม ต้องได้ลูกค้าคนเดิม (`customer_id` เดิม)
 5. กดยกเลิกที่หน้า LINE ต้องกลับมาที่ `?error=line_login_cancelled`
+
+**ทางเลือก https: `staging-api.wayneven.uk` ผ่าน cloudflared และล็อกด้วย Cloudflare Access** (ใช้เฉพาะเมื่อ Console ไม่รับ `http://localhost`)
+
+ทำตามลำดับนี้ **สร้าง Access ก่อน hostname** เพื่อให้ hostname ไม่มีช่วงที่เปิดโดยไม่มีการป้องกัน
+
+1. **Access application** ใน Cloudflare Zero Trust → Access → Applications → Add an application → Self-hosted
+   - Application name `BottleClub staging API`, Session duration 24h
+   - Domain `staging-api.wayneven.uk` (ช่อง path ว่าง = ทุก path)
+   - Login methods: One-time PIN (ส่งรหัสไปที่อีเมล) ไม่ต้องใช้ IdP อื่น
+   - Policy: Action **Allow**, Include **Emails** = อีเมลของเจ้าของเท่านั้น ห้ามมี policy `Everyone`, `Bypass` หรือ `Service Auth`
+   - CORS: ไม่ต้องเปิด เพราะ browser จะใช้ hostname นี้แค่ตอนเริ่ม LINE และตอน callback ส่วน API อื่นของ frontend เรียกผ่าน `localhost:8100` (SSH tunnel) เหมือนเดิม
+2. **Hostname ของ tunnel** (tunnel `6289d667-…` ตัวเดียวกับ production) เปิด Zero Trust → Networks → Tunnels แล้วดูว่า tunnel นี้จัดการแบบไหน
+   - **จัดการจาก dashboard** (มีแท็บ Public Hostname): Add a public hostname `staging-api` . `wayneven.uk` → Service `HTTP` `127.0.0.1:8100`
+   - **จัดการด้วย config บนเครื่อง**: เพิ่มบรรทัดนี้ใน `/etc/cloudflared/config.yml` **ก่อน** บรรทัด `http_status:404`
+     ```yaml
+       - hostname: staging-api.wayneven.uk
+         service: http://127.0.0.1:8100
+     ```
+     แล้วรัน:
+     ```bash
+     sudo cp -p /etc/cloudflared/config.yml /etc/cloudflared/config.yml.bak-p49-staging
+     sudo cloudflared tunnel ingress validate --config /etc/cloudflared/config.yml
+     sudo cloudflared tunnel ingress rule --config /etc/cloudflared/config.yml https://staging-api.wayneven.uk/health   # ต้องตอบ 127.0.0.1:8100
+     sudo cloudflared tunnel ingress rule --config /etc/cloudflared/config.yml https://api.wayneven.uk/health           # ต้องยังเป็น 127.0.0.1:8000
+     sudo systemctl restart cloudflared     # production หลุดไม่กี่วินาที ให้ทำตอนร้านไม่มีลูกค้า
+     ```
+     จากนั้นเพิ่ม DNS (Cloudflare → DNS) เป็น `CNAME staging-api` → `6289d667-6d37-4157-9ca1-22b4f05a7860.cfargotunnel.com` แบบ Proxied
+3. **ตรวจว่าล็อกจริง** จากเครื่องอื่นหรือมือถือที่ไม่ได้ login Access:
+   ```bash
+   curl -sI https://staging-api.wayneven.uk/health | head -3    # ต้องได้ 302 ไป <team>.cloudflareaccess.com ห้ามได้ 200
+   curl -s -o /dev/null -w '%{http_code}\n' https://api.wayneven.uk/health   # production ยังได้ 200 ไม่มี Access
+   ```
+   เปิดใน browser ใส่ PIN จากอีเมลแล้วต้องได้ `{"status":"healthy"}`
+4. **Env ของ staging** (`start_api.sh`): `LINE_REDIRECT_URI=https://staging-api.wayneven.uk/api/v1/auth/line/callback` ใส่ค่าเดียวกันใน LINE Console แล้ว `systemctl --user restart bottleclub-staging-api`
+   - `FRONTEND_URLS` ยังเป็น `http://localhost:3000/...` ได้ (staging ไม่บังคับ https)
+   - cloudflared ส่ง `CF-Connecting-IP` และ `X-Forwarded-Proto: https` มาจาก 127.0.0.1 ซึ่งอยู่ใน `TRUSTED_PROXY_IPS` (uvicorn `--no-proxy-headers` เหมือน production)
+5. **ทดสอบ:** ปุ่ม LINE ต้องลิงก์ไปที่ `https://staging-api.wayneven.uk/api/v1/auth/line?return_to=<FRONTEND_URLS>` **การเริ่มและ callback ต้องใช้ hostname เดียวกัน** เพราะ cookie `line_oauth_*` ผูกกับ host นั้น ถ้าเริ่มที่ `localhost:8100` แล้ว callback มาที่ `staging-api` จะได้ `line_state_invalid` ส่วน `POST /auth/exchange` เรียกที่ host ไหนก็ได้ จากนั้นตรวจตามข้อ 2–5 ด้านบน
+6. **ถอดออกหลังทดสอบเสร็จ** ทำตามลำดับนี้: ลบ hostname ก่อน แล้วค่อยลบ Access
+   1. ลบ Public Hostname ใน dashboard หรือคืน `config.yml.bak-p49-staging` แล้ว `sudo systemctl restart cloudflared`
+   2. ลบ DNS `staging-api`
+   3. ลบ Access application
+   4. ลบ Callback URL นี้ใน LINE Console
+   5. ตรวจว่า `curl -sI https://staging-api.wayneven.uk/health` ไม่ถึง staging แล้ว
 
 **ย้อนกลับ staging:**
 ```bash
@@ -238,9 +282,20 @@ sudo bash -c 'set -euo pipefail; umask 077; set -a; . /etc/bottleclub/secrets.en
 
 ### 4.8 ย้อนกลับ production
 
+**ซ้อมการย้อน code อย่างเดียวแล้ว** (2026-11-21, `14/phase22test`): v0.1.23 (`4f5f96271a4d`) บน schema ที่ apply 022→025 แล้ว และตารางใหม่ทุกตารางมีข้อมูล (บัญชี LINE, identity, exchange code, service key)
+- **integration ของ v0.1.23: 849 ผ่าน ตก 0** เท่ากับบน schema เดิม
+  - วิธี: plugin `~/p49-staging/newschema/p49_new_schema.py` apply 022–025 ต่อจาก `create_all` ของ fixture ทันที
+  - log: `~/p49-staging/r4_v0123_on_new_schema.log`
+- **curl smoke ของ v0.1.23 บน schema นี้** (`~/p49-staging/rollback-smoke.log`):
+  - ได้ 200: health, login พนักงาน, `/auth/me`, `GET /wine-products/`, `POST /orders/` (pos), `GET /orders/`, `GET /orders/{id}`, `PUT /orders/{id}/tracking`, `POST /slip-verify/upload` (`review`/`ocr_unavailable` เพราะปิด OCR), `GET /customers/`
+  - `POST /customers/` ได้ 201
+  - route ของ Phase 49 หายไป: 405 หรือ 404
+  - แถวในตารางใหม่ยังอยู่ครบ `shipping_carrier` ยังเป็น null
+  - error ใน log มีเฉพาะ MongoDB และ RabbitMQ ที่ตั้งใจปิด
+
 | สถานการณ์ | ทำอะไร |
 |---|---|
-| code ผิดปกติ (กรณีที่ควรใช้) | `sudo bottleclub-deploy v0.1.23` (release เดิมและ `.venv` ยังอยู่) **เก็บ schema 022–025 ไว้** code เก่าไม่ใช้ตารางและคอลัมน์ใหม่ |
+| code ผิดปกติ (กรณีที่ควรใช้) | `sudo bottleclub-deploy v0.1.23` (release เดิมและ `.venv` ยังอยู่) **เก็บ schema 022–025 ไว้** ซ้อมแล้วด้านบน code เก่าไม่ใช้ตารางและคอลัมน์ใหม่ และบัญชีลูกค้า LINE ยังอยู่สำหรับ deploy ครั้งถัดไป |
 | env ใหม่ทำให้ API ไม่ start | `sudo cp -p /etc/bottleclub/api.env.bak-v0123 /etc/bottleclub/api.env` (และ `secrets.env.bak-v0123`) แล้ว `sudo systemctl restart fastapi` |
 | ต้องย้อน schema และ**ยังไม่มี**บัญชีลูกค้า | ย้อน code ก่อน แล้ว `prod_db.sh apply $M/<NNN>.rollback.sql` ตามลำดับ 025 → 024 → 023 → 022 · 025 ไม่คืนสถานะ key ที่ถูก revoke · 024 ลบ key ทั้งหมด · 022 ลบ `shipping_carrier` ที่บันทึกไว้ |
 | ต้องย้อน schema หลังมีบัญชีลูกค้า LINE แล้ว | rollback ของ 023 ปฏิเสธ (`customer_accounts has rows`) **ทางเดียวคือ restore ด้านล่าง** ข้อมูลหลัง backup ข้อ 4.1 จะหาย |
