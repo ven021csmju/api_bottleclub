@@ -195,6 +195,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
     # POST /orders/track (public, ref + contact), per client IP.
     RATE_LIMIT_ORDER_TRACK_PUBLIC: str = "20/minute"
+    # Public storefront catalog (Phase 50): GET /storefront/products. False
+    # (default, every environment; not inferred from ENVIRONMENT): 404. Each
+    # deployment turns it on itself (production only after the legal review).
+    STOREFRONT_CATALOG_ENABLED: bool = False
+    # Organization the storefront shows; None: the sole active organization.
+    STOREFRONT_ORGANIZATION_ID: int | None = None
+    RATE_LIMIT_STOREFRONT_CATALOG: str = "120/minute"
     RATE_LIMIT_SOCIAL_LOGIN: str = "30/minute"
     RATE_LIMIT_AUTH_EXCHANGE: str = "30/minute"
     # POST /customers/lookup, per service key (Phase 49).

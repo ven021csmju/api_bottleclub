@@ -25,6 +25,7 @@ from app.db.models import (
     Supplier,
     SupplierProduct,
 )
+from app.db.product_scope import refuse_demo_sku
 from app.db.repositories.catalog import CatalogRepository
 from app.shared.exceptions import (
     BadRequestException,
@@ -179,6 +180,7 @@ class CatalogService:
 
     @staticmethod
     def create_product(db: Session, org_id: int, data: ProductCreate) -> Product:
+        refuse_demo_sku(data.sku)
         existing = CatalogRepository.find_by_sku(db, org_id, data.sku)
         if existing:
             raise ConflictException(
@@ -211,6 +213,7 @@ class CatalogService:
             image_url=data.image_url,
             station=data.station,
             cost_price=data.cost_price,
+            is_online=data.is_online,
         )
         CatalogRepository.add_product(db, product)
         db.commit()
@@ -233,6 +236,8 @@ class CatalogService:
             raise NotFoundException(detail="Product not found")
 
         update_data = data.model_dump(exclude_unset=True)
+        if "sku" in update_data:
+            refuse_demo_sku(update_data["sku"])
 
         if "sku" in update_data and update_data["sku"] != product.sku:
             sku_conflict = CatalogRepository.find_sku_conflict(

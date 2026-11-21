@@ -16,6 +16,7 @@ from app.db.models import (
     Shift,
     StockMovement,
 )
+from app.db.product_scope import refuse_demo_products
 from app.db.repositories.coupons import CouponRepository
 from app.db.repositories.loyalty import LoyaltyRepository
 from app.db.repositories.orders import OrderRepository
@@ -176,6 +177,8 @@ class OrderService:
 
         product_ids = [item["product_id"] for item in data["items"]]
         products = OrderRepository.get_products_by_ids(db, org_id, product_ids)
+        # Phase 50: a demo product is never sold (422 for the whole order, before any write).
+        refuse_demo_products(products)
         products_map = {p.id: p for p in products}
 
         missing = set(product_ids) - set(products_map.keys())

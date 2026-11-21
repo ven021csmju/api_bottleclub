@@ -9,6 +9,7 @@ from app.db.models import (
     StockMovement,
     User,
 )
+from app.db.product_scope import STAFF
 from app.shared.clock import in_store_days
 
 
@@ -16,7 +17,7 @@ class InventoryRepository:
     @staticmethod
     def get_org_product(db: Session, org_id: int, product_id: int) -> Product | None:
         return db.scalar(
-            select(Product).where(Product.id == product_id, Product.organization_id == org_id)
+            select(Product).where(Product.id == product_id, Product.organization_id == org_id, STAFF)
         )
 
     @staticmethod
@@ -117,7 +118,7 @@ class InventoryRepository:
             .join(Product, Inventory.product_id == Product.id)
             .join(Branch, Inventory.branch_id == Branch.id)
             .where(Branch.organization_id == org_id)
-            .where(Product.deleted_at.is_(None))
+            .where(Product.deleted_at.is_(None), STAFF)
         )
 
         if branch_id is not None:
@@ -148,9 +149,11 @@ class InventoryRepository:
     ) -> list[InventoryLot]:
         stmt = (
             select(InventoryLot)
+            .join(Product, InventoryLot.product_id == Product.id)
             .where(
                 InventoryLot.branch_id == branch_id,
                 InventoryLot.product_id == product_id,
+                STAFF,
             )
             .order_by(
                 InventoryLot.expiry_date.asc().nullslast(),
@@ -180,6 +183,7 @@ class InventoryRepository:
             .where(
                 StockMovement.branch_id == branch_id,
                 StockMovement.product_id == product_id,
+                STAFF,
             )
         )
 
@@ -217,6 +221,7 @@ class InventoryRepository:
                 Inventory.branch_id == branch_id,
                 Product.deleted_at.is_(None),
                 Product.is_active == True,  # noqa: E712
+                STAFF,
                 Inventory.on_hand <= threshold,
             )
             .order_by(Inventory.on_hand.asc())

@@ -55,6 +55,8 @@ PUBLIC = {
     ("POST", "/orders/track"),
     ("GET", "/wine-products/"),
     ("GET", "/wine-products/{wine_product_id}"),
+    ("GET", "/storefront/products"),
+    ("GET", "/storefront/products/{product_id}"),
     ("GET", "/api/promotions"),
     ("GET", "/health"),
     ("GET", "/health/mongodb"),

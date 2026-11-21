@@ -2,7 +2,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.db.models import StockMovement, StockTransfer, StockTransferItem
+from sqlalchemy import select
+
+from app.db.models import Product, StockMovement, StockTransfer, StockTransferItem
+from app.db.product_scope import refuse_demo_products
 from app.db.repositories.inventory.inventory_repository import InventoryRepository
 from app.db.repositories.transfers import TransferRepository
 from app.shared.exceptions import (
@@ -47,6 +50,11 @@ class TransferService:
         dest_branch = TransferRepository.get_branch(db, org_id, dest_branch_id)
         if not dest_branch:
             raise NotFoundException(detail="Destination branch not found")
+
+        # Phase 50: a demo product has no stock and is never moved.
+        refuse_demo_products(db.scalars(
+            select(Product).where(Product.id.in_([i["product_id"] for i in data["items"]]))
+        ).all())
 
         transfer_number = generate_transfer_number(db)
 

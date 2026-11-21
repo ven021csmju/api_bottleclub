@@ -20,6 +20,7 @@ from app.db.models import (
     Product,
     StockMovement,
 )
+from app.db.product_scope import refuse_demo_products
 from app.db.repositories.inventory.inventory_repository import InventoryRepository
 from app.db.repositories.purchases import PurchaseRepository
 from app.shared.enums import POStatus, ReceivingStatus, StockMovementType
@@ -131,6 +132,7 @@ class PurchaseService:
             total = 0.0
             for item_data in data.items:
                 product = PurchaseRepository.get_product(db, item_data.product_id)
+                refuse_demo_products([product])
                 if not product or product.organization_id != org_id or product.deleted_at is not None:
                     raise NotFoundException(
                         detail=f"Product {item_data.product_id} not found"
@@ -168,6 +170,7 @@ class PurchaseService:
 
         for item in data.items:
             product = PurchaseRepository.get_product(db, item.product_id)
+            refuse_demo_products([product])
             if not product or product.organization_id != org_id or product.deleted_at is not None:
                 raise NotFoundException(
                     detail=f"Product {item.product_id} not found"

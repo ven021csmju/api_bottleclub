@@ -50,7 +50,18 @@ def _retry_after(exc: RateLimitExceeded) -> int:
         return 60
 
 
+def log_feature_flags() -> None:
+    """One line at startup with the switches a deployment must set on purpose.
+    uvicorn's own logger, so it reaches the service log (journald / api.log)."""
+    logging.getLogger("uvicorn.error").info(
+        "startup: ENVIRONMENT=%s STOREFRONT_CATALOG_ENABLED=%s registration_enabled=%s",
+        settings.ENVIRONMENT, str(settings.STOREFRONT_CATALOG_ENABLED).lower(),
+        str(settings.registration_enabled).lower(),
+    )
+
+
 async def lifespan(app: FastAPI):
+    log_feature_flags()
     # MongoDB connects lazily on first use. Deliberately NOT touching it here
     # so a down SSH tunnel / MongoDB never blocks or delays app startup.
     yield
@@ -247,6 +258,7 @@ def create_app() -> FastAPI:
     from app.domains.customer_addresses.router import router as customer_addresses_router
     from app.domains.reviews.router import router as reviews_router
     from app.domains.customer_account.router import router as customer_account_router
+    from app.domains.storefront.router import router as storefront_router
 
     app.include_router(
         auth_router,
@@ -408,6 +420,12 @@ def create_app() -> FastAPI:
         customer_account_router,
         prefix="/api/v1/customer",
         tags=["Customer Account"],
+    )
+
+    app.include_router(
+        storefront_router,
+        prefix="/api/v1/storefront",
+        tags=["Storefront"],
     )
 
     return app

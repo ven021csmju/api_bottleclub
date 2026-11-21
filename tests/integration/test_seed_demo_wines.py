@@ -1,5 +1,5 @@
-"""scripts/seed_demo_wines.py: 8 DEMO- wines, idempotent, and a delete that
-touches DEMO- rows only."""
+"""scripts/seed_demo_wines.py (Phase 50): 24 demo products (is_demo, DEMO-) and
+their wine_products rows, idempotent, and a delete that touches DEMO- rows only."""
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -12,17 +12,21 @@ def _count(session, model, *where):
     return session.scalar(select(func.count()).select_from(model).where(*where))
 
 
-def test_seeds_eight_wines_in_both_tables(session, seed_org):
+def test_seeds_24_wines_in_both_tables(session, seed_org):
     result = demo.seed(session, seed_org)
 
     products = session.scalars(select(Product).order_by(Product.sku)).all()
-    assert len(products) == 8 and all(p.sku.startswith("DEMO-") for p in products)
-    assert {p.sku.split("-")[1] for p in products} == {"RED", "WHT", "SPK", "ROS"}
+    assert len(products) == 24 and all(p.sku.startswith("DEMO-") and p.is_demo for p in products)
+    assert {p.sku.split("-")[1] for p in products} == {"RED", "WHT", "SPK", "ROS", "DSS"}
+    assert not any(p.is_online or p.track_inventory or p.category_id for p in products)
     prices = [p.selling_price for p in products]
-    assert min(prices) == Decimal("1500.00") and max(prices) == Decimal("30000.00")
+    assert min(prices) == Decimal("590.00") and max(prices) == Decimal("30000.00")
     assert all(any("฀" <= ch <= "๿" for ch in p.description) for p in products)  # Thai
-    assert _count(session, WineProduct, WineProduct.code.startswith("DEMO-")) == 8
-    assert len(result["created"]) == 17  # category + 8 + 8
+    assert all(p.image_url.startswith("/demo-wines/") and p.image_url.endswith(".jpg") for p in products)
+    assert _count(session, WineProduct, WineProduct.code.startswith("DEMO-")) == 24
+    assert _count(session, Category) == 0
+    assert len(result["created"]) == 48  # 24 + 24
+    assert len({w.producer for w in demo.WINES}) == 23  # Maison Aubrelle makes two
 
 
 def test_running_again_creates_nothing(session, seed_org):
@@ -31,18 +35,19 @@ def test_running_again_creates_nothing(session, seed_org):
     result = demo.seed(session, seed_org)
 
     assert result["created"] == [] and result["updated"] == ["product DEMO-RED-001"]
-    assert len(result["unchanged"]) == 16 and f"category {demo.DEMO_CATEGORY}" in result["unchanged"]  # 17 rows, 1 updated
-    assert _count(session, Product) == 8 and _count(session, WineProduct) == 8 and _count(session, Category) == 1
+    assert len(result["unchanged"]) == 47
+    assert _count(session, Product) == 24 and _count(session, WineProduct) == 24
 
 
 def test_delete_removes_demo_rows_only(session, seed_org):
     session.add(Product(organization_id=seed_org, sku="REAL-1", name="Real", selling_price=Decimal("100")))
     session.add(WineProduct(code="3000000000001", product_name="Real wine"))
     demo.seed(session, seed_org)
+    session.add(Category(organization_id=seed_org, name=demo.LEGACY_DEMO_CATEGORY))  # left by v0.1.24
 
     result = demo.delete_demo(session)
 
-    assert len(result["deleted"]) == 17 and result["soft_deleted"] == []
+    assert len(result["deleted"]) == 49 and result["soft_deleted"] == []
     assert session.scalars(select(Product.sku)).all() == ["REAL-1"]
     assert session.scalars(select(WineProduct.code)).all() == ["3000000000001"]
     assert _count(session, Category) == 0
@@ -69,4 +74,20 @@ def test_the_wines_are_served_by_wine_products(client, session, seed_org):
     demo.seed(session, seed_org)
     resp = client.get("/api/v1/wine-products/", params={"per_page": 50})
     assert resp.status_code == 200, resp.text
-    assert "DEMO-ROS-001" in resp.text
+    assert "DEMO-DSS-002" in resp.text
+
+
+def test_upgrade_from_the_v0124_seed(session, seed_org):
+    """v0.1.24's seed: 8 DEMO- products in a demo category (026 marked them is_demo)."""
+    legacy = Category(organization_id=seed_org, name=demo.LEGACY_DEMO_CATEGORY)
+    session.add(legacy)
+    session.flush()
+    session.add(Product(organization_id=seed_org, sku="DEMO-RED-001", name="old", selling_price=Decimal("1"),
+                        is_demo=True, category_id=legacy.id, track_inventory=True))
+    session.flush()
+
+    result = demo.seed(session, seed_org)
+
+    assert result["updated"] == ["product DEMO-RED-001"] and len(result["created"]) == 47
+    assert result["deleted"] == [f"category {demo.LEGACY_DEMO_CATEGORY} (org {seed_org})"]
+    assert _count(session, Category) == 0 and _count(session, Product, Product.category_id.isnot(None)) == 0
