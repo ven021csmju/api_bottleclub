@@ -34,9 +34,21 @@ def test_026_is_idempotent_and_recorded():
     assert "DELETE FROM schema_migrations WHERE version = '026'" in ROLLBACK
 
 
-def test_storefront_catalog_is_off_in_production_only():
-    for env, on in (("production", False), ("Production", False), ("staging", True), ("development", True)):
-        assert Settings.model_construct(ENVIRONMENT=env).storefront_catalog_enabled is on, env
-    for value in (True, False):
-        s = Settings.model_construct(ENVIRONMENT="production", STOREFRONT_CATALOG_ENABLED=value)
-        assert s.storefront_catalog_enabled is value
+def test_storefront_catalog_defaults_off_in_every_environment():
+    for env in ("production", "staging", "development", "test"):
+        assert Settings.model_construct(ENVIRONMENT=env).STOREFRONT_CATALOG_ENABLED is False, env
+    assert Settings.model_fields["STOREFRONT_CATALOG_ENABLED"].default is False
+
+
+def test_startup_logs_the_catalog_flag(monkeypatch, caplog):
+    import logging
+
+    from app import main
+    from app.config.settings import settings
+
+    for value, text in ((False, "STOREFRONT_CATALOG_ENABLED=false"), (True, "STOREFRONT_CATALOG_ENABLED=true")):
+        monkeypatch.setattr(settings, "STOREFRONT_CATALOG_ENABLED", value)
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+            main.log_feature_flags()
+        assert any(text in r.getMessage() for r in caplog.records), caplog.text

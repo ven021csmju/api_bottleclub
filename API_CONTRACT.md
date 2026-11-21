@@ -1263,8 +1263,8 @@ product the shop shows on the storefront. `null` → 422.
 
 **`GET /storefront/products`** and **`GET /storefront/products/{id}`** (no
 login; 120/minute per IP, `RATE_LIMIT_STOREFRONT_CATALOG`; `Cache-Control:
-public, max-age=60`). Behind **`STOREFRONT_CATALOG_ENABLED`** (unset: off in
-production, on elsewhere): off, both answer **404** `Not Found`.
+public, max-age=60`). Behind **`STOREFRONT_CATALOG_ENABLED`** (default
+`false` in every environment; staging sets it `true`): off, both answer **404** `Not Found`.
 
 ```
 GET /storefront/products  ?page=1&per_page=20(≤50)&type=red|white|sparkling|rose|dessert&country=&search=&sort=name|price|-price

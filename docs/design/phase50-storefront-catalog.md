@@ -19,7 +19,7 @@
 | Q4 | เลิก `--wine-only`; `dbae296` รวมเข้า Phase 50 | ลบ option และ `docs/runbooks/demo-wines.md` เดิม (ใช้ `phase50-deploy.md` แทน) |
 | Q5 | 24 รายการ ชื่อแต่ง ค้นแล้ว บันทึกที่มาของรูป | `scripts/seed_demo_wines.py`, `docs/assets/demo-wines-images.md` |
 | Q6 | รูปใน `/public` ของหน้าร้าน, `image_url` = `/demo-wines/<file>.jpg` | รูป 6 ไฟล์ส่งให้ทีม frontend ในชุด handoff |
-| Q7 | ต้องให้ที่ปรึกษากฎหมายดูก่อนเปิดบน production | `STOREFRONT_CATALOG_ENABLED` (ไม่ตั้ง = ปิดใน production, เปิดที่อื่น); ปิด = 404 |
+| Q7 | ต้องให้ที่ปรึกษากฎหมายดูก่อนเปิดบน production | `STOREFRONT_CATALOG_ENABLED` ค่าเริ่มต้น `false` ทุก environment ไม่อนุมานจาก `ENVIRONMENT` (owner 2026-11-22) staging ตั้ง `true` เอง; ปิด = 404; API log ค่าตอน start |
 | Q8 | ปล่อยว่าง = องค์กร active เดียว | `STOREFRONT_ORGANIZATION_ID` (ไม่ตั้ง; มีหลายองค์กร = รายการว่าง) |
 
 ## 0. สิ่งที่พบในโค้ด v0.1.24

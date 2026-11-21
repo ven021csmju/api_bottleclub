@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | Migration | `026_products_demo_online.sql` เพิ่ม `products.is_demo`, `products.is_online`, CHECK `ck_products_demo_sku` และ index `ix_products_storefront` · apply ก่อน code |
-| Env ใหม่ | `STOREFRONT_CATALOG_ENABLED` **ไม่ต้องตั้งบน production** (ไม่ตั้ง = ปิด = 404 จนกว่าที่ปรึกษากฎหมายจะยืนยัน, owner Q7) · `STOREFRONT_ORGANIZATION_ID` ไม่ต้องตั้ง (องค์กร active เดียว) · `RATE_LIMIT_STOREFRONT_CATALOG` (ค่าเริ่มต้น 120/minute) |
+| Env ใหม่ | `STOREFRONT_CATALOG_ENABLED=false` (ค่าเริ่มต้น false ทุก environment; ตั้งไว้ชัดๆ ใน `api.env` ปิด = 404 จนกว่าที่ปรึกษากฎหมายจะยืนยัน, owner Q7) · `STOREFRONT_ORGANIZATION_ID` ไม่ต้องตั้ง (องค์กร active เดียว) · `RATE_LIMIT_STOREFRONT_CATALOG` (ค่าเริ่มต้น 120/minute) |
 | ข้อมูล | `scripts/seed_demo_wines.py` ใส่ 24 รายการ (`is_demo`) + 24 แถวใน `wine_products` ไม่มีสต็อก ไม่มีหมวด |
 | ไม่กระทบ | POS, ออร์เดอร์, สต็อก, จัดซื้อ, โอน, รีวิว, รายงาน ไม่เห็นสินค้า DEMO (ทดสอบใน `tests/integration/test_demo_products_hidden.py`) |
 
@@ -46,7 +46,7 @@ cd /tmp && sudo -u postgres psql -p 5433 -d bottleclub_prod -X -v ON_ERROR_STOP=
 ```
 
 - ตรวจด้วยตาบน POS (login แคชเชียร์): catalog ต้องไม่มีชื่อที่ขึ้นต้นด้วย `DEMO`
-- เมื่อที่ปรึกษากฎหมายยืนยันแล้ว ให้เปิด catalog โดยเพิ่ม `STOREFRONT_CATALOG_ENABLED=true` ใน `/etc/bottleclub/api.env` (และสำเนา `~/bottleclub-prod/api.env`) แล้ว `sudo systemctl restart fastapi`
+- เมื่อที่ปรึกษากฎหมายยืนยันแล้ว ให้เปิด catalog โดยเปลี่ยนเป็น `STOREFRONT_CATALOG_ENABLED=true` ใน `/etc/bottleclub/api.env` (และสำเนา `~/bottleclub-prod/api.env`) แล้ว `sudo systemctl restart fastapi`
 
 ## 4. ลบไวน์ตัวอย่าง (บังคับก่อนเปิดร้านออนไลน์จริง หรือก่อนย้อน code)
 
@@ -71,6 +71,6 @@ cd /tmp && sudo -u postgres psql -p 5433 -d bottleclub_prod -X -v ON_ERROR_STOP=
 |---|---|
 | code ผิดปกติ | **ข้อ 4 ก่อน** (ลบ DEMO) แล้วจึง `sudo bottleclub-deploy v0.1.24` เก็บ 026 ไว้ได้ เพราะ v0.1.24 ไม่อ่าน column ใหม่ |
 | ต้องย้อน schema | ย้อน code ก่อน แล้ว `sudo scripts/ops/prod_db.sh apply migrations/026_products_demo_online.rollback.sql` (ค่า `is_online` ที่ตั้งไว้จะหายไป) |
-| เปิด catalog แล้วต้องปิดด่วน | ลบ `STOREFRONT_CATALOG_ENABLED` ออกจาก `api.env` แล้ว `sudo systemctl restart fastapi` (route จะกลับไปตอบ 404) |
+| เปิด catalog แล้วต้องปิดด่วน | ตั้ง `STOREFRONT_CATALOG_ENABLED=false` ใน `api.env` แล้ว `sudo systemctl restart fastapi` (route จะกลับไปตอบ 404) |
 
 ซ้อม apply / rollback / apply ซ้ำบน staging แล้ว (2026-11-22, `~/p50-staging/logs/migration-026.log`)

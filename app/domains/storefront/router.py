@@ -1,7 +1,8 @@
 """GET /storefront/products: the public storefront catalog (Phase 50, no login).
 
-Behind STOREFRONT_CATALOG_ENABLED (off in production until the legal review,
-owner Q7): off, every route here answers 404 as if it did not exist.
+Behind STOREFRONT_CATALOG_ENABLED (default false in every environment; on
+in production only after the legal review): off, every route here answers
+404 as if it did not exist.
 """
 from typing import Literal, Optional
 
@@ -20,7 +21,7 @@ CACHE = "public, max-age=60"
 
 
 def catalog_enabled() -> None:
-    if not settings.storefront_catalog_enabled:
+    if not settings.STOREFRONT_CATALOG_ENABLED:
         raise NotFoundException(detail="Not Found")
 
 
