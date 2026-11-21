@@ -157,6 +157,13 @@ class Settings(BaseSettings):
     # Peers whose CF-Connecting-IP / X-Forwarded-For / X-Forwarded-Proto are
     # believed (Phase 48-0): cloudflared on this host. Comma-separated IPs.
     TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
+    # Cloudflare's edge (Phase 49): a peer in these ranges gives the client
+    # by CF-Connecting-IP only (the origin reached through a proxied record,
+    # not the tunnel). Comma-separated CIDRs; or CLOUDFLARE_IP_RANGES_FILE, a
+    # file of one CIDR per line (# comments), which wins. Both empty
+    # (default): the list of www.cloudflare.com/ips in client_ip.py.
+    CLOUDFLARE_IP_RANGES: str = ""
+    CLOUDFLARE_IP_RANGES_FILE: str = ""
 
     # POST /auth/register. Unset: open outside production/staging, closed in
     # production/staging (403 REGISTRATION_DISABLED).
@@ -310,6 +317,18 @@ class Settings(BaseSettings):
                 raise ValueError("CUSTOMER_JWT_SECRET_KEY must be at least 32 random characters")
             if key == self.JWT_SECRET_KEY:
                 raise ValueError("CUSTOMER_JWT_SECRET_KEY must differ from JWT_SECRET_KEY")
+        return self
+
+    @model_validator(mode="after")
+    def validate_cloudflare_ip_ranges(self) -> "Settings":
+        """A malformed range or an unreadable file stops the start (else every
+        rate limit would fail at the first request)."""
+        from app.config.cloudflare_ips import _networks
+
+        try:
+            _networks(self.CLOUDFLARE_IP_RANGES, self.CLOUDFLARE_IP_RANGES_FILE)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"CLOUDFLARE_IP_RANGES(_FILE): {exc}") from None
         return self
 
     @field_validator("STORE_DAY_START_HOUR")

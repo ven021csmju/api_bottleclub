@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.db.session import get_db
+from app.middleware.client_ip import client_ip
 from app.middleware.access import Access, load_access
 from app.db.models import Order, OrderItem, User
 from app.db.repositories.users import UserRepository
@@ -208,7 +209,7 @@ def get_audit_context(
     return AuditContext(
         user_id=user.id,
         organization_id=getattr(user, "organization_id", 0),
-        ip_address=request.client.host if request.client else "",
+        ip_address=client_ip(request) or "",
         user_agent=request.headers.get("User-Agent", ""),
         request_id=getattr(request.state, "request_id", ""),
     )

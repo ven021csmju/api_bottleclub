@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config.settings import settings
 from app.db.session import get_db
+from app.middleware.client_ip import client_ip
 from app.middleware.auth import get_authenticated_user, get_current_user
 from app.middleware.rate_limit import limiter
 from app.db.models import User
@@ -123,7 +124,7 @@ def google_callback(
     token_response = AuthService.login_with_google(
         db=db,
         claims=claims,
-        ip_address=request.client.host if request.client else "",
+        ip_address=client_ip(request) or "",
         user_agent=request.headers.get("User-Agent", ""),
         request_id=getattr(request.state, "request_id", ""),
     )
@@ -236,7 +237,7 @@ async def login(
 ) -> TokenResponse:
     if cookie_mode(request):
         ensure_cookie_request(request)  # before the login: the origin names the cookie
-    ip_address = request.client.host if request.client else ""
+    ip_address = client_ip(request) or ""
     user_agent = request.headers.get("User-Agent", "")
     # Many wrong passwords for this username from anywhere: a slower answer,
     # never a lock (login_guard). Awaited, so a waiting login holds no thread.
@@ -263,7 +264,7 @@ def refresh(
     body: RefreshTokenRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
-    ip_address = request.client.host if request.client else ""
+    ip_address = client_ip(request) or ""
     raw = body.refresh_token if body else None
     if cookie_mode(request):
         ensure_cookie_request(request)
@@ -290,7 +291,7 @@ def change_password(
         user=user,
         current_password=body.current_password,
         new_password=body.new_password,
-        ip_address=request.client.host if request.client else "",
+        ip_address=client_ip(request) or "",
         user_agent=request.headers.get("User-Agent", ""),
     ))
 
