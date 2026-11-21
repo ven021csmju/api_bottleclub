@@ -65,6 +65,33 @@ def parse_cors_origins(raw: str, environment: str, name: str = "CORS_ORIGINS", r
     return list(dict.fromkeys(origins))
 
 
+def parse_frontend_urls(raw: str, environment: str) -> list[str]:
+    """FRONTEND_URLS: the pages a social login may send the browser back to,
+    comma-separated, each an exact absolute URL (scheme://host[:port][/path],
+    no query, fragment or ``*``; https only in production). A login names one
+    of them (``return_to``) or gets the first."""
+    production = environment.strip().lower() == "production"
+    urls = [v.strip() for v in raw.split(",") if v.strip()]
+    for url in urls:
+        parts = urlsplit(url)
+        if (
+            "*" in url
+            or parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username is not None
+            or parts.password is not None
+            or parts.query
+            or parts.fragment
+            or "?" in url
+            or "#" in url
+            or any(c.isspace() for c in url)
+        ):
+            raise ValueError(f"FRONTEND_URLS: not an absolute URL without query/fragment: {url!r}")
+        if production and parts.scheme != "https":
+            raise ValueError(f"FRONTEND_URLS: production allows https URLs only: {url!r}")
+    return list(dict.fromkeys(urls))
+
+
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
@@ -94,6 +121,27 @@ class Settings(BaseSettings):
     # Organization of a new account created at its first Google sign-in. The
     # account gets no role; staff accounts cannot sign in with Google.
     GOOGLE_DEFAULT_ORGANIZATION_ID: int | None = None
+
+    # LINE Login for customers (customer_accounts, not the staff users).
+    # All three, CUSTOMER_JWT_SECRET_KEY and FRONTEND_URLS are needed, else
+    # GET /auth/line is 400 "LINE Login is not configured".
+    LINE_CLIENT_ID: str | None = None
+    LINE_CLIENT_SECRET: str | None = None
+    # The callback registered in the LINE Developers Console, exactly:
+    # https://<api host>/api/v1/auth/line/callback
+    LINE_REDIRECT_URI: str | None = None
+    # Organization of a customer's first LINE sign-in. Unset: the sole active
+    # organization (as registration).
+    LINE_DEFAULT_ORGANIZATION_ID: int | None = None
+    # Pages of the frontend a social login may return to (parse_frontend_urls).
+    FRONTEND_URLS: str = ""
+
+    # Customer tokens (Phase 48 design 2.1): another key than JWT_SECRET_KEY
+    # (the app does not start if they are equal), >= 32 characters.
+    CUSTOMER_JWT_SECRET_KEY: str | None = None
+    CUSTOMER_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    # Lifetime of the one-time code a social login hands the frontend.
+    AUTH_EXCHANGE_CODE_TTL_SECONDS: int = 60
 
     # Browser origins allowed by CORS: comma-separated (or a JSON list), e.g.
     # "https://pos.example.com,https://admin.example.com". Empty (default): no
@@ -140,6 +188,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
     # POST /orders/track (public, ref + contact), per client IP.
     RATE_LIMIT_ORDER_TRACK_PUBLIC: str = "20/minute"
+    RATE_LIMIT_SOCIAL_LOGIN: str = "30/minute"
+    RATE_LIMIT_AUTH_EXCHANGE: str = "30/minute"
 
     # MongoDB (log service on the Ubuntu server, reached via SSH tunnel)
     # MONGODB_URI defaults to localhost because the SSH tunnel maps the
@@ -191,6 +241,17 @@ class Settings(BaseSettings):
         return parse_cors_origins(self.AUTH_COOKIE_ORIGINS, self.ENVIRONMENT, "AUTH_COOKIE_ORIGINS", required=False)
 
     @property
+    def frontend_urls(self) -> list[str]:
+        return parse_frontend_urls(self.FRONTEND_URLS, self.ENVIRONMENT)
+
+    @property
+    def line_login_configured(self) -> bool:
+        return all((
+            self.LINE_CLIENT_ID, self.LINE_CLIENT_SECRET, self.LINE_REDIRECT_URI,
+            self.CUSTOMER_JWT_SECRET_KEY, self.frontend_urls,
+        ))
+
+    @property
     def trusted_proxy_ips(self) -> set[str]:
         return {ip.strip() for ip in self.TRUSTED_PROXY_IPS.split(",") if ip.strip()}
 
@@ -233,6 +294,22 @@ class Settings(BaseSettings):
         outside = [o for o in self.auth_cookie_origins if o not in self.cors_origins]
         if outside:
             raise ValueError(f"AUTH_COOKIE_ORIGINS must be in CORS_ORIGINS too: {', '.join(outside)}")
+        return self
+
+    @field_validator("FRONTEND_URLS")
+    @classmethod
+    def validate_frontend_urls(cls, value: str, info: ValidationInfo) -> str:
+        parse_frontend_urls(value, info.data.get("ENVIRONMENT", ""))
+        return value
+
+    @model_validator(mode="after")
+    def validate_customer_jwt_key(self) -> "Settings":
+        key = self.CUSTOMER_JWT_SECRET_KEY
+        if key is not None:
+            if len(key) < 32 or key in _UNSAFE_JWT_DEFAULTS:
+                raise ValueError("CUSTOMER_JWT_SECRET_KEY must be at least 32 random characters")
+            if key == self.JWT_SECRET_KEY:
+                raise ValueError("CUSTOMER_JWT_SECRET_KEY must differ from JWT_SECRET_KEY")
         return self
 
     @field_validator("STORE_DAY_START_HOUR")

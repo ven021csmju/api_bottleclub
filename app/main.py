@@ -246,6 +246,7 @@ def create_app() -> FastAPI:
     from app.domains.wine_products.router import router as wine_products_router
     from app.domains.customer_addresses.router import router as customer_addresses_router
     from app.domains.reviews.router import router as reviews_router
+    from app.domains.customer_account.router import router as customer_account_router
 
     app.include_router(
         auth_router,
@@ -401,6 +402,12 @@ def create_app() -> FastAPI:
         reviews_router,
         prefix="/api/v1/reviews",
         tags=["Reviews"],
+    )
+
+    app.include_router(
+        customer_account_router,
+        prefix="/api/v1/customer",
+        tags=["Customer Account"],
     )
 
     return app

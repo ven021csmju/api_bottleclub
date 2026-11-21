@@ -772,6 +772,106 @@ class Customer(Base):
 
 
 # ---------------------------------------------------------------------------
+# CustomerAccount / CustomerIdentity / AuthExchangeCode (023): a customer's
+# login, apart from the staff ``users`` (docs/design/phase48-customer-accounts.md 1.2).
+# ---------------------------------------------------------------------------
+class CustomerAccount(Base):
+    __tablename__ = "customer_accounts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
+    customer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+    # Lower case; NULL for a LINE-only account (no made-up address) and after deletion.
+    email: Mapped[str | None] = mapped_column(String(255))
+    email_verified_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    # NULL: signs in with Google/LINE only.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    password_changed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    phone_pending: Mapped[str | None] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
+    age_verified_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    age_verified_by: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    age_verified_branch_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("branches.id", ondelete="RESTRICT")
+    )
+    last_login_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'locked', 'deleted')", name="ck_customer_account_status"),
+        CheckConstraint("status <> 'deleted' OR email IS NULL", name="ck_customer_account_deleted_email"),
+        CheckConstraint(
+            "(age_verified_at IS NULL) = (age_verified_by IS NULL)", name="ck_customer_account_age_verified"
+        ),
+        Index(
+            "uq_customer_account_org_email",
+            "organization_id",
+            "email",
+            unique=True,
+            postgresql_where="email IS NOT NULL",
+        ),
+    )
+
+
+class CustomerIdentity(Base):
+    """A provider account (Google/LINE) of a customer account, by the
+    provider's ``sub``, never by email (an address can change hands)."""
+
+    __tablename__ = "customer_identities"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    customer_account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("customer_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    email_at_link: Mapped[str | None] = mapped_column(String(255))
+    linked_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("provider IN ('google', 'line')", name="ck_customer_identity_provider"),
+        UniqueConstraint("provider", "provider_subject", name="uq_customer_identity_subject"),
+        UniqueConstraint("customer_account_id", "provider", name="uq_customer_identity_account_provider"),
+    )
+
+
+class AuthExchangeCode(Base):
+    """A one-time code the social login callback hands the frontend (in its
+    redirect) instead of a token; POST /auth/exchange trades it for one.
+    Only the sha256 is stored."""
+
+    __tablename__ = "auth_exchange_codes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    customer_account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("customer_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_auth_exchange_codes_expires", "expires_at"),)
+
+
+# ---------------------------------------------------------------------------
 # 22. LoyaltyTransaction
 # ---------------------------------------------------------------------------
 class LoyaltyTransaction(Base):

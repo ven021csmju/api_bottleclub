@@ -94,3 +94,43 @@ def issued_before(payload: dict, moment: datetime | None) -> bool:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+#: ``aud`` of a customer token. A staff decode (no ``audience``) refuses it and
+#: a customer decode requires it; the keys differ too (Phase 48 design 2.1).
+CUSTOMER_AUDIENCE = "bottleclub-customer"
+CUSTOMER_TOKEN_TYPE = "customer_access"
+
+
+def create_customer_access_token(customer_account_id: int, org_id: int) -> str:
+    if not settings.CUSTOMER_JWT_SECRET_KEY:
+        raise RuntimeError("CUSTOMER_JWT_SECRET_KEY is not set")
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(customer_account_id),
+        "org_id": org_id,
+        "type": CUSTOMER_TOKEN_TYPE,
+        "aud": CUSTOMER_AUDIENCE,
+        "exp": now + timedelta(minutes=settings.CUSTOMER_ACCESS_TOKEN_EXPIRE_MINUTES),
+        "iat": now,
+        "nbf": now,
+        "jti": secrets.token_urlsafe(16),
+    }
+    return jwt.encode(payload, settings.CUSTOMER_JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_customer_token(token: str) -> dict:
+    """A customer token's claims; JWTError for anything else (a staff token
+    included: another key, no ``aud``)."""
+    if not settings.CUSTOMER_JWT_SECRET_KEY:
+        raise JWTError("customer tokens are not configured")
+    payload = jwt.decode(
+        token,
+        settings.CUSTOMER_JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+        audience=CUSTOMER_AUDIENCE,
+        options={"require_aud": True},
+    )
+    if payload.get("type") != CUSTOMER_TOKEN_TYPE:
+        raise JWTError("not a customer token")
+    return payload

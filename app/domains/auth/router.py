@@ -17,6 +17,8 @@ from app.shared.exceptions import ForbiddenException, UnauthorizedException
 
 from .schemas import (
     ChangePasswordRequest,
+    CustomerTokenResponse,
+    ExchangeRequest,
     LoginRequest,
     LogoutRequest,
     RefreshTokenRequest,
@@ -29,6 +31,9 @@ from . import login_guard
 from .cookie import answer, clear, cookie_mode, cookie_name, ensure_cookie_request, refresh_token_from_cookie
 from .service import AuthService
 from .google import authorization_url, exchange_code, verify_id_token
+from . import customer_login, line
+from app.shared.exceptions import AppException, BadRequestException
+from app.shared.security import create_customer_access_token
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -126,6 +131,99 @@ def google_callback(
     http_response.delete_cookie(GOOGLE_STATE_COOKIE)
     http_response.delete_cookie(GOOGLE_NONCE_COOKIE)
     return token_response
+
+
+LINE_STATE_COOKIE = "line_oauth_state"
+LINE_NONCE_COOKIE = "line_oauth_nonce"
+LINE_RETURN_COOKIE = "line_oauth_return"
+#: The LINE cookies are sent to the callback only.
+LINE_COOKIE_PATH = "/api/v1/auth/line"
+
+
+def _return_url(url: str, **params: str) -> str:
+    from urllib.parse import urlencode
+
+    return f"{url}?{urlencode(params)}"
+
+
+@router.get("/line", response_class=RedirectResponse, status_code=302,
+            responses={302: {"description": "Redirect to LINE's sign-in page (sets the state, nonce and return cookies)"},
+                       400: {"description": "LINE Login is not configured, or return_to is not in FRONTEND_URLS"}})
+@limiter.limit(settings.RATE_LIMIT_SOCIAL_LOGIN)
+def line_login(
+    request: Request,
+    return_to: str | None = Query(None, description="One of FRONTEND_URLS (default: the first)"),
+) -> RedirectResponse:
+    """Customer sign-in with LINE. The callback sends the browser back to
+    ``return_to`` with ``?code=<one-time code>`` (POST /auth/exchange) or
+    ``?error=<reason>``; never a token in a URL."""
+    line.ensure_configured()
+    allowed = settings.frontend_urls
+    target = return_to.strip() if return_to else allowed[0]
+    if target not in allowed:
+        raise BadRequestException(detail="return_to is not an allowed frontend URL", code="RETURN_TO_NOT_ALLOWED")
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    response = RedirectResponse(line.authorization_url(state, nonce), status_code=302)
+    for name, value in ((LINE_STATE_COOKIE, state), (LINE_NONCE_COOKIE, nonce), (LINE_RETURN_COOKIE, target)):
+        response.set_cookie(
+            key=name, value=value, httponly=True, secure=_secure_cookie(),
+            samesite="lax", max_age=600, path=LINE_COOKIE_PATH,
+        )
+    return response
+
+
+@router.get("/line/callback", response_class=RedirectResponse, status_code=302,
+            responses={302: {"description": "Back to the frontend with ?code= (one-time, 60 s) or ?error="},
+                       401: {"description": "No valid sign-in in progress (state/return cookie)"}})
+@limiter.limit(settings.RATE_LIMIT_SOCIAL_LOGIN)
+def line_callback(
+    request: Request,
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    line.ensure_configured()
+    target = request.cookies.get(LINE_RETURN_COOKIE)
+    expected_state = request.cookies.get(LINE_STATE_COOKIE)
+    expected_nonce = request.cookies.get(LINE_NONCE_COOKIE)
+    if not target or target not in settings.frontend_urls:
+        raise UnauthorizedException(detail="No LINE sign-in in progress", code="LINE_STATE_INVALID")
+    state_ok = bool(state and expected_state and expected_nonce and secrets.compare_digest(state, expected_state))
+
+    if error or not code:
+        location = _return_url(target, error="line_login_cancelled")
+    elif not state_ok:
+        location = _return_url(target, error="line_state_invalid")
+    else:
+        try:
+            tokens = line.exchange_code(code)
+            claims = line.verify_id_token(tokens["id_token"], expected_nonce)
+            account = customer_login.sign_in(db, "line", claims)
+            location = _return_url(target, code=customer_login.issue_code(db, account))
+        except AppException as exc:
+            db.rollback()
+            logger.info("LINE CALLBACK failed code=%s", exc.code)
+            location = _return_url(target, error="line_login_failed")
+    response = RedirectResponse(location, status_code=302)
+    # No cache: the Location holds a one-time code.
+    response.headers["Cache-Control"] = "no-store"
+    for name in (LINE_STATE_COOKIE, LINE_NONCE_COOKIE, LINE_RETURN_COOKIE):
+        response.delete_cookie(name, path=LINE_COOKIE_PATH, secure=_secure_cookie(), httponly=True, samesite="lax")
+    return response
+
+
+@router.post("/exchange", response_model=CustomerTokenResponse,
+             responses={401: {"description": "INVALID_EXCHANGE_CODE: unknown, used or expired"}})
+@limiter.limit(settings.RATE_LIMIT_AUTH_EXCHANGE)
+def exchange(request: Request, body: ExchangeRequest, db: Session = Depends(get_db)) -> CustomerTokenResponse:
+    """A social login's one-time code (used up here) for a customer access token."""
+    account = customer_login.redeem_code(db, body.code)
+    return CustomerTokenResponse(
+        access_token=create_customer_access_token(account.id, account.organization_id),
+        expires_in=settings.CUSTOMER_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
 
 
 @router.post("/login", response_model=TokenResponse, response_model_exclude_none=True)

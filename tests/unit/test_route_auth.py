@@ -14,6 +14,7 @@ from app.middleware.auth import (
     get_current_user,
     require_station_item_permission,
 )
+from app.middleware.customer_auth import get_customer_account
 
 PREFIX = "/api/v1"
 
@@ -46,6 +47,10 @@ PUBLIC = {
     ("POST", "/auth/login"),
     ("POST", "/auth/refresh"),
     ("POST", "/auth/register"),
+    # Customer LINE Login: the callback hands a one-time code, exchanged for a customer token.
+    ("GET", "/auth/line"),
+    ("GET", "/auth/line/callback"),
+    ("POST", "/auth/exchange"),
     ("GET", "/orders/track/public/{token}"),
     ("POST", "/orders/track"),
     ("GET", "/wine-products/"),
@@ -55,6 +60,11 @@ PUBLIC = {
     ("GET", "/health/mongodb"),
 }
 
+
+#: A customer token only (app/middleware/customer_auth.py); a staff token is refused.
+CUSTOMER = {
+    ("GET", "/customer/me"),
+}
 
 def _calls(dependant):
     for dep in dependant.dependencies:
@@ -70,6 +80,8 @@ def _classify(route: APIRoute) -> str:
         return "login"
     if get_authenticated_user in calls:
         return "login, before password change"
+    if get_customer_account in calls:
+        return "customer"
     return "public"
 
 
@@ -98,6 +110,11 @@ def test_routes_open_before_the_password_change_are_the_reviewed_ones():
 def test_public_routes_are_the_reviewed_ones():
     routes = _routes()
     assert {key for key, kind in routes.items() if kind == "public"} == PUBLIC
+
+
+def test_customer_routes_are_the_reviewed_ones():
+    routes = _routes()
+    assert {key for key, kind in routes.items() if kind == "customer"} == CUSTOMER
 
 
 def test_slip_reads_need_slip_verification_read():

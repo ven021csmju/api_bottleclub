@@ -88,3 +88,28 @@ class UserProfileResponse(BaseModel):
     is_superadmin: bool
     permissions: list[str]
     branches: list[int]
+
+
+class ExchangeRequest(BaseModel):
+    """The one-time code a social login put in the redirect to the frontend."""
+
+    code: str = Field(..., min_length=1, max_length=128)
+
+
+class CustomerTokenResponse(BaseModel):
+    """A customer's access token (not a staff token: POS/admin routes refuse it)."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    audience: str = "customer"
+
+
+class CustomerProfileResponse(BaseModel):
+    customer_account_id: int
+    customer_id: int
+    first_name: str
+    last_name: str | None = None
+    email: str | None = None
+    loyalty_points_balance: int
+    providers: list[str]
