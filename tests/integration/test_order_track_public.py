@@ -34,7 +34,7 @@ def test_ref_and_contact_answer_the_tracking_fields_only(client, shipped, ref, c
     resp = client.post(TRACK, json={"ref": ref, "contact": contact})
 
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = resp.json()["data"]
     assert set(body) == FIELDS
     assert body["order_number"] == "ORD-TRACK-0001"
     assert body["tracking_number"] == "TH0000000001"
@@ -79,7 +79,7 @@ def test_no_login_needed_and_the_staff_route_is_unchanged(client, shipped, auth_
     # The staff GET /orders/track/{ref} still needs a login...
     assert client.get("/api/v1/orders/track/ORD-TRACK-0001").status_code == 401
     staff = client.get("/api/v1/orders/track/ORD-TRACK-0001", headers=auth_headers)
-    assert staff.status_code == 200 and staff.json()["order_number"] == "ORD-TRACK-0001"
+    assert staff.status_code == 200 and staff.json()["data"]["order_number"] == "ORD-TRACK-0001"
     # ...and GET /orders/{reference} is not shadowed by /orders/track.
     assert client.get("/api/v1/orders/ORD-TRACK-0001", headers=auth_headers).status_code == 200
 
@@ -93,14 +93,14 @@ def test_the_carrier_is_set_with_the_tracking_number(client, session, shipped, s
     resp = client.put(url, json={"tracking_number": "TH0000000002", "shipping_carrier": " Flash "},
                       headers=staff_headers)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["shipping_carrier"] == "Flash"
+    assert resp.json()["data"]["shipping_carrier"] == "Flash"
     # Left out: unchanged.
     resp = client.put(url, json={"tracking_number": "TH0000000003"}, headers=staff_headers)
-    assert resp.json()["shipping_carrier"] == "Flash"
+    assert resp.json()["data"]["shipping_carrier"] == "Flash"
     # "": cleared.
     resp = client.put(url, json={"tracking_number": "TH0000000003", "shipping_carrier": ""},
                       headers=staff_headers)
-    assert resp.json()["shipping_carrier"] is None
+    assert resp.json()["data"]["shipping_carrier"] is None
 
 
 def test_rate_limited_per_ip(client, shipped, monkeypatch):

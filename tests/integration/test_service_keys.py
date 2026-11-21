@@ -30,11 +30,11 @@ def test_the_key_is_stored_as_a_hash_only(session, key):
 def test_list_create_and_balance_with_the_key(client, session, key, seed_org):
     created = client.post("/api/v1/customers/", json={"first_name": "Shop", "phone": "0811111111"}, headers=_h(key))
     assert created.status_code == 201, created.text
-    customer_id = created.json()["id"]
+    customer_id = created.json()["data"]["id"]
     assert session.get(Customer, customer_id).organization_id == seed_org
 
     listed = client.get("/api/v1/customers/", headers=_h(key))
-    assert listed.status_code == 200 and [c["id"] for c in listed.json()["customers"]] == [customer_id]
+    assert listed.status_code == 200 and [c["id"] for c in listed.json()["data"]["customers"]] == [customer_id]
 
     balance = client.get(f"/api/v1/loyalty/balance/{customer_id}", headers=_h(key))
     assert balance.status_code == 200, balance.text
@@ -74,11 +74,11 @@ def test_another_organizations_customers_are_not_seen(client, session, key):
     session.flush()
     theirs = session.scalar(select(Customer.id).where(Customer.organization_id == other.id))
 
-    assert client.get("/api/v1/customers/", headers=_h(key)).json()["customers"] == []
+    assert client.get("/api/v1/customers/", headers=_h(key)).json()["data"]["customers"] == []
     assert client.get(f"/api/v1/loyalty/balance/{theirs}", headers=_h(key)).status_code == 404
 
 
-def test_staff_still_use_these_routes(client, session, seed_user):
+def test_staff_still_use_these_routes(client, session, seed_user, key):
     from tests.integration.conftest import grant
 
     grant(session, seed_user["user_id"], seed_user["org_id"], ["customers.read"], seed_user["branch_id"])
@@ -89,8 +89,9 @@ def test_staff_still_use_these_routes(client, session, seed_user):
     assert client.get("/api/v1/customers/").status_code == 401
     # No token and a bad body: still 401 first (Phase 40).
     assert client.post("/api/v1/customers/", json={}).status_code == 401
-    # A key and a bad body: the body's 422.
-    assert client.post("/api/v1/customers/", json={}, headers=_h("bcsk_x")).status_code == 422
+    # A valid key and a bad body: the body's 422; a wrong key: 401 first.
+    assert client.post("/api/v1/customers/", json={}, headers=_h(key)).status_code == 422
+    assert client.post("/api/v1/customers/", json={}, headers=_h("bcsk_x")).status_code == 401
 
 
 def test_last_used_is_recorded(client, session, key):

@@ -109,7 +109,7 @@ class TestStart:
         assert len(q["state"]) >= 32 and len(q["nonce"]) >= 32
         cookies = resp.headers.get_list("set-cookie")
         assert any(c.startswith(f"line_oauth_state={q['state']};") for c in cookies)
-        assert any(c.startswith(f"line_oauth_return={FRONTEND};") for c in cookies)
+        assert any(c.startswith(f'line_oauth_return="{FRONTEND}";') for c in cookies)  # quoted: has ":" and "/"
         assert all("HttpOnly" in c and "Path=/api/v1/auth/line" in c for c in cookies)
         assert "line-secret-for-tests" not in resp.headers["location"]
 
@@ -121,6 +121,20 @@ class TestStart:
             resp = client.get("/api/v1/auth/line", params={"return_to": bad}, follow_redirects=False)
             assert resp.status_code == 400, bad
             assert resp.json()["code"] == "RETURN_TO_NOT_ALLOWED"
+
+
+class TestRoundTrip:
+    def test_start_then_callback_with_the_cookies_the_api_set(self, client, session, fake_line):
+        start = client.get(f"/api/v1/auth/line?return_to={OTHER_FRONTEND}", follow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        fake_line.claims["nonce"] = parse_qs(urlsplit(start.headers["location"]).query)["nonce"][0]
+
+        resp = client.get(f"/api/v1/auth/line/callback?code=auth-code&state={state}", follow_redirects=False)
+        client.cookies.clear()
+
+        target, params = _redirect(resp)
+        assert target == OTHER_FRONTEND and set(params) == {"code"}
+        assert client.post("/api/v1/auth/exchange", json={"code": params["code"]}).status_code == 200
 
 
 class TestCallback:
@@ -232,14 +246,14 @@ class TestExchange:
         again = client.post("/api/v1/auth/exchange", json={"code": code})
 
         assert first.status_code == 200, first.text
-        body = first.json()
+        body = first.json()["data"]
         assert body["token_type"] == "bearer" and body["audience"] == "customer"
         assert body["expires_in"] == settings.CUSTOMER_ACCESS_TOKEN_EXPIRE_MINUTES * 60
         assert again.status_code == 401 and again.json()["code"] == "INVALID_EXCHANGE_CODE"
 
         me = client.get("/api/v1/customer/me", headers={"Authorization": f"Bearer {body['access_token']}"})
         assert me.status_code == 200, me.text
-        assert me.json()["first_name"] == "คุณทดสอบ" and me.json()["providers"] == ["line"]
+        assert me.json()["data"]["first_name"] == "คุณทดสอบ" and me.json()["data"]["providers"] == ["line"]
 
     def test_an_expired_code_is_refused(self, client, session, fake_line):
         code = _login(client, fake_line)
@@ -264,7 +278,7 @@ class TestExchange:
 class TestTokensNeverCross:
     def test_a_customer_token_is_not_a_staff_token(self, client, session, fake_line, seed_user):
         code = _login(client, fake_line)
-        token = client.post("/api/v1/auth/exchange", json={"code": code}).json()["access_token"]
+        token = client.post("/api/v1/auth/exchange", json={"code": code}).json()["data"]["access_token"]
         headers = {"Authorization": f"Bearer {token}", "X-Branch-Id": str(seed_user["branch_id"])}
 
         for path in ("/api/v1/auth/me", "/api/v1/orders/", "/api/v1/customers/"):
@@ -277,7 +291,7 @@ class TestTokensNeverCross:
 
     def test_a_customer_token_of_a_locked_account_is_refused(self, client, session, fake_line):
         code = _login(client, fake_line)
-        token = client.post("/api/v1/auth/exchange", json={"code": code}).json()["access_token"]
+        token = client.post("/api/v1/auth/exchange", json={"code": code}).json()["data"]["access_token"]
         session.scalar(select(CustomerAccount)).status = "locked"
         session.flush()
 
