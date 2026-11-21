@@ -1218,7 +1218,13 @@ LINE identity (`U` + 32 hex), `email` exact without case, `phone` compared as
 `POST /orders/track` does (digits, +66 as 0). Each lookup is logged with the
 key id, the identifiers' names and found/not_found/ambiguous, never their
 values. `POST /customers/` with a key answers the same three fields (staff:
-the customer record as before).
+the customer record as before), and never makes a second customer: an
+active one of the organization with the same email (case aside) or phone
+(compared as above) is answered 409 `CUSTOMER_EXISTS` with
+`"customer": {"id", "display_name", "loyalty_points_balance"}` (use it as
+the lookup's answer). Two requests at once make one customer; a key must send
+a whole phone (422 otherwise). LINE customers are made by LINE Login only
+(customer_identities is unique per LINE sub).
 
 **Client IP (rate limits, login_attempts, audit log).** One function,
 `app/middleware/client_ip.py` `resolve_client_ip`: from cloudflared
