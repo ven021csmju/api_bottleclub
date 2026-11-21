@@ -3,6 +3,8 @@
 เจ้าของเป็นคนรันทุกคำสั่งใน terminal ของตัวเอง **ห้ามรันจนกว่าเจ้าของจะสั่ง**
 ต้องมี v0.1.24 (Phase 49, migration 022–025) บน production ก่อน (`phase49-deploy.md`)
 
+**production ที่ยังเป็น v0.1.23:** ใช้ `prod-v0123-to-v0125.md` (ฉบับรวม 022–026) แทนเอกสารนี้
+
 | | |
 |---|---|
 | Migration | `026_products_demo_online.sql` เพิ่ม `products.is_demo`, `products.is_online`, CHECK `ck_products_demo_sku` และ index `ix_products_storefront` · apply ก่อน code |
