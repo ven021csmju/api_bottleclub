@@ -7,7 +7,8 @@ DATABASE_URL (the API's environment), through the ORM.
     python -m scripts.seed_demo_wines --delete --apply # remove the demo data
 
 Every demo row is marked: products.sku and wine_products.code start with
-DEMO-, and the products are in the category DEMO_CATEGORY. Running it again
+DEMO-, and the products are in the category DEMO_CATEGORY. 17 rows: the
+category, 8 products and their 8 wine_products rows. Running it again
 creates nothing twice (looked up by sku / code) and puts changed demo rows
 back to the values below. --delete touches DEMO- rows only; a demo product
 already used by an order or a stock movement cannot be deleted (RESTRICT),
@@ -134,6 +135,8 @@ def seed(db: Session, org_id: int | None = None) -> dict[str, list[str]]:
         db.add(category)
         db.flush()
         out["created"].append(f"category {DEMO_CATEGORY}")
+    else:
+        out["unchanged"].append(f"category {DEMO_CATEGORY}")
 
     for wine in WINES:
         product = db.scalar(select(Product).where(Product.organization_id == org.id, Product.sku == wine.sku))

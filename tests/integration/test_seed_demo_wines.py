@@ -31,6 +31,7 @@ def test_running_again_creates_nothing(session, seed_org):
     result = demo.seed(session, seed_org)
 
     assert result["created"] == [] and result["updated"] == ["product DEMO-RED-001"]
+    assert len(result["unchanged"]) == 16 and f"category {demo.DEMO_CATEGORY}" in result["unchanged"]  # 17 rows, 1 updated
     assert _count(session, Product) == 8 and _count(session, WineProduct) == 8 and _count(session, Category) == 1
 
 
