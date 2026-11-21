@@ -47,6 +47,7 @@ PUBLIC = {
     ("POST", "/auth/refresh"),
     ("POST", "/auth/register"),
     ("GET", "/orders/track/public/{token}"),
+    ("POST", "/orders/track"),
     ("GET", "/wine-products/"),
     ("GET", "/wine-products/{wine_product_id}"),
     ("GET", "/api/promotions"),

@@ -30,6 +30,8 @@ from .schemas import (
     OrderResponse,
     OrderStatusUpdate,
     OrderTrackingTokenReplaceResponse,
+    PublicTrackRequest,
+    PublicTrackResponse,
     ReceiptResponse,
     OrderItemStatusUpdate,
     StationItemsListResponse,
@@ -310,8 +312,31 @@ def update_order_tracking(
         order_id=order_id,
         tracking_number=body.tracking_number,
         fulfillment_status=body.fulfillment_status,
+        shipping_carrier=body.shipping_carrier,
     )
     return OrderResponse.model_validate(order)
+
+
+#: The one answer for an unknown order and a wrong contact.
+TRACK_NOT_FOUND = "Order not found"
+
+
+@router.post(
+    "/track",
+    response_model=PublicTrackResponse,
+    responses={404: {"description": "No order with this ref and contact (one answer for either)"}},
+)
+@limiter.limit(settings.RATE_LIMIT_ORDER_TRACK_PUBLIC)
+def track_order_by_contact(
+    request: Request, body: PublicTrackRequest, db: Session = Depends(get_db)
+) -> PublicTrackResponse:
+    """Public customer tracking, no login: the order or tracking number and
+    the phone or email of the order's customer. In the body, so the phone
+    stays out of URLs and access logs."""
+    order = OrderService.track_public(db, body.ref, body.contact)
+    if order is None:
+        raise NotFoundException(detail=TRACK_NOT_FOUND)
+    return PublicTrackResponse.model_validate(order)
 
 
 @router.get("/track/{tracking_or_ref}")

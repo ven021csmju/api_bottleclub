@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     Branch,
+    Customer,
     LoyaltyTransaction,
     Order,
     OrderItem,
@@ -91,6 +92,43 @@ class OrderService:
     def hash_tracking_token(token: str) -> str:
         """SHA-256 digest of a tracking token; never the plaintext."""
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def normalize_contact(value: str) -> str | None:
+        """A phone (digits only, +66 as 0) or an email (lower case); None for
+        anything shorter than a phone number."""
+        value = value.strip()
+        if "@" in value:
+            return value.lower()
+        digits = "".join(c for c in value if c.isdigit())
+        if digits.startswith("66") and len(digits) == 11:
+            digits = "0" + digits[2:]
+        return digits if len(digits) >= 9 else None
+
+    @staticmethod
+    def track_public(db: Session, ref: str, contact: str) -> Order | None:
+        """The order whose order or tracking number is ``ref`` and whose
+        customer's phone or email is ``contact``; None when either is wrong
+        (the caller must not tell which)."""
+        wanted = OrderService.normalize_contact(contact)
+        ref = ref.strip()
+        if wanted is None or not ref:
+            return None
+        rows = db.execute(
+            select(Order, Customer.phone, Customer.email)
+            .join(Customer, Customer.id == Order.customer_id)
+            .where(
+                (Order.order_number == ref) | (Order.tracking_number == ref),
+                Customer.deleted_at.is_(None),
+            )
+            .order_by(Order.id)
+            .limit(20)
+        ).all()
+        for order, phone, email in rows:
+            known = {OrderService.normalize_contact(v) for v in (phone, email) if v}
+            if wanted in known:
+                return order
+        return None
 
     @staticmethod
     def _check_discounts(data: dict, products_map: dict, can_discount: bool) -> None:
@@ -383,6 +421,7 @@ class OrderService:
         order_id: int,
         tracking_number: str,
         fulfillment_status: str,
+        shipping_carrier: str | None = None,
     ) -> Order:
         allowed_statuses = {
             "unfulfilled", "processing", "shipped", "delivered", "picked_up", "cancelled"
@@ -399,6 +438,8 @@ class OrderService:
             raise BadRequestException(detail="tracking_number cannot be blank", code="VALIDATION_ERROR")
         order.tracking_number = tracking_number
         order.fulfillment_status = fulfillment_status
+        if shipping_carrier is not None:
+            order.shipping_carrier = shipping_carrier.strip() or None
         db.commit()
         db.refresh(order)
         return order

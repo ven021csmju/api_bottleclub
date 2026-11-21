@@ -138,6 +138,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_REGISTER: str = "5/hour"
     RATE_LIMIT_CHANGE_PASSWORD: str = "10/minute"
     RATE_LIMIT_ORDER_TRACKING: str = "30/minute"
+    # POST /orders/track (public, ref + contact), per client IP.
+    RATE_LIMIT_ORDER_TRACK_PUBLIC: str = "20/minute"
 
     # MongoDB (log service on the Ubuntu server, reached via SSH tunnel)
     # MONGODB_URI defaults to localhost because the SSH tunnel maps the
