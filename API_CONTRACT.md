@@ -1150,12 +1150,14 @@ username on every till there (other usernames are not affected).
 
 ### Storefront: order tracking, LINE Login, service keys (Phase 49)
 
-**Deploy: migrations 022 → 023 → 024, then the code.** Each only adds (a
-column, new tables); the code before 49 keeps working on them. Check that the
-API's role can use the new tables (`customer_accounts`, `customer_identities`,
-`auth_exchange_codes`, `service_keys` and their sequences: the default
-privileges of the owner normally cover it). Rollbacks: code first, then
-024 → 023 → 022 (`023` refuses while a customer account exists).
+**Deploy: backup, migrations 022 → 023 → 024 → 025, grants, then the code**
+(step by step: `docs/runbooks/phase49-deploy.md`). Each migration only adds (a
+column, new tables) or revokes keys; the code before 49 does not read them.
+`scripts/ops/phase49_grants.sql` grants and checks the API role's DML on
+`customer_accounts`, `customer_identities`, `auth_exchange_codes`,
+`service_keys` and their sequences. Rollbacks: code first; 025 never un-revokes
+a key; 023 refuses once a customer account exists, after which only the
+pre-migration backup restores the old schema.
 
 **Public order tracking — `POST /orders/track`** (no login; 20/minute per IP).
 Body `{"ref": "<order_number or tracking_number>", "contact": "<phone or email
