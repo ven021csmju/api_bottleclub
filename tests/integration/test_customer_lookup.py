@@ -6,7 +6,7 @@ import logging
 import pytest
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.models import Customer, CustomerAccount, CustomerIdentity, Organization, ServiceKey
 from app.shared.security import create_access_token
@@ -210,3 +210,123 @@ def test_rate_limited_per_key(client, session, seed_org, key, somchai):
         limiter.reset()
     assert answers[:limit] == [200] * limit and answers[limit] == 429
     assert theirs == 200  # same IP, its own bucket
+
+
+# POST /customers/ with a key: the storefront's lookup → 404 → create never
+# makes a second customer (else every later lookup would be 409).
+def _create(client, key, **body):
+    return client.post("/api/v1/customers/", json={"first_name": "Shop", **body}, headers=_h(key))
+
+
+EXISTING = {"id", "display_name", "loyalty_points_balance"}
+
+
+@pytest.mark.parametrize("body", [
+    {"email": "SOMCHAI@example.test"},
+    {"email": " somchai@EXAMPLE.test "},
+    {"phone": "0812345678"},          # 081-234-5678 as stored
+    {"phone": "+66 81 234 5678"},
+    {"email": "new@example.test", "phone": "(081) 234-5678"},  # any identifier
+])
+def test_a_key_creates_no_duplicate(client, session, key, somchai, body):
+    before = session.scalar(select(func.count()).select_from(Customer))
+    resp = _create(client, key, **body)
+    assert resp.status_code == 409 and resp.json()["code"] == "CUSTOMER_EXISTS", resp.text
+    assert resp.json()["customer"] == {"id": somchai, "display_name": "สมชาย ทดสอบ", "loyalty_points_balance": 120}
+    assert set(resp.json()["customer"]) == EXISTING
+    assert session.scalar(select(func.count()).select_from(Customer)) == before
+
+
+def test_twice_in_a_row_is_one_customer(client, session, key, seed_org):
+    first = _create(client, key, email="once@example.test", phone="0855555555")
+    again = _create(client, key, email="ONCE@example.test")
+    assert first.status_code == 201 and again.status_code == 409
+    assert again.json()["customer"]["id"] == first.json()["data"]["id"]
+    found = client.post(LOOKUP, json={"email": "once@example.test"}, headers=_h(key))
+    assert found.status_code == 200 and found.json()["data"]["id"] == first.json()["data"]["id"]
+
+
+def test_deleted_or_another_organizations_customer_is_no_duplicate(client, session, key, seed_org, somchai):
+    from datetime import datetime, timezone
+
+    other = Organization(name="Other", slug="other-org")
+    session.add(other)
+    session.flush()
+    session.add(Customer(organization_id=other.id, first_name="Theirs", email="theirs@example.test"))
+    session.get(Customer, somchai).deleted_at = datetime.now(timezone.utc)
+    session.flush()
+    assert _create(client, key, email="theirs@example.test").status_code == 201
+    assert _create(client, key, email="somchai@example.test").status_code == 201
+
+
+def test_a_key_must_send_a_whole_phone(client, key, seed_org):
+    assert _create(client, key, phone="0812").status_code == 422
+    assert _create(client, key, phone="a@b.test").status_code == 422
+
+
+def test_staff_creates_as_before(client, session, somchai, seed_user):
+    """Staff: the duplicate check is the stored phone only, as before Phase 49."""
+    from tests.integration.conftest import grant
+
+    grant(session, seed_user["user_id"], seed_user["org_id"], ["customers.create"], seed_user["branch_id"])
+    token = create_access_token(seed_user["user_id"], seed_user["org_id"], [], [seed_user["branch_id"]])
+    staff = {"Authorization": f"Bearer {token}", "X-Branch-Id": str(seed_user["branch_id"])}
+    resp = client.post("/api/v1/customers/", json={"first_name": "Desk", "email": "somchai@example.test"},
+                       headers=staff)
+    assert resp.status_code == 201 and resp.json()["data"]["email"] == "somchai@example.test"
+
+
+@pytest.mark.parametrize("second", [{"email": "Twice@Example.test"}, {"phone": "+66 87 777 7777"}])
+def test_two_requests_at_once_make_one_customer(db_engine, monkeypatch, second):
+    """Two committed sessions at once (a double click): the second waits for the
+    first's lock and commit, then answers it. The add is slowed so that,
+    without the lock, both would have checked before either inserted."""
+    import threading
+    import time
+    from sqlalchemy.orm import Session as OrmSession
+
+    from app.db.repositories.customers import CustomerRepository
+    from app.domains.customers.service import CustomerService
+    from app.shared.exceptions import AppException
+
+    with OrmSession(db_engine) as setup:
+        org = Organization(name="Race", slug="race-org")
+        setup.add(org)
+        setup.commit()
+        org_id = org.id
+    add = CustomerRepository.add_customer
+
+    def slow_add(db, customer):
+        time.sleep(0.5)
+        add(db, customer)
+
+    monkeypatch.setattr(CustomerRepository, "add_customer", staticmethod(slow_add))
+    barrier = threading.Barrier(2)
+    results = []
+
+    def create(body):
+        with OrmSession(db_engine) as db:
+            barrier.wait()
+            try:
+                results.append(("created", CustomerService.create_for_service_key(
+                    db, org_id, 1, first_name="Race", **body).id))
+            except AppException as exc:
+                results.append((exc.code, exc.extra["customer"]["id"]))
+
+    threads = [threading.Thread(target=create, args=(body,))
+               for body in ({"email": "twice@example.test", "phone": "0877777777"}, second)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        with OrmSession(db_engine) as check:
+            ids = check.scalars(select(Customer.id).where(Customer.organization_id == org_id)).all()
+        assert len(ids) == 1, results
+        assert sorted(r[0] for r in results) == ["CUSTOMER_EXISTS", "created"]
+        assert {r[1] for r in results} == set(ids)
+    finally:
+        with OrmSession(db_engine) as cleanup:
+            cleanup.execute(Customer.__table__.delete().where(Customer.organization_id == org_id))
+            cleanup.execute(Organization.__table__.delete().where(Organization.id == org_id))
+            cleanup.commit()

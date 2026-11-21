@@ -74,18 +74,23 @@ def lookup_customer(
     return CustomerLookupResponse.of(customer)
 
 
-@router.post("/", response_model=CustomerResponse | CustomerLookupResponse, status_code=201)
+@router.post("/", response_model=CustomerResponse | CustomerLookupResponse, status_code=201,
+             responses={409: {"description": "A key: CUSTOMER_EXISTS, with the existing customer's lookup fields"}})
 def create_customer(
     data: CustomerCreate,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission_or_service_key("customers.create")),
 ) -> CustomerResponse | CustomerLookupResponse:
+    if isinstance(user, ServicePrincipal):
+        # A key: never a duplicate (409 CUSTOMER_EXISTS with the existing one),
+        # and what lookup gives, not the phone, email or birth date.
+        customer = CustomerService.create_for_service_key(
+            db, user.organization_id, user.service_key_id, **data.model_dump()
+        )
+        return CustomerLookupResponse.of(customer)
     customer = CustomerService.create(
         db, user.organization_id, **data.model_dump()
     )
-    if isinstance(user, ServicePrincipal):
-        # A key gets what lookup gives, not the phone, email or birth date.
-        return CustomerLookupResponse.of(customer)
     return CustomerResponse.model_validate(customer)
 
 
