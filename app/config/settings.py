@@ -165,8 +165,10 @@ class Settings(BaseSettings):
     CLOUDFLARE_IP_RANGES: str = ""
     CLOUDFLARE_IP_RANGES_FILE: str = ""
 
-    # POST /auth/register. Unset: open outside production/staging, closed in
-    # production/staging (403 REGISTRATION_DISABLED).
+    # POST /auth/register. ปิดเป็นค่าเริ่มต้นในทุก environment (เหมือน
+    # STOREFRONT_CATALOG_ENABLED): เปิดได้ต่อเมื่อตั้ง REGISTRATION_ENABLED=true
+    # ชัดเจนเท่านั้น (ไม่อนุมานจาก ENVIRONMENT; 403 REGISTRATION_DISABLED
+    # ถ้าไม่ตั้งหรือตั้ง false).
     REGISTRATION_ENABLED: bool | None = None
     # Used only when a deployment has more than one active organization. When
     # unset, registration may use the sole active organization in PostgreSQL.
@@ -273,9 +275,9 @@ class Settings(BaseSettings):
 
     @property
     def registration_enabled(self) -> bool:
-        if self.REGISTRATION_ENABLED is not None:
-            return self.REGISTRATION_ENABLED
-        return self.ENVIRONMENT.lower() not in {"production", "staging"}
+        if self.REGISTRATION_ENABLED is None:
+            return False
+        return self.REGISTRATION_ENABLED
 
     @field_validator("STORE_TIMEZONE")
     @classmethod
