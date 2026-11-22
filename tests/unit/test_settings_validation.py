@@ -133,10 +133,11 @@ def test_case_insensitive_environment():
     [
         ("production", None, False),
         ("staging", None, False),
-        ("development", None, True),
-        ("test", None, True),
+        ("development", None, False),
+        ("test", None, False),
         ("production", True, True),
         ("development", False, False),
+        ("test", False, False),
     ],
 )
 def test_registration_default_is_closed_in_production(environment, value, expected):
